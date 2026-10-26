@@ -39,6 +39,8 @@
 - Agent 在 `codex/cloud-agent-store` 独立 worktree 继续本地 LangGraph/Ollama sidecar 与桌面宿主契约；已有独立 HTTP 合约测试、真实 Ollama 工具往返和 loopback runner 记录。桌面包集成、Tauri spawn/stop 与可持久化 continuation key 仍待完成。云端部署和 CloudBase 联调仍排在本地闭环之后；其余尚未提交内容不得混入 Codex 或 WorkBuddy 分支。
 - 外接卡 `/Volumes/SD_Card` 的本机实测已完成：只读索引 929/929 项，其中照片 784 项（DNG 495、JPG 289）；通用分析接口解码 DNG 495/495、JPG 288/289，剩余 1 张 JPG 触发受限内存上限并保持未分析；3 张缩略图读回检查通过。1 张 JPG 样本备份成功，目标校验与独立 SHA-256 一致；卡片源文件元数据在分析前后保持一致。证据：`backend/evidence/card-photo-check-ntfs-20261026.json`。
 - 本次实卡测试还修正了验收脚本：改用 `library.analyze` 的类型分派路径，并按文件扩展名分批搜索，避免绕过 RAW 处理器及被单次 500 条结果上限截断。质量分类准确率尚未建立（没有人工标注集）；视频尚未纳入这轮媒体分析；这不是 Windows、移动端或发行验收。
+- 为支持超过 500 条的本地媒体库，Codex 新增 RPC `library.searchPage`：请求 `query, kind, quality`，可选 `limit`（默认 200，允许 1–200）与 `offset`（默认 0）；响应 `{items,total,offset,limit,hasMore}`。旧 `library.search` 保留兼容，仍最多返回 500 条。WorkBuddy 后续接入媒体列表时应使用分页接口，并在条件变化时将 offset 重置为 0；不得在前端把 500 条旧接口结果当作完整列表。
+- 分页小片验证：501 条合成媒体分三页（200/200/101）无遗漏、无重复；RPC 分页路由通过，201 条页大小拒绝。`cargo test -p yingxu-core` 64 项通过；`cargo build -p yingxu-core --release` 成功（Mac arm64，`SDKROOT=MacOSX26.5.sdk`）。WorkBuddy 分支的 UI 分页适配和 Windows 实测尚未完成。
 - Windows x64 验收与移动端设备验收均由同学负责；Codex 只维护相应分支交接文档，不替代真实平台测试。
 - 本机存储目录里的 `target`、`evidence`、测试材料、日志、安装包和当前使用的依赖目录都有构建/验收用途，暂不清理。只读扫描未发现可安全删除且确认无人使用的项目文件。
 

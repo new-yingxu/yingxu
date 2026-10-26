@@ -45,6 +45,20 @@ arg!(Search {
     kind: String,
     quality: String
 });
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SearchPage {
+    query: String,
+    kind: String,
+    quality: String,
+    #[serde(default = "default_search_page_limit")]
+    limit: u32,
+    #[serde(default)]
+    offset: u32,
+}
+fn default_search_page_limit() -> u32 {
+    200
+}
 arg!(History {
     query: String,
     state: String
@@ -190,6 +204,10 @@ impl Engine {
             "library.search" => {
                 let a: Search = decode(p)?;
                 value(self.search(&a.query, &a.kind, &a.quality)?)
+            }
+            "library.searchPage" => {
+                let a: SearchPage = decode(p)?;
+                self.search_page(&a.query, &a.kind, &a.quality, a.limit, a.offset)
             }
             "agent.tools" => Ok(crate::agent::tool_directory()),
             "agent.searchMedia" => {

@@ -21,6 +21,68 @@ impl Engine {
         let rows=s.query_map(params![kind,quality,query,if query.is_empty(){"\"__empty__\""}else{&literal}],|r|Ok(json!({"id":r.get::<_,String>(0)?,"path":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"kind":r.get::<_,String>(3)?,"bytes":r.get::<_,i64>(4)?,"sha256":r.get::<_,Option<String>>(5)?,"qualityState":r.get::<_,String>(6)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(7)?).unwrap_or(Value::Null)})))?;
         rows.map(|r| Ok(r?)).collect()
     }
+    /// Paged catalog search for large photo cards and libraries.
+    /// The legacy `search` method remains capped at 500 for existing callers.
+    pub fn search_page(
+        &self,
+        query: &str,
+        kind: &str,
+        quality: &str,
+        limit: u32,
+        offset: u32,
+    ) -> CoreResult<Value> {
+        if query.len() > 500
+            || !["all", "photo", "video", "other"].contains(&kind)
+            || !["all", "good", "review", "unanalyzed"].contains(&quality)
+        {
+            return Err(CoreError::new("INVALID_FILTER", "检索条件无效"));
+        }
+        if !(1..=200).contains(&limit) || offset > 1_000_000 {
+            return Err(CoreError::new(
+                "INVALID_PAGE",
+                "分页大小需为 1–200，偏移量不能超过 1000000",
+            ));
+        }
+        let conn = self.store.connect()?;
+        let literal = format!("\"{}\"*", query.replace('"', "\"\""));
+        let fts = if query.is_empty() {
+            "\"__empty__\""
+        } else {
+            &literal
+        };
+        let filter = "(?1='all' OR kind=?1) AND (?2='all' OR quality_state=?2) AND (?3='' OR instr(lower(name || ' ' || path || ' ' || metadata),lower(?3))>0 OR rowid IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?4))";
+        let count_sql = format!("SELECT COUNT(*) FROM media_items WHERE {filter}");
+        let total: i64 = conn.query_row(&count_sql, params![kind, quality, query, fts], |row| {
+            row.get(0)
+        })?;
+        let page_sql = format!(
+            "SELECT id,path,name,kind,bytes,sha256,quality_state,metadata FROM media_items WHERE {filter} ORDER BY name,id LIMIT ?5 OFFSET ?6"
+        );
+        let mut stmt = conn.prepare(&page_sql)?;
+        let rows = stmt.query_map(params![kind, quality, query, fts, limit, offset], |row| {
+            Ok(json!({
+                "id": row.get::<_, String>(0)?,
+                "path": row.get::<_, String>(1)?,
+                "name": row.get::<_, String>(2)?,
+                "kind": row.get::<_, String>(3)?,
+                "bytes": row.get::<_, i64>(4)?,
+                "sha256": row.get::<_, Option<String>>(5)?,
+                "qualityState": row.get::<_, String>(6)?,
+                "metadata": serde_json::from_str::<Value>(&row.get::<_, String>(7)?)
+                    .unwrap_or(Value::Null),
+            }))
+        })?;
+        let items = rows.collect::<Result<Vec<_>, _>>()?;
+        let total = total.max(0) as u64;
+        let has_more = u64::from(offset) + (items.len() as u64) < total;
+        Ok(json!({
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "hasMore": has_more,
+        }))
+    }
     pub fn history(&self, query: &str, state: &str) -> CoreResult<Vec<Job>> {
         Ok(self
             .store
