@@ -89,16 +89,22 @@ fn local_agent_executable(app: &tauri::AppHandle) -> Result<PathBuf, CoreError> 
     };
     let relative = format!("agent-sidecar/yingxu-local-agent/{executable_name}");
     let resource = app.path().resolve(relative, BaseDirectory::Resource).ok();
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("agent-sidecar/yingxu-local-agent")
+        .join(executable_name);
+    resolve_local_agent_executable(resource, development, cfg!(debug_assertions))
+}
+
+fn resolve_local_agent_executable(
+    resource: Option<PathBuf>,
+    development: PathBuf,
+    allow_development: bool,
+) -> Result<PathBuf, CoreError> {
     if let Some(path) = resource.filter(|path| path.is_file()) {
         return Ok(path);
     }
-    if cfg!(debug_assertions) {
-        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("agent-sidecar/yingxu-local-agent")
-            .join(executable_name);
-        if development.is_file() {
-            return Ok(development);
-        }
+    if allow_development && development.is_file() {
+        return Ok(development);
     }
     Err(CoreError::new(
         "LOCAL_AGENT_SIDECAR_MISSING",
@@ -153,6 +159,20 @@ fn spawn_local_agent(
     executable: &std::path::Path,
     database_path: &std::path::Path,
     signing_key: &str,
+) -> Result<LocalAgentProcess, CoreError> {
+    spawn_local_agent_with_timeout(
+        executable,
+        database_path,
+        signing_key,
+        Duration::from_secs(15),
+    )
+}
+
+fn spawn_local_agent_with_timeout(
+    executable: &std::path::Path,
+    database_path: &std::path::Path,
+    signing_key: &str,
+    startup_timeout: Duration,
 ) -> Result<LocalAgentProcess, CoreError> {
     let database_path = database_path
         .to_str()
@@ -209,7 +229,7 @@ fn spawn_local_agent(
         let _ = BufReader::new(stdout).read_line(&mut line);
         let _ = sender.send(line);
     });
-    let ready_line = match receiver.recv_timeout(Duration::from_secs(15)) {
+    let ready_line = match receiver.recv_timeout(startup_timeout) {
         Ok(line) => line,
         Err(_) => {
             let _ = child.kill();
@@ -268,6 +288,18 @@ fn local_agent_endpoint(
         .as_ref()
         .ok_or_else(|| CoreError::new("LOCAL_AGENT_START_FAILED", "本机 Agent 未启动"))?;
     Ok((process.port, process.token.clone()))
+}
+
+fn local_agent_status_or_unavailable<F>(
+    endpoint: Result<(u16, String), CoreError>,
+    request_status: F,
+) -> serde_json::Value
+where
+    F: FnOnce(u16, &str) -> Result<serde_json::Value, CoreError>,
+{
+    endpoint
+        .and_then(|(port, token)| request_status(port, &token))
+        .unwrap_or_else(|_| local_agent_unavailable())
 }
 
 fn local_agent_request(
@@ -541,18 +573,20 @@ async fn agent_local_status(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<HostState>();
-        let Ok((port, token)) = local_agent_endpoint(&app, &state) else {
-            return Ok(local_agent_unavailable());
-        };
-        Ok(local_agent_request(
-            port,
-            &token,
-            "GET",
-            "/v1/agent/local-status",
-            None,
-            Duration::from_secs(4),
-        )
-        .unwrap_or_else(|_| local_agent_unavailable()))
+        let endpoint = local_agent_endpoint(&app, &state);
+        Ok(local_agent_status_or_unavailable(
+            endpoint,
+            |port, token| {
+                local_agent_request(
+                    port,
+                    token,
+                    "GET",
+                    "/v1/agent/local-status",
+                    None,
+                    Duration::from_secs(4),
+                )
+            },
+        ))
     })
     .await
     .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "本机 Agent 状态查询失败"))?
@@ -1261,8 +1295,10 @@ fn main() {
 #[cfg(test)]
 mod agent_action_tests {
     use super::{
-        HostState, check_paths, local_agent_request, spawn_local_agent, stop_local_agent_process,
-        validate_action_expiry, validate_local_turn_request, validate_local_turn_response,
+        HostState, check_paths, local_agent_request, local_agent_status_or_unavailable,
+        resolve_local_agent_executable, spawn_local_agent, spawn_local_agent_with_timeout,
+        stop_local_agent_process, validate_action_expiry, validate_local_turn_request,
+        validate_local_turn_response,
     };
     use std::collections::{HashMap, HashSet};
     use std::{
@@ -1275,6 +1311,25 @@ mod agent_action_tests {
         agent::execute_read_tool,
         api::{PROTOCOL_VERSION, Request},
     };
+
+    fn local_agent_step_states(
+        database_path: &std::path::Path,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Vec<(i64, String)> {
+        let connection = rusqlite::Connection::open(database_path).unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT step_index, state FROM local_agent_steps \
+                 WHERE session_id = ?1 AND turn_id = ?2 ORDER BY step_index",
+            )
+            .unwrap();
+        statement
+            .query_map([session_id, turn_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
 
     #[test]
     fn agent_open_preview_must_be_future_and_at_most_five_minutes() {
@@ -1326,6 +1381,87 @@ mod agent_action_tests {
             validate_local_turn_request(&request).unwrap_err().code,
             "AGENT_CAPABILITY_NOT_ALLOWED"
         );
+    }
+
+    #[test]
+    fn missing_sidecar_and_status_failures_are_reported_as_unavailable() {
+        let missing = std::env::temp_dir()
+            .join(format!("yingxu-missing-sidecar-{}", std::process::id()))
+            .join("yingxu-local-agent");
+        assert_eq!(
+            resolve_local_agent_executable(None, missing, false)
+                .unwrap_err()
+                .code,
+            "LOCAL_AGENT_SIDECAR_MISSING"
+        );
+
+        let unavailable = local_agent_status_or_unavailable(
+            Err(yingxu_core::CoreError::new(
+                "LOCAL_AGENT_SIDECAR_MISSING",
+                "missing fixture",
+            )),
+            |_, _| panic!("status must not be requested without a sidecar"),
+        );
+        assert_eq!(unavailable["availability"], "sidecar_unavailable");
+        assert_eq!(unavailable["cloudFallback"], false);
+
+        let unavailable = local_agent_status_or_unavailable(Ok((1234, "token".into())), |_, _| {
+            Err(yingxu_core::CoreError::new(
+                "LOCAL_AGENT_UNAVAILABLE",
+                "failed status fixture",
+            ))
+        });
+        assert_eq!(unavailable["availability"], "sidecar_unavailable");
+        assert_eq!(unavailable["cloudFallback"], false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_or_slow_sidecar_readiness_is_rejected_and_child_stopped() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::current_dir()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join("target")
+            .join(format!("yingxu-sidecar-readiness-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = root.join("fake-sidecar.sh");
+        let invalid_marker = root.join("invalid-child-survived");
+        let invalid_script = format!(
+            "#!/bin/sh\nprintf '%s\\n' '{{\"event\":\"ready\",\"host\":\"0.0.0.0\",\"port\":43210}}'\n/bin/sleep 0.2\n/usr/bin/touch '{}'\n",
+            invalid_marker.display()
+        );
+        std::fs::write(&script, invalid_script).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = spawn_local_agent_with_timeout(
+            &script,
+            &root.join("agent.sqlite"),
+            "test-key",
+            Duration::from_secs(2),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "LOCAL_AGENT_START_FAILED");
+        std::thread::sleep(Duration::from_millis(250));
+        assert!(
+            !invalid_marker.exists(),
+            "invalid sidecar child must be stopped"
+        );
+
+        std::fs::write(&script, "#!/bin/sh\n/bin/sleep 5\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = spawn_local_agent_with_timeout(
+            &script,
+            &root.join("agent.sqlite"),
+            "test-key",
+            Duration::from_millis(40),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "LOCAL_AGENT_START_TIMEOUT");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1482,6 +1618,7 @@ mod agent_action_tests {
         assert_eq!(indexed["matches"][0]["name"], "IMG_2048.jpg");
         let mut process =
             spawn_local_agent(&executable, &root.join("agent.sqlite"), &signing_key).unwrap();
+        let database_path = root.join("agent.sqlite");
         let status = local_agent_request(
             process.port,
             &process.token,
@@ -1515,6 +1652,7 @@ mod agent_action_tests {
         .unwrap();
         validate_local_turn_response(&turn, "host-verify-session", "host-verify-turn").unwrap();
         assert_eq!(turn["status"], "awaiting_local_tools");
+        assert_eq!(turn["modelRequests"], 1);
         let tool = &turn["localToolRequests"][0];
         assert_eq!(tool["tool"], "search_media");
         let local_result =
@@ -1535,6 +1673,47 @@ mod agent_action_tests {
             }]
         });
         let path = "/v1/agent/local-turns/host-verify-session/host-verify-turn/results";
+        assert_eq!(
+            local_agent_step_states(&database_path, "host-verify-session", "host-verify-turn"),
+            vec![(0, "awaiting_tools".to_string())]
+        );
+
+        // Model a desktop host crash: the sidecar is killed without sending its graceful
+        // shutdown endpoint. Its SQLite ledger and signed continuation must survive.
+        process.child.kill().unwrap();
+        assert!(!process.child.wait().unwrap().success());
+        let mut process = spawn_local_agent(&executable, &database_path, &signing_key).unwrap();
+        let status = local_agent_request(
+            process.port,
+            &process.token,
+            "GET",
+            "/v1/agent/local-status",
+            None,
+            Duration::from_secs(4),
+        )
+        .unwrap();
+        assert_eq!(status["cloudFallback"], false);
+        assert_eq!(
+            local_agent_step_states(&database_path, "host-verify-session", "host-verify-turn"),
+            vec![(0, "awaiting_tools".to_string())],
+            "starting the sidecar must not re-run a pending model step"
+        );
+        let duplicate_start = local_agent_request(
+            process.port,
+            &process.token,
+            "POST",
+            "/v1/agent/local-turns",
+            Some(&request),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(duplicate_start["status"], "awaiting_local_tools");
+        assert_eq!(duplicate_start["modelRequests"], 1);
+        assert_eq!(
+            local_agent_step_states(&database_path, "host-verify-session", "host-verify-turn"),
+            vec![(0, "awaiting_tools".to_string())]
+        );
+
         turn = local_agent_request(
             process.port,
             &process.token,
@@ -1546,6 +1725,7 @@ mod agent_action_tests {
         .unwrap();
         validate_local_turn_response(&turn, "host-verify-session", "host-verify-turn").unwrap();
         assert_eq!(turn["status"], "completed");
+        assert_eq!(turn["modelRequests"], 2);
         assert_eq!(turn["executionAuthorized"], false);
         assert_eq!(turn["filesChanged"], false);
         assert!(turn.to_string().contains("IMG_2048.jpg"));
@@ -1559,6 +1739,88 @@ mod agent_action_tests {
         )
         .unwrap();
         assert_eq!(replay["duplicate"], true);
+        assert_eq!(
+            local_agent_step_states(&database_path, "host-verify-session", "host-verify-turn"),
+            vec![
+                (0, "awaiting_tools".to_string()),
+                (1, "completed".to_string())
+            ]
+        );
+
+        let mut uncertain_request = request.clone();
+        uncertain_request["turnId"] = serde_json::json!("host-verify-uncertain");
+        let uncertain_turn = local_agent_request(
+            process.port,
+            &process.token,
+            "POST",
+            "/v1/agent/local-turns",
+            Some(&uncertain_request),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+        assert_eq!(uncertain_turn["status"], "awaiting_local_tools");
+        // Fault fixture: model the durable ledger state left when a provider call's
+        // outcome cannot be established. This does not simulate the provider failure
+        // transition; it verifies host/sidecar restart behavior for a persisted uncertain row.
+        let connection = rusqlite::Connection::open(&database_path).unwrap();
+        connection
+            .execute(
+                "UPDATE local_agent_steps SET state='uncertain', output_nonce=NULL, response_json=NULL \
+                 WHERE session_id=?1 AND turn_id=?2 AND step_index=0",
+                ["host-verify-session", "host-verify-uncertain"],
+            )
+            .unwrap();
+        drop(connection);
+        assert_eq!(
+            local_agent_step_states(
+                &database_path,
+                "host-verify-session",
+                "host-verify-uncertain"
+            ),
+            vec![(0, "uncertain".to_string())]
+        );
+
+        process.child.kill().unwrap();
+        let _ = process.child.wait();
+        let mut process = spawn_local_agent(&executable, &database_path, &signing_key).unwrap();
+        let status = local_agent_request(
+            process.port,
+            &process.token,
+            "GET",
+            "/v1/agent/local-status",
+            None,
+            Duration::from_secs(4),
+        )
+        .unwrap();
+        assert_eq!(status["cloudFallback"], false);
+        assert_eq!(
+            local_agent_step_states(
+                &database_path,
+                "host-verify-session",
+                "host-verify-uncertain"
+            ),
+            vec![(0, "uncertain".to_string())],
+            "starting the sidecar must not re-run an uncertain model step"
+        );
+        let uncertain_replay = local_agent_request(
+            process.port,
+            &process.token,
+            "POST",
+            "/v1/agent/local-turns",
+            Some(&uncertain_request),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert_eq!(uncertain_replay.code, "LOCAL_AGENT_REQUEST_REJECTED");
+        assert_eq!(
+            local_agent_step_states(
+                &database_path,
+                "host-verify-session",
+                "host-verify-uncertain"
+            ),
+            vec![(0, "uncertain".to_string())]
+        );
+
         stop_local_agent_process(&mut process);
         assert!(process.child.try_wait().unwrap().is_some());
         std::fs::remove_dir_all(root).unwrap();

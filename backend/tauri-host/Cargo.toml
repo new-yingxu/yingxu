@@ -17,3 +17,6 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 rand = "0.8.5"
 rsa = { version = "0.9.9", features = ["pem"] }
 
+[dev-dependencies]
+rusqlite = "0.41.0"
+

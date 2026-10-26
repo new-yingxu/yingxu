@@ -5388,6 +5388,7 @@ dependencies = [
  "keyring",
  "rand",
  "rsa",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",
