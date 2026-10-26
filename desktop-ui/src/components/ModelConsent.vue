@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import type { AgentReply, ModelService, ModelStatus } from '../api/contracts'
 import { createModelConsent, modelFailure, type ModelPlan } from '../api/model-consent'
+import { localAgentStatusView } from '../api/local-agent'
 const props=defineProps<{ service?: ModelService; query: string }>()
 const emit=defineEmits<{ reply: [value: { query: string; reply: AgentReply }] }>()
 const controller=props.service ? createModelConsent(props.service) : null
 const status=ref<ModelStatus|null>(null), busy=ref(false), plan=ref<ModelPlan|null>(null)
+const statusView=computed(()=>localAgentStatusView(status.value,!!controller))
 const failure=ref<ReturnType<typeof modelFailure>|null>(null)
 const recoveryRequired=ref(false)
 const recoveryAvailable=ref(false), recoveryReview=ref<ModelPlan|null>(null)
@@ -16,6 +18,7 @@ let mounted=true
 async function refresh() {
   if (!controller || busy.value) return
   busy.value=true;failure.value=null
+  status.value=null
   try { status.value=await controller.status() } catch(error) { if(mounted)failure.value=modelFailure(error,false) } finally { if(mounted)busy.value=false }
 }
 async function prepare(query=props.query) {
@@ -70,10 +73,10 @@ defineExpose({submit})
 </script>
 <template>
  <section class="model-consent-panel" aria-label="模型服务状态">
-  <div class="model-status-row"><strong>模型服务</strong><span>{{ !controller ? '未连接' : !status ? '状态待确认' : status.configured ? `${status.provider === 'ollama' && status.region === 'local' ? '本机 Ollama' : status.provider} · ${status.model} · ${status.region}` : '模型未配置' }}</span><button class="text-button" :disabled="!controller||busy" @click="refresh">刷新状态</button></div>
-  <p v-if="status?.configured">Agent 与 LangGraph 编排运行在本机，Ollama 只通过本机 sidecar 调用。本轮最多 3 次模型请求、10 条脱敏摘要；不连接 CloudBase 模型接口，也不会静默切换云端。</p>
-  <p v-else>本机 Agent 或 Ollama 模型当前不可用。请先安装并启动本机运行时；本应用不会自动下载模型或改用云端服务。</p>
-  <button ref="review" class="secondary-button compact" :disabled="!controller||!status?.configured||busy||recoveryRequired||!query.trim()" @click="prepare()">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '新建模型轮次并查看发送内容' }}</button>
+  <div class="model-status-row"><strong>本机 Agent</strong><span :data-availability="statusView.availability" :class="{ 'status-ready': statusView.ready, 'status-unavailable': !statusView.ready }">{{ statusView.label }}</span><button class="text-button" :disabled="!controller||busy" @click="refresh">刷新状态</button></div>
+  <p>{{ statusView.detail }}</p>
+  <p v-if="statusView.ready">Agent 与 LangGraph 编排运行在本机，Ollama 只通过本机 sidecar 调用。本轮最多 3 次模型请求、10 条脱敏摘要；不连接 CloudBase 模型接口，也不会静默切换云端。</p>
+  <button ref="review" class="secondary-button compact" :disabled="!controller||!statusView.ready||busy||recoveryRequired||!query.trim()" @click="prepare()">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '新建模型轮次并查看发送内容' }}</button>
   <button v-if="recoveryAvailable" class="secondary-button compact" :disabled="busy" @click="openRecovery">{{ busy ? '处理中…' : '查看并恢复本轮' }}</button>
   <p v-if="failure" role="alert" class="model-failure">[{{ failure.code }}] {{ failure.message }}</p>
  </section>
@@ -94,7 +97,7 @@ defineExpose({submit})
 </template>
 <style scoped>
 .model-consent-panel{padding:14px 16px;margin:12px 0;border:1px solid var(--line);border-radius:12px;background:var(--card);font-size:13px}
-.model-status-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.model-status-row span{flex:1;min-width:120px}.model-consent-panel p{margin:8px 0;line-height:1.6}.model-failure{color:var(--red);overflow-wrap:anywhere}
+.model-status-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.model-status-row span{flex:1;min-width:120px}.status-ready{color:var(--green);font-weight:700}.status-unavailable{color:var(--red);font-weight:700}.model-consent-panel p{margin:8px 0;line-height:1.6}.model-failure{color:var(--red);overflow-wrap:anywhere}
 .model-consent-overlay{position:fixed;inset:0;background:#17291fc0;z-index:140;display:grid;place-items:center;padding:20px}.model-consent-dialog{width:min(680px,100%);max-height:calc(100dvh - 40px);overflow:auto;padding:24px;border-radius:20px;background:var(--card);box-shadow:0 18px 80px #0004}.model-consent-dialog h2{margin:0 0 16px}.model-consent-dialog dt{font-weight:700;margin:12px 0 6px}.model-consent-dialog dd{margin:0;overflow-wrap:anywhere;line-height:1.65}.model-query{white-space:pre-wrap}.model-consent-actions{display:flex;gap:12px;justify-content:flex-end;position:sticky;bottom:-24px;background:var(--card);padding:16px 0 0}.model-consent-actions button{min-width:0}
 @media(max-width:800px){.model-consent-dialog{padding:18px}.model-consent-actions{bottom:-18px;flex-wrap:wrap}}
 </style>
