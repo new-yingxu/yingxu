@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.DS_Store
+
+# Local integration evidence, disposable media/DB fixtures and short-lived fixture tokens.
+/evidence/

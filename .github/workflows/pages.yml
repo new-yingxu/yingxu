@@ -1,0 +1,42 @@
+name: Deploy site
+
+# 官网是纯静态站点（site/），不做构建，直接作为 Pages 产物上传。
+# 回滚：Actions 里对该 workflow 的历史成功运行点 "Re-run"，或在仓库 Settings → Pages
+# 切回上一个 deployment；也可本地 `git revert` 对应提交后重跑。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: 站点自检
+        run: |
+          for f in index.html features.html download.html changelog.html privacy.html support.html; do
+            test -f "site/$f" || { echo "缺少 site/$f"; exit 1; }
+          done
+          grep -q "api.github.com/repos" site/assets/site.js || { echo "下载页未接 Releases API"; exit 1; }
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

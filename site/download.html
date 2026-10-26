@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下载 · 影序 YINGXU</title>
+<meta name="description" content="下载影序桌面版。版本号、发布日期、文件大小与 SHA-256 均来自 GitHub Releases 实时数据。">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="brand" href="index.html">
+      <img src="assets/icon-192.png" alt="影序图标">
+      <span>影序 <small>YINGXU</small></span>
+    </a>
+    <button class="nav-toggle" aria-label="展开菜单" aria-expanded="false" aria-controls="nav-links">☰</button>
+    <nav class="nav-links" id="nav-links">
+      <a href="index.html">首页</a>
+      <a href="features.html">功能</a>
+      <a href="download.html" aria-current="page">下载</a>
+      <a href="changelog.html">版本说明</a>
+      <a href="support.html">支持</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section style="padding-top:52px">
+    <p class="eyebrow">下载</p>
+    <h1>选择你的平台</h1>
+    <p class="lede">这里不写死版本号：下面的版本、日期、大小与校验值都由 GitHub Releases 实时读取，页面显示什么，资产就是什么。</p>
+    <div id="dl-status" class="dl-status" role="status" aria-live="polite">正在读取最新版本…</div>
+    <div id="dl-list" class="dl-list"></div>
+  </section>
+
+  <section>
+    <h2>系统要求</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>平台</th><th>最低版本</th><th>包格式</th><th>备注</th></tr></thead>
+        <tbody>
+          <tr><td>macOS（Apple 芯片）</td><td>macOS 11 Big Sur</td><td>.dmg</td><td>ad-hoc 签名，首次需右键打开</td></tr>
+          <tr><td>Windows</td><td>Windows 10 1809+</td><td>.exe（NSIS 安装包）</td><td>未签名，SmartScreen 需手动放行</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Intel Mac 与 Linux 版本暂未提供构建。需要时请在 GitHub Issues 里提出。</p>
+  </section>
+
+  <section>
+    <h2>首次打开说明</h2>
+    <div class="grid two">
+      <div class="card">
+        <h3>macOS</h3>
+        <p>当前为 ad-hoc 签名（没有 Apple Developer ID），Gatekeeper 会拦截。二选一：</p>
+        <ul class="muted">
+          <li>在「应用程序」里 <strong>右键 → 打开</strong>，再点「打开」</li>
+          <li>或执行 <span class="mono">xattr -d com.apple.quarantine /Applications/影序桌面开发版.app</span></li>
+        </ul>
+        <p class="muted">若提示「已损坏」，通常是下载未完整或隔离属性未清除，可重新下载并按上面第二条处理。</p>
+      </div>
+      <div class="card">
+        <h3>Windows</h3>
+        <p>安装包未做代码签名，SmartScreen 会提示「Windows 已保护你的电脑」。</p>
+        <ul class="muted">
+          <li>点「更多信息」→「仍要运行」</li>
+          <li>安装模式为<strong>当前用户</strong>，不需要管理员权限</li>
+        </ul>
+        <p class="muted">企业环境若被策略拦截，请联系管理员按哈希加白。</p>
+      </div>
+    </div>
+    <div class="notice" style="margin-top:16px">
+      未签名 ≠ 已签名发布。我们不会把 ad-hoc 说成正式签名；正式证书到位后会在版本说明里单独写。
+    </div>
+  </section>
+
+  <section>
+    <h2>校验下载完整性</h2>
+    <p>每次发布都会附带 <span class="mono">SHA256SUMS</span>。下载后本地比对，避免传输损坏或被替换：</p>
+    <div class="card">
+      <p class="mono muted">macOS / Linux</p>
+      <p class="mono">shasum -a 256 -c SHA256SUMS</p>
+      <p class="mono muted" style="margin-top:14px">Windows（PowerShell）</p>
+      <p class="mono">Get-FileHash .\影序桌面开发版_xxx_x64-setup.exe -Algorithm SHA256</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>更新策略</h2>
+    <p class="muted">当前版本<strong>不包含</strong>应用内自动更新。新版本以 GitHub Release 形式发布，需手动下载安装。自动更新要等签名密钥与更新清单校验链就绪后才会开启——在那之前不会有静默更新。</p>
+    <p><a href="changelog.html">查看版本说明 →</a></p>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <strong style="color:var(--forest)">影序 YINGXU</strong>
+      <p class="muted" style="margin:6px 0 0">本地影像备份与整理 · 原片只读，副本可校验</p>
+    </div>
+    <div class="footer-links">
+      <a href="features.html">功能</a>
+      <a href="download.html">下载</a>
+      <a href="changelog.html">版本说明</a>
+      <a href="privacy.html">隐私政策</a>
+      <a href="support.html">支持</a>
+      <a href="https://github.com/new-yingxu/yingxu" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+<script src="assets/site.js"></script>
+</body>
+</html>
