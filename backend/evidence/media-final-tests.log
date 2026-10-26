@@ -1,0 +1,14 @@
+   Compiling yingxu-core v0.1.0 (/Users/nanyu/Documents/AI项目/new-影序agent开发/backend/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.22s
+     Running tests/media.rs (backend/target/debug/deps/media-2f43a9fee3e347a9)
+
+running 6 tests
+test oversized_dimensions_are_unanalyzed_not_damaged ... ok
+test undecodable_raw_is_retained_and_not_fake_good ... ok
+test queued_path_payload_respects_current_privacy_switch ... ok
+test source_index_is_read_only_and_preserves_current_analysis ... ok
+test changed_source_invalidates_thumbnail_and_analysis ... ok
+test bounded_photo_thumbnail_signals_and_human_review ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>支持与状态 · 影序 YINGXU</title>
+<meta name="description" content="影序的常见问题、当前功能状态与反馈渠道。">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="brand" href="index.html">
+      <img src="assets/icon-192.png" alt="影序图标">
+      <span>影序 <small>YINGXU</small></span>
+    </a>
+    <button class="nav-toggle" aria-label="展开菜单" aria-expanded="false" aria-controls="nav-links">☰</button>
+    <nav class="nav-links" id="nav-links">
+      <a href="index.html">首页</a>
+      <a href="features.html">功能</a>
+      <a href="download.html">下载</a>
+      <a href="changelog.html">版本说明</a>
+      <a href="support.html" aria-current="page">支持</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <section style="padding-top:52px">
+    <p class="eyebrow">支持</p>
+    <h1>遇到问题，先看这里</h1>
+    <p class="lede">影序是本地工具，绝大多数问题都能在日志与本机数据里找到原因。下面是最常见的几类。</p>
+  </section>
+
+  <section>
+    <h2>常见问题</h2>
+    <div class="grid two">
+      <div class="card">
+        <h3>macOS 提示「无法打开，因为无法验证开发者」</h3>
+        <p class="muted">测试版是 ad-hoc 签名。在「应用程序」里右键 → 打开 → 再点「打开」；或执行 <span class="mono">xattr -d com.apple.quarantine &lt;app 路径&gt;</span>。</p>
+      </div>
+      <div class="card">
+        <h3>Windows 被 SmartScreen 拦截</h3>
+        <p class="muted">点「更多信息」→「仍要运行」。安装模式是当前用户，不需要管理员权限。</p>
+      </div>
+      <div class="card">
+        <h3>某个 RAW 显示「暂不支持」</h3>
+        <p class="muted">说明文件里没有可解码的内嵌预览（部分新机型或 BigTIFF 容器）。这不是静默失败，也不会改动原片；可在 Issues 里附上机型。</p>
+      </div>
+      <div class="card">
+        <h3>视频只有元数据，没有缩略图</h3>
+        <p class="muted">抽帧需要本机存在 <span class="mono">ffmpeg</span>，或设置环境变量 <span class="mono">YINGXU_FFMPEG</span> 指向它。没有时只读容器元数据，不上传任何帧。</p>
+      </div>
+      <div class="card">
+        <h3>校验失败怎么办</h3>
+        <p class="muted">该副本不会被标记为已备份。检查目标磁盘是否掉线、是否有坏道，然后对失败项单独重试。来源文件不会被删除或改写。</p>
+      </div>
+      <div class="card">
+        <h3>能上传到百度/夸克网盘吗</h3>
+        <p class="muted">目前只有接口骨架。两家开放平台的应用资质尚未获批，所以不提供真实上传，也不会假装已经接入。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="status">
+    <h2>当前状态说明</h2>
+    <p class="lede">四种「成功」是四件事，我们分开记录，不互相顶替。</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>环节</th><th>状态</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>配置成功</td><td>已完成</td><td>打包配置、CI 流程、站点与发布脚本已就位</td></tr>
+          <tr><td>部署成功</td><td>部分</td><td>官网可静态托管；应用安装包需 CI 构建产出</td></tr>
+          <tr><td>安装包能装</td><td>待人工复核</td><td>本机实测记录见仓库发布手册，不以 CI 绿灯代替</td></tr>
+          <tr><td>真实账号可用</td><td>未达成</td><td>无正式签名证书；网盘开放平台资质未获批</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="notice" style="margin-top:16px">
+      「网页能打开」不等于「安装包可用」，「CI 通过」不等于「安装成功」。如果你在安装环节遇到问题，请直接反馈，不要默认是我们已验收。
+    </div>
+  </section>
+
+  <section>
+    <h2>反馈渠道</h2>
+    <div class="grid two">
+      <div class="card">
+        <h3>Bug 与功能建议</h3>
+        <p class="muted">在 GitHub Issues 提交，附上系统版本、影序版本号与复现步骤。涉及影像内容时请勿上传原片，说明文件类型即可。</p>
+        <a class="btn ghost" href="https://github.com/new-yingxu/yingxu/issues" rel="noopener">前往 Issues</a>
+      </div>
+      <div class="card">
+        <h3>安全与隐私问题</h3>
+        <p class="muted">若发现凭据泄露、路径穿越、校验绕过等问题，请优先走私密渠道（GitHub Security Advisories），不要公开细节。</p>
+        <a class="btn ghost" href="https://github.com/new-yingxu/yingxu/security/advisories" rel="noopener">私密报告</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <strong style="color:var(--forest)">影序 YINGXU</strong>
+      <p class="muted" style="margin:6px 0 0">本地影像备份与整理 · 原片只读，副本可校验</p>
+    </div>
+    <div class="footer-links">
+      <a href="features.html">功能</a>
+      <a href="download.html">下载</a>
+      <a href="changelog.html">版本说明</a>
+      <a href="privacy.html">隐私政策</a>
+      <a href="support.html">支持</a>
+      <a href="https://github.com/new-yingxu/yingxu" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+<script src="assets/site.js"></script>
+</body>
+</html>

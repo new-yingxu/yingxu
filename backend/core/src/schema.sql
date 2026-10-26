@@ -1,0 +1,23 @@
+CREATE TABLE plans(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+CREATE TABLE jobs(id TEXT PRIMARY KEY,state TEXT NOT NULL,phase TEXT NOT NULL,created_at TEXT NOT NULL,data TEXT NOT NULL,idempotency_key TEXT UNIQUE NOT NULL,runtime TEXT NOT NULL DEFAULT '{}');
+CREATE TABLE job_items(id TEXT PRIMARY KEY,job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,target_id TEXT NOT NULL,state TEXT NOT NULL,data TEXT NOT NULL);
+CREATE INDEX job_items_job ON job_items(job_id,target_id,state);
+CREATE TABLE job_targets(id TEXT PRIMARY KEY,job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,path TEXT NOT NULL,state TEXT NOT NULL);
+CREATE TABLE settings(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+CREATE TABLE presets(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+CREATE TABLE removals(id TEXT PRIMARY KEY,data TEXT NOT NULL);
+CREATE TABLE media_items(id TEXT PRIMARY KEY,path TEXT UNIQUE NOT NULL,name TEXT NOT NULL,kind TEXT NOT NULL,bytes INTEGER NOT NULL,sha256 TEXT,quality_state TEXT NOT NULL DEFAULT 'unanalyzed',metadata TEXT NOT NULL);
+CREATE VIRTUAL TABLE media_fts USING fts5(name,path,content='media_items',content_rowid='rowid',tokenize='unicode61');
+CREATE TRIGGER media_ai AFTER INSERT ON media_items BEGIN INSERT INTO media_fts(rowid,name,path) VALUES(new.rowid,new.name,new.path); END;
+CREATE TRIGGER media_ad AFTER DELETE ON media_items BEGIN INSERT INTO media_fts(media_fts,rowid,name,path) VALUES('delete',old.rowid,old.name,old.path); END;
+CREATE TRIGGER media_au AFTER UPDATE ON media_items BEGIN INSERT INTO media_fts(media_fts,rowid,name,path) VALUES('delete',old.rowid,old.name,old.path); INSERT INTO media_fts(rowid,name,path) VALUES(new.rowid,new.name,new.path); END;
+CREATE TABLE replicas(id TEXT PRIMARY KEY,job_id TEXT NOT NULL,media_id TEXT NOT NULL,path TEXT NOT NULL,sha256 TEXT NOT NULL,verified INTEGER NOT NULL,checked_at TEXT NOT NULL,UNIQUE(job_id,path));
+CREATE TABLE outbox_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT UNIQUE NOT NULL,device_id TEXT NOT NULL,job_id TEXT NOT NULL,schema_version INTEGER NOT NULL DEFAULT 1,event_type TEXT NOT NULL DEFAULT 'job.snapshot.v1',occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),payload TEXT NOT NULL,sent INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE audit_events(sequence INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,created_at TEXT NOT NULL,action TEXT NOT NULL,object_id TEXT NOT NULL,data TEXT NOT NULL);
+CREATE TABLE reports(job_id TEXT PRIMARY KEY,data TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE audit_runs(id TEXT PRIMARY KEY,data TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE delivery_packages(id TEXT PRIMARY KEY,data TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE source_removals(job_id TEXT NOT NULL,relative TEXT NOT NULL,recovery TEXT NOT NULL,PRIMARY KEY(job_id,relative));
+CREATE TABLE pending_writes(id TEXT PRIMARY KEY,item_id TEXT NOT NULL,target_root TEXT NOT NULL,root_identity TEXT NOT NULL,path TEXT NOT NULL,file_identity TEXT NOT NULL,created_at TEXT NOT NULL);
+
+CREATE TABLE media_derivatives(media_id TEXT PRIMARY KEY,path TEXT NOT NULL,source_fingerprint TEXT NOT NULL,created_at TEXT NOT NULL);

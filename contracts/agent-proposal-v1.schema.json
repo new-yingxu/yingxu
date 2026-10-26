@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:yingxu:agent-proposal:v1",
+  "title": "YINGXU Agent proposal v1 - proposal is not execution authorization",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "actionId",
+    "origin",
+    "tool",
+    "fileIds",
+    "expiresAt"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "actionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "origin": {
+      "enum": [
+        "desktop",
+        "mobile"
+      ]
+    },
+    "tool": {
+      "enum": [
+        "search_media",
+        "get_backup_job",
+        "preview_rename",
+        "rename_item",
+        "preview_move",
+        "move_item",
+        "upload_baidu",
+        "upload_quark"
+      ]
+    },
+    "fileIds": {
+      "type": "array",
+      "maxItems": 1000,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      }
+    },
+    "destinationGrantId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "requestedName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 180
+    },
+    "query": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "jobId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "enum": [
+              "rename_item",
+              "preview_rename"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "requestedName"
+        ],
+        "properties": {
+          "fileIds": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "tool": {
+            "enum": [
+              "move_item",
+              "preview_move",
+              "upload_baidu",
+              "upload_quark"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "destinationGrantId"
+        ],
+        "properties": {
+          "fileIds": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ]
+}

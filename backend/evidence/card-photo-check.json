@@ -1,0 +1,45 @@
+{
+  "sourceType": "user-authorized removable FAT32 card",
+  "originalCount": 88,
+  "formats": {
+    ".jpg": 78,
+    ".jpeg": 5,
+    ".png": 5
+  },
+  "originalBytes": 448666795,
+  "privatePathsIncluded": false,
+  "networkUsed": false,
+  "index": {
+    "changed": 95,
+    "copyStarted": false,
+    "files": 95,
+    "sourceReadOnly": true
+  },
+  "decoded": {
+    "decoded": 87,
+    "unsupported_or_decode_failed": 1
+  },
+  "qualityCandidates": {
+    "review": 7,
+    "unanalyzed": 81
+  },
+  "signalCounts": {
+    "low_detail_candidate": 1,
+    "highlight_clipping_candidate": 6
+  },
+  "timestampSources": {
+    "filesystem_modified": 18,
+    "exif_DateTimeOriginal": 70
+  },
+  "analysisErrors": {},
+  "thumbnailReadChecks": 3,
+  "qualityAccuracy": "not_established_no_ground_truth_labels",
+  "sampleBackup": {
+    "files": 3,
+    "state": "success",
+    "verified": 3,
+    "independentSha256Match": true
+  },
+  "sourceContentUnchanged": true,
+  "elapsedSeconds": 191.28
+}
