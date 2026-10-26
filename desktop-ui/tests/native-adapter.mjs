@@ -131,6 +131,21 @@ try {
     video = media.find((f) => f.name === "sample.mp4");
   assert.ok(png && video);
   results.push("source index and formatted media");
+  const firstPage = await api.library.searchPage("", "all", "all", 2, 0);
+  assert.equal(firstPage.items.length, 2);
+  assert.equal(firstPage.total, 3);
+  assert.equal(firstPage.offset, 0);
+  assert.equal(firstPage.limit, 2);
+  assert.equal(firstPage.hasMore, true);
+  const lastPage = await api.library.searchPage("", "all", "all", 2, 2);
+  assert.equal(lastPage.items.length, 1);
+  assert.equal(lastPage.offset, 2);
+  assert.equal(lastPage.hasMore, false);
+  await assert.rejects(
+    api.library.searchPage("", "all", "all", 201, 0),
+    (e) => e.code === "INVALID_PAGINATION",
+  );
+  results.push("paged library search against the real Rust CLI");
   const analyzed = await api.local.analyze(png.id, "photo");
   assert.equal(analyzed.thumbnailAvailable, true);
   assert.match(await api.local.thumbnail(png.id), /^data:image\/jpeg;base64,/);

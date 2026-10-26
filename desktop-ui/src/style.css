@@ -152,3 +152,6 @@ body{min-width:0}
 .result-banner.failed{background:#faeeeb;color:#a33a32}
 .result-banner.cancelled{background:#f2f0eb;color:#76766e}
 .current-file{font-size:10px;color:var(--muted);margin:-8px 0 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.library-pager{display:flex;align-items:center;gap:12px;margin:14px 0 6px;font-size:11px;color:var(--muted)}
+.library-pager .pager-summary{flex:1;min-width:0}
+.library-error{margin:6px 0 0;font-size:11px;color:var(--red)}
