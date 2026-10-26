@@ -1,0 +1,55 @@
+{
+  "status": "packaged_sidecar_verified_ui_e2e_pending",
+  "date": "2026-10-26",
+  "platform": "macOS arm64",
+  "integrationSources": {
+    "codexHostCommit": "7ab80487fd58e6c626ea9168fd75fdacad32acaa",
+    "workbuddyUiBranch": "workbuddy/dev",
+    "workbuddyUiCommit": "cb507f71a58be18758bf3877cf807be957d7165c",
+    "integrationOverlayCommitted": false
+  },
+  "artifact": {
+    "path": "backend/tauri-host/target/release/bundle/dmg/影序桌面开发版_0.2.0-draft.2-local-agent-ui.dmg",
+    "bytes": 50538324,
+    "sha256": "4e14db53325f0c9f5838b4f86a3e063eb81d15cbaf30dc7eaa95f13a13ba6bea",
+    "version": "0.2.0-draft.1"
+  },
+  "packagedApp": {
+    "path": "影序桌面开发版.app",
+    "codesignVerification": "passed",
+    "identity": "ad hoc",
+    "notarized": false,
+    "sidecarManifestSha256": "ec895be625c7aa164e5640ca27ee2dcedaeb5fc8c3208083f88067aebc2d4db1",
+    "sidecarFilesVerified": 1187
+  },
+  "sidecarSmoke": {
+    "command": "python infra/desktop_agent/verify_sidecar.py --bundle-dir <mounted-app>/Contents/Resources/agent-sidecar/yingxu-local-agent",
+    "status": "passed",
+    "health": "passed",
+    "modelAvailability": "ready",
+    "cloudFallback": false,
+    "gracefulShutdown": "passed",
+    "modelWeightsBundled": false,
+    "inheritedCloudCredentialsIgnored": true
+  },
+  "secretScan": {
+    "status": "passed",
+    "filesScanned": 1192,
+    "findings": 0,
+    "limitations": "Checks common credential signatures and assignments; not an exhaustive secret proof."
+  },
+  "uiEndToEnd": {
+    "webviewToHostToSidecarToSqlite": "not_verified",
+    "openItemConfirmationReceipt": "not_verified",
+    "reason": "Computer Use returned timeoutReached when selecting the existing app by bundle path and display name. A separate app process with the same bundle identifier is already running from the WorkBuddy worktree; it was not closed or replaced."
+  },
+  "notVerified": [
+    "Launching the draft.2 DMG app UI and completing WebView IPC conversation",
+    "open_item confirmation receipt in the visible UI",
+    "Windows x64 build/runtime",
+    "Apple notarization",
+    "Ollama/model installation onboarding and hardware suitability"
+  ],
+  "userMediaAccessed": false,
+  "cloudRequests": false
+}
