@@ -155,3 +155,8 @@ body{min-width:0}
 .library-pager{display:flex;align-items:center;gap:12px;margin:14px 0 6px;font-size:11px;color:var(--muted)}
 .library-pager .pager-summary{flex:1;min-width:0}
 .library-error{margin:6px 0 0;font-size:11px;color:var(--red)}
+.local-mode-note{margin:10px 0 0;padding:10px 12px;border-radius:10px;background:#edf3ed;color:var(--muted);font-size:11px;line-height:1.55}
+.local-mode-banner{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;margin:0 0 14px;padding:11px 14px;border:1px solid #dce8dc;border-radius:11px;background:#edf3ed;color:#334c3c;font-size:12px;line-height:1.55}
+.local-mode-banner span{color:var(--muted)}
+.cloud-disabled-note{padding:12px 14px;border-radius:10px;background:var(--page);color:var(--muted);font-size:12px;line-height:1.6}
+.nav-item:disabled{opacity:.52;cursor:not-allowed}
