@@ -1,5 +1,5 @@
 import { CloudError } from './cloud'
-import type { AgentMatch, AgentReply, Confirmation, ModelService, ModelStatus, MediaKind } from './contracts'
+import type { AgentMatch, AgentReply, Confirmation, LocalAgentAvailability, ModelService, ModelStatus, MediaKind } from './contracts'
 
 const CAPABILITIES = ['search_media', 'get_metadata', 'get_backup_job', 'open_item'] as const
 const ALLOWED_ARGUMENTS: Record<string, readonly string[]> = {
@@ -82,7 +82,8 @@ export interface LocalOpenPlan {
   tool: 'open_item'
   fileId: string
   name: string
-  expiresAt: string
+  /** Host preview expiry, epoch milliseconds. Matches the Tauri `agent_prepare_action` reply. */
+  expiresAtMs: number
 }
 export interface LocalActionReceipt {
   actionId: string
@@ -90,6 +91,29 @@ export interface LocalActionReceipt {
   status: 'succeeded' | 'declined' | 'failed'
   data: Json
   executionAuthorized: false
+}
+/** The host accepts a preview only inside this window (5 minutes). */
+export const ACTION_WINDOW_MS = 5 * 60 * 1000
+/** Where the pending open proposal came from. Shown on the confirmation card. */
+export const OPEN_PROPOSAL_SOURCE = '本机 Agent 提议'
+
+export interface LocalAgentStatusView {
+  label: string
+  detail: string
+  ready: boolean
+  availability: LocalAgentAvailability | 'unknown'
+}
+
+/** User-facing local runtime state; unavailable states never suggest cloud fallback. */
+export function localAgentStatusView(status: ModelStatus | null, connected = true): LocalAgentStatusView {
+  if (!connected || !status) return { label: '状态待确认', detail: '无法读取本机 Agent 状态。刷新后再试；不会切换到云端模型。', ready: false, availability: 'unknown' }
+  switch (status.availability) {
+    case 'ready': return { label: `已就绪${status.configured ? ` · ${status.model}` : ''}`, detail: '本机 Agent 与 Ollama 可用。每次运行前仍需你确认。', ready: status.configured, availability: 'ready' }
+    case 'model_not_installed': return { label: '模型未安装', detail: `本机 Ollama 正在运行，但没有找到所需模型${status.configured ? `：${status.model}` : ''}。安装模型后刷新状态。`, ready: false, availability: 'model_not_installed' }
+    case 'ollama_unavailable': return { label: 'Ollama 未运行', detail: '未检测到本机 Ollama 服务。启动 Ollama 后刷新状态。不会自动改用云端模型。', ready: false, availability: 'ollama_unavailable' }
+    case 'sidecar_unavailable': return { label: '本机 Agent 服务不可用', detail: '影序本机 Agent 未连接。请重启应用后刷新状态；不会自动改用云端模型。', ready: false, availability: 'sidecar_unavailable' }
+    default: return { label: status.configured ? `${status.provider} · ${status.model}` : '本机模型不可用', detail: status.configured ? '模型状态已读取。' : '本机模型未配置；不会自动改用云端模型。', ready: status.configured, availability: 'unknown' }
+  }
 }
 
 function object(value: unknown): Json {
@@ -102,6 +126,22 @@ function exactKeys(row: Json, allowed: readonly string[], label: string): void {
 function nonEmpty(value: unknown, label: string, max = 160): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', `${label}无效`, 0, false)
   return value
+}
+function verifiedOpenReceipt(raw: unknown, actionId: string, mediaId: string, accepted: boolean): { receipt: LocalActionReceipt; data: Json } {
+  try {
+    const row = object(raw)
+    exactKeys(row, ['actionId', 'tool', 'status', 'data', 'executionAuthorized'], '本机操作回执')
+    if (row.actionId !== actionId || row.tool !== 'open_item' || row.executionAuthorized !== false || !['succeeded', 'declined', 'failed'].includes(String(row.status))) throw new Error('invalid receipt envelope')
+    const data = object(row.data)
+    if (row.status === 'succeeded') {
+      exactKeys(data, ['mediaId', 'opened', 'receiptId'], '打开素材回执')
+      if (!accepted || data.mediaId !== mediaId || data.opened !== true) throw new Error('success receipt does not match the confirmed action')
+      nonEmpty(data.receiptId, '操作回执编号')
+    } else if (Object.keys(data).length) throw new Error('failed receipt contains success data')
+    return { receipt: row as unknown as LocalActionReceipt, data }
+  } catch {
+    throw new CloudError('OPEN_RECEIPT_INVALID', '本机没有返回有效的打开回执，不能确认素材已打开。', 0, false)
+  }
 }
 function parseMatches(value: unknown): AgentMatch[] {
   if (!Array.isArray(value) || value.length > 10) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 匹配列表无效', 0, false)
@@ -176,8 +216,8 @@ function responseReply(response: LocalTurnResponse): AgentReply {
 export function createLocalAgentService(options: {
   transport: LocalAgentTransport
   executeTool: (tool: string, args: Json) => Promise<unknown>
-  prepareOpen: (actionId: string, fileId: string, expiresAt: string) => Promise<LocalOpenPlan>
-  confirmOpen: (actionId: string, accepted: boolean) => Promise<LocalActionReceipt>
+  prepareAction: (actionId: string, fileId: string, expiresAtMs: number) => Promise<LocalOpenPlan>
+  confirmAction: (actionId: string, accepted: boolean) => Promise<LocalActionReceipt>
   confirmModelUse: (value: Confirmation) => Promise<boolean>
   now?: () => number
 }) {
@@ -188,8 +228,35 @@ export function createLocalAgentService(options: {
   async function status(): Promise<ModelStatus> {
     const value = await options.transport.status()
     if (value.requiresExplicitConsent !== true || value.executionAuthorized !== false) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机模型状态缺少逐次确认边界', 0, false)
+    if (!['ready', 'ollama_unavailable', 'model_not_installed', 'sidecar_unavailable'].includes(String(value.availability)) || value.cloudFallback !== false)
+      throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 状态缺少可用性或云端回退边界', 0, false)
+    if (value.configured !== (value.availability === 'ready'))
+      throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 可用性与配置状态不一致', 0, false)
     if (value.configured && (value.provider !== 'ollama' || value.region !== 'local')) throw new CloudError('LOCAL_PROVIDER_NOT_ALLOWED', '桌面 Agent 当前只允许使用本机 Ollama，不会切换到远端模型', 0, false)
     return value
+  }
+
+  /** Mirrors the host rule: a preview is only valid inside the next 5 minutes. */
+  function actionExpiryMs(value: unknown, label: string): number {
+    const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN
+    if (!Number.isFinite(parsed)) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', `${label}无效`, 0, false)
+    const current = now()
+    if (parsed <= current || parsed > current + ACTION_WINDOW_MS)
+      throw new CloudError('ACTION_EXPIRED', '本机操作提议已过期，请重新查询', 0, false)
+    return parsed
+  }
+
+  /** prepare → 用户确认 → confirm 的第一步：向宿主换取一次性预览。 */
+  async function prepareOpenPlan(actionId: string, fileId: string, expiresAt: unknown): Promise<LocalOpenPlan> {
+    const expiresAtMs = actionExpiryMs(expiresAt, '本机操作提议有效期')
+    const plan = await options.prepareAction(actionId, fileId, expiresAtMs)
+    exactKeys(plan as unknown as Json, ['actionId', 'tool', 'fileId', 'name', 'expiresAtMs'], '本机打开计划')
+    if (plan.actionId !== actionId || plan.tool !== 'open_item' || plan.fileId !== fileId)
+      throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机打开计划与提议素材不一致', 0, false)
+    if (!Number.isSafeInteger(plan.expiresAtMs) || plan.expiresAtMs <= now() || plan.expiresAtMs > now() + ACTION_WINDOW_MS)
+      throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机打开计划的有效期无效', 0, false)
+    nonEmpty(plan.name, '素材名称', 500)
+    return plan
   }
 
   async function run(query: string, identity: { sessionId: string; turnId: string }, alreadyConsented: boolean, toolsUsed = 0): Promise<AgentReply> {
@@ -222,14 +289,10 @@ export function createLocalAgentService(options: {
       }
       const actionId = nonEmpty(proposal.actionId, '操作编号')
       const fileId = nonEmpty(proposal.fileIds[0], '素材编号')
-      const plan = await options.prepareOpen(actionId, fileId, proposal.expiresAt)
-      const expires = Date.parse(plan.expiresAt)
-      if (plan.actionId !== actionId || plan.tool !== 'open_item' || plan.fileId !== fileId) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机打开计划与提议素材不一致', 0, false)
-      nonEmpty(plan.name, '素材名称', 500)
-      if (!Number.isFinite(expires) || expires <= now()) throw new CloudError('ACTION_EXPIRED', '本机打开提议已过期，请重新查询', 0, false)
-      pending.set(actionId, { request: { callId: actionId, tool: 'open_item', arguments: { mediaId: fileId }, sessionId: response.sessionId, turnId: response.turnId, scope: 'current_desktop_device', expiresAt: plan.expiresAt, executionAuthorized: false, requiresLocalConfirmation: true }, plan, query, sessionId: response.sessionId, turnId: response.turnId, continuationToken: '', priorResults: [], toolsUsed, modelRequests: response.modelRequests })
+      const plan = await prepareOpenPlan(actionId, fileId, proposal.expiresAt)
+      pending.set(actionId, { request: { callId: actionId, tool: 'open_item', arguments: { mediaId: fileId }, sessionId: response.sessionId, turnId: response.turnId, scope: 'current_desktop_device', expiresAt: new Date(plan.expiresAtMs).toISOString(), executionAuthorized: false, requiresLocalConfirmation: true }, plan, query, sessionId: response.sessionId, turnId: response.turnId, continuationToken: '', priorResults: [], toolsUsed, modelRequests: response.modelRequests })
       const reply = responseReply(response)
-      return { ...reply, proposedAction: { actionId, tool: 'open_item', fileIds: [fileId], expiresAt: plan.expiresAt, kind: 'open', label: plan.name, target: '本机默认应用', objects: [plan.name] } }
+      return { ...reply, proposedAction: { actionId, tool: 'open_item', fileIds: [fileId], expiresAt: new Date(plan.expiresAtMs).toISOString(), source: OPEN_PROPOSAL_SOURCE, kind: 'open', label: plan.name, target: '本机默认应用', objects: [plan.name] } }
     }
     if (response.status !== 'awaiting_local_tools' || !response.continuationToken || !Array.isArray(response.localToolRequests) || response.localToolRequests.length < 1 || response.localToolRequests.length > MAX_RESPONSE_TOOLS || response.modelRequests < 1 || response.modelRequests >= MAX_MODEL_REQUESTS) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机工具续交状态无效或模型请求预算不足', 0, false)
     const continuationToken = nonEmpty(response.continuationToken, '续交令牌', 4096)
@@ -261,15 +324,11 @@ export function createLocalAgentService(options: {
       const args = parseArguments('open_item', req.arguments)
       const actionId = nonEmpty(req.callId, '工具调用编号')
       const fileId = nonEmpty(args.mediaId, '素材编号')
-      const plan = await options.prepareOpen(actionId, fileId, req.expiresAt)
-      const expires = Date.parse(plan.expiresAt)
-      if (plan.actionId !== actionId || plan.tool !== 'open_item' || plan.fileId !== fileId) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机打开计划与工具请求素材不一致', 0, false)
-      nonEmpty(plan.name, '素材名称', 500)
-      if (!Number.isFinite(expires) || expires <= now()) throw new CloudError('ACTION_EXPIRED', '本机打开提议已过期，请重新查询', 0, false)
+      const plan = await prepareOpenPlan(actionId, fileId, req.expiresAt)
       pending.set(actionId, { request: req, plan, query, sessionId: response.sessionId, turnId: response.turnId, continuationToken, priorResults: reads, toolsUsed: toolsUsed + reads.length, modelRequests: response.modelRequests })
       const text = response.response?.answer || `找到“${plan.name}”。请确认后才会通过本机默认应用打开。`
       const replyFields = response.response ? responseReply(response) : null
-      return { text, matches: replyFields?.matches ?? [], orchestrator: 'langgraph', provider: replyFields?.provider ?? 'ollama', ...(replyFields?.model ? { model: replyFields.model } : {}), historySync: 'not_synced', proposedAction: { actionId, tool: 'open_item', fileIds: [fileId], expiresAt: plan.expiresAt, kind: 'open', label: plan.name, target: '本机默认应用', objects: [plan.name] } }
+      return { text, matches: replyFields?.matches ?? [], orchestrator: 'langgraph', provider: replyFields?.provider ?? 'ollama', ...(replyFields?.model ? { model: replyFields.model } : {}), historySync: 'not_synced', proposedAction: { actionId, tool: 'open_item', fileIds: [fileId], expiresAt: new Date(plan.expiresAtMs).toISOString(), source: OPEN_PROPOSAL_SOURCE, kind: 'open', label: plan.name, target: '本机默认应用', objects: [plan.name] } }
     }
     const results: LocalToolResult[] = [...reads]
     if (toolsUsed + results.length > MAX_TURN_TOOLS) throw new CloudError('LOCAL_TOOL_LIMIT', '本轮达到 10 次本机工具调用上限', 0, true)
@@ -285,21 +344,15 @@ export function createLocalAgentService(options: {
       const context = pending.get(actionId)
       if (!context) throw new CloudError('ACTION_EXPIRED', '本机操作提议不存在或已处理，请重新查询', 0, false)
       pending.delete(actionId)
-      if (Date.parse(context.plan.expiresAt) <= now()) throw new CloudError('ACTION_EXPIRED', '本机操作提议已过期，请重新查询', 0, false)
-      const receipt = await options.confirmOpen(actionId, accepted)
-      if (receipt.actionId !== actionId || receipt.tool !== 'open_item' || receipt.executionAuthorized !== false) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机操作回执无效', 0, false)
-      if (!['succeeded', 'declined', 'failed'].includes(receipt.status)) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机操作回执状态无效', 0, false)
-      if (receipt.status === 'succeeded') {
-        exactKeys(receipt.data, ['mediaId', 'opened', 'receiptId'], '打开素材回执')
-        if (receipt.data.mediaId !== context.plan.fileId || receipt.data.opened !== true) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机打开素材回执与计划不一致', 0, false)
-        nonEmpty(receipt.data.receiptId, '操作回执编号')
-      } else if (Object.keys(receipt.data).length) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '未成功的本机操作回执不能包含结果数据', 0, false)
+      if (context.plan.expiresAtMs <= now()) throw new CloudError('ACTION_EXPIRED', '本机操作提议已过期，请重新查询', 0, false)
+      const rawReceipt = await options.confirmAction(actionId, accepted)
+      const { receipt, data: receiptData } = verifiedOpenReceipt(rawReceipt, actionId, context.plan.fileId, accepted)
       if (!context.continuationToken) return receipt.status === 'succeeded'
         ? `已通过本机默认应用打开 ${context.plan.name}。`
         : receipt.status === 'declined'
           ? '已取消本机操作，素材未打开。'
           : '本机默认应用未能打开该素材；素材未修改。'
-      const result: LocalToolResult = { callId: context.request.callId, tool: 'open_item', status: receipt.status, data: receipt.status === 'succeeded' ? receipt.data : {} }
+      const result: LocalToolResult = { callId: context.request.callId, tool: 'open_item', status: receipt.status, data: receipt.status === 'succeeded' ? receiptData : {} }
       const next = parseContinuation(await options.transport.submitResults(context.sessionId, context.turnId, { continuationToken: context.continuationToken, results: [...context.priorResults, result], useModel: true }), { status: 'awaiting_local_tools', sessionId: context.sessionId, turnId: context.turnId, query: context.query, orchestrator: 'langgraph', executionAuthorized: false, filesChanged: false, modelRequests: context.modelRequests })
       return processResponse(next, context.query, context.toolsUsed + 1)
     },

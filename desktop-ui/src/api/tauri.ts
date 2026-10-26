@@ -11,7 +11,7 @@ import type {
   NamePreset,
   ScanReport, IndexResult, NetdiskProvider, NetdiskTask,
 } from "./contracts";
-import { createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
+import { ACTION_WINDOW_MS, createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
 import { formatBytes, formatTime, mapJob, mapMedia } from "./format";
 import type { RawJob, RawMedia } from "./format";
 export class ApiError extends Error {
@@ -104,20 +104,27 @@ export function createTauriApi(options: Options = {}): AppApi {
     },
     executeTool: (tool, args) =>
       rpc("agent.executeTool", { tool, arguments: args }),
-    prepareOpen: async (actionId, fileId, expiresAt): Promise<LocalOpenPlan> => {
-      const expiresAtMs = Date.parse(expiresAt);
-      if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= Date.now())
-        throw new ApiError("ACTION_EXPIRED", "本机操作提议已过期，请重新查询");
-      const result = await invoke<Omit<LocalOpenPlan, "expiresAt"> & { expiresAtMs: number }>(
-        "agent_prepare_action",
-        { actionId, tool: "open_item", fileId, expiresAtMs },
-      );
-      if (!Number.isSafeInteger(result.expiresAtMs))
-        throw new ApiError("INVALID_REPLY", "本机预览有效期无效");
-      return { actionId: result.actionId, tool: "open_item", fileId: result.fileId, name: result.name, expiresAt: new Date(result.expiresAtMs).toISOString() };
+    prepareAction: async (actionId, fileId, expiresAtMs): Promise<LocalOpenPlan> => {
+      const current = Date.now();
+      if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= current || expiresAtMs > current + ACTION_WINDOW_MS)
+        throw new ApiError("ACTION_EXPIRED", "本机操作提议已过期，请重新查询", "agent_prepare_action");
+      const result = await invoke<LocalOpenPlan>("agent_prepare_action", { actionId, tool: "open_item", fileId, expiresAtMs });
+      if (!result || typeof result !== "object")
+        throw new ApiError("INVALID_REPLY", "本机预览响应无效", "agent_prepare_action");
+      if (Object.keys(result).some((key) => !["actionId", "tool", "fileId", "name", "expiresAtMs"].includes(key)))
+        throw new ApiError("INVALID_REPLY", "本机预览响应包含未允许的字段", "agent_prepare_action");
+      if (result.actionId !== actionId || result.tool !== "open_item" || result.fileId !== fileId || typeof result.name !== "string" || !result.name.trim())
+        throw new ApiError("INVALID_REPLY", "本机预览与请求不一致", "agent_prepare_action");
+      if (!Number.isSafeInteger(result.expiresAtMs) || result.expiresAtMs <= Date.now() || result.expiresAtMs > Date.now() + ACTION_WINDOW_MS)
+        throw new ApiError("INVALID_REPLY", "本机预览有效期无效", "agent_prepare_action");
+      return result;
     },
-    confirmOpen: (actionId, accepted) =>
-      invoke<LocalActionReceipt>("agent_confirm_action", { actionId, accepted }),
+    confirmAction: async (actionId, accepted): Promise<LocalActionReceipt> => {
+      const receipt = await invoke<LocalActionReceipt>("agent_confirm_action", { actionId, accepted });
+      if (!receipt || typeof receipt !== "object" || receipt.actionId !== actionId || receipt.tool !== "open_item" || receipt.executionAuthorized !== false || !["succeeded", "declined", "failed"].includes(receipt.status))
+        throw new ApiError("INVALID_REPLY", "本机操作回执无效", "agent_confirm_action");
+      return receipt;
+    },
     confirmModelUse: confirm,
   });
   async function rpc<T>(method: string, params: unknown = {}): Promise<T> {

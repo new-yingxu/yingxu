@@ -1,0 +1,22 @@
+$ ./node_modules/.bin/vite build --ssr tests/agent-open-entry.ts --outDir evidence/ui-slice-2-module
+vite v8.3.5 building ssr environment for production...
+transforming...
+✓ 8 modules transformed.
+rendering chunks...
+computing gzip size...
+evidence/ui-slice-2-module/agent-open-entry.js  26.02 kB │ gzip: 7.71 kB
+
+✓ built in 129ms
+
+$ node tests/agent-open.mjs
+{
+  "passed": 6,
+  "checks": [
+    "decline runs prepare then confirm(false) and never opens",
+    "accept calls confirm(true) only after the preview",
+    "proposals outside the 5 minute window fail before the host call",
+    "a preview that contradicts the request is rejected",
+    "a receipt that claims execution authorization is rejected",
+    "confirmation card shows file, source and expiry with 拒绝 focused by default"
+  ]
+}

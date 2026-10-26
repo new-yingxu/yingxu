@@ -110,6 +110,8 @@ export interface AgentReply {
     fileIds?: string[];
     expiresAt?: string;
     canConfirm?: boolean;
+    /** Who proposed the operation. Shown on the confirmation card. */
+    source?: string;
     kind: "open" | "rename" | "move" | "upload" | "cleanup";
     label: string;
     target: string;
@@ -126,6 +128,9 @@ export interface UnconfiguredModelStatus {
   configured: false;
   requiresExplicitConsent: true;
   executionAuthorized: false;
+  /** Present only for local Agent status; Cloud model status stays transport-neutral. */
+  availability?: LocalAgentAvailability;
+  cloudFallback?: false;
 }
 export interface ConfiguredModelStatus {
   configured: true;
@@ -134,7 +139,11 @@ export interface ConfiguredModelStatus {
   region: string;
   requiresExplicitConsent: true;
   executionAuthorized: false;
+  /** Present only for local Agent status; Cloud model status stays transport-neutral. */
+  availability?: LocalAgentAvailability;
+  cloudFallback?: false;
 }
+export type LocalAgentAvailability = "ready" | "ollama_unavailable" | "model_not_installed" | "sidecar_unavailable";
 export interface DeliveryPackage {
   id: string;
   name: string;
