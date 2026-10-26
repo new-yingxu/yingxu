@@ -210,61 +210,6 @@ async fn backend_request(
     }
 }
 
-/// Open one already-indexed item after a direct renderer user action. The
-/// renderer can supply only a media ID; roots, paths and fingerprints are
-/// revalidated by the local engine and host before the OS opener is called.
-#[tauri::command]
-async fn agent_open_item(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    media_id: String,
-) -> Result<serde_json::Value, CoreError> {
-    if window.label() != "main" {
-        return Err(CoreError::new(
-            "PERMISSION_DENIED",
-            "仅主窗口可打开本地素材",
-        ));
-    }
-    let state = app.state::<HostState>();
-    let engine = state.engine.clone();
-    let lookup_media_id = media_id.clone();
-    let path = tauri::async_runtime::spawn_blocking(move || {
-        engine.agent_resolve_open_item(&lookup_media_id)
-    })
-    .await
-    .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))??;
-    let roots = state
-        .sources
-        .lock()
-        .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "来源目录授权状态不可用"))?
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    yingxu_core::agent::validate_open_grant(&path, &roots)?;
-    let checked_path = state.engine.agent_resolve_open_item(&media_id)?;
-    if checked_path != path {
-        return Err(CoreError::new(
-            "SOURCE_CHANGED",
-            "素材身份在打开前发生变化，未打开",
-        ));
-    }
-    open_in_default_app(&path)?;
-    let receipt_id = format!(
-        "agent-open-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
-    state.engine.store.audit(
-        "agent_open_item",
-        &media_id,
-        serde_json::json!({"receiptId":receipt_id,"opened":true}),
-    )?;
-    Ok(serde_json::json!({"mediaId":media_id,"opened":true,"receiptId":receipt_id}))
-}
-
 /// Prepare a short-lived, single-use preview for an Agent open action. The
 /// model supplies only an indexed media ID; the host resolves and authorizes
 /// the path, then requires a separate explicit confirmation before opening.
@@ -683,7 +628,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             select_directory,
             backend_request,
-            agent_open_item,
             agent_prepare_action,
             agent_confirm_action
         ])
