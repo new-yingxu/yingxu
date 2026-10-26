@@ -28,6 +28,12 @@ import type {
 } from "./api/contracts";
 import { createDesktopApi } from "./api";
 import { errorText } from "./api/tauri";
+import {
+  canControl,
+  canEnterStep,
+  canRetryTarget,
+  summarizeResult,
+} from "./api/backup-state";
 import { formatBytes } from "./api/format";
 import type { RawJob } from "./api/format";
 import {
@@ -257,6 +263,14 @@ const selectedTask = computed(
     tasks.value.find((task) => task.id === selectedTaskId.value) ||
     null,
 );
+const resultSummary = computed(() =>
+  selectedTask.value ? summarizeResult(selectedTask.value) : null,
+);
+const wizardContext = computed(() => ({
+  scanned: sources.value.length > 0,
+  targets: backupTargets.value.length,
+  busy: operationBusy.value || scanBusy.value,
+}));
 const activeTitle = computed(() => pageLabels[page.value]);
 const globalSearchItems = computed(() => [
   ...navGroups.flatMap((group) =>
@@ -1472,6 +1486,7 @@ function taskStateLabel(state: TaskState) {
                   current: backupStep === index + 1,
                   done: backupStep > index + 1,
                 }"
+                :disabled="!canEnterStep(index + 1, wizardContext)"
                 @click="backupStep = index + 1"
               >
                 <i>{{ backupStep > index + 1 ? "✓" : index + 1 }}</i
@@ -2085,6 +2100,20 @@ function taskStateLabel(state: TaskState) {
                   <b>{{ selectedTask.progress }}%</b
                   ><span>{{ selectedTask.phase }}</span>
                 </div>
+                <div
+                  v-if="selectedTask.error"
+                  class="result-banner failed"
+                  role="alert"
+                >
+                  <b>任务错误</b><span>{{ selectedTask.error }}</span>
+                </div>
+                <div
+                  v-if="resultSummary"
+                  :class="['result-banner', resultSummary.state]"
+                >
+                  <b>{{ resultSummary.headline }}</b
+                  ><span>{{ resultSummary.detail }}</span>
+                </div>
                 <div class="detail-stats">
                   <span
                     ><b>{{ selectedTask.files }}</b> 计划文件</span
@@ -2094,6 +2123,15 @@ function taskStateLabel(state: TaskState) {
                     ><b>{{ selectedTask.speed }}</b> 当前速度</span
                   >
                 </div>
+                <p
+                  v-if="
+                    selectedTask.state === 'running' &&
+                    selectedTask.currentFile
+                  "
+                  class="current-file"
+                >
+                  正在写入：{{ selectedTask.currentFile }}
+                </p>
                 <div class="destination-list">
                   <h4>目的地结果</h4>
                   <div
@@ -2111,7 +2149,7 @@ function taskStateLabel(state: TaskState) {
                       taskStateLabel(destination.state)
                     }}</span
                     ><button
-                      v-if="destination.state === 'failed'"
+                      v-if="canRetryTarget(selectedTask, destination.id)"
                       class="secondary-button compact"
                       @click="
                         api.history
@@ -2128,23 +2166,19 @@ function taskStateLabel(state: TaskState) {
                 </div>
                 <div class="panel-actions">
                   <button
-                    v-if="['running', 'queued'].includes(selectedTask.state)"
+                    v-if="canControl(selectedTask.state, 'pause')"
                     class="secondary-button"
                     @click="controlTask('pause')"
                   >
                     暂停</button
                   ><button
-                    v-if="selectedTask.state === 'paused'"
+                    v-if="canControl(selectedTask.state, 'resume')"
                     class="secondary-button"
                     @click="controlTask('resume')"
                   >
                     继续</button
                   ><button
-                    v-if="
-                      ['running', 'queued', 'paused'].includes(
-                        selectedTask.state,
-                      )
-                    "
+                    v-if="canControl(selectedTask.state, 'cancel')"
                     class="danger-button"
                     @click="controlTask('cancel')"
                   >

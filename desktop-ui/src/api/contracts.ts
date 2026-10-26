@@ -45,6 +45,13 @@ export interface MediaFile {
   qualityState: "good" | "review" | "unanalyzed";
   selected?: boolean;
 }
+export interface MediaPage {
+  items: MediaFile[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}
 export interface ArchiveTask {
   kind?: string;
   verify?: boolean;
@@ -57,6 +64,7 @@ export interface ArchiveTask {
   progress: number;
   speed: string;
   phase: string;
+  currentFile?: string;
   source: string;
   destinations: TaskDestination[];
   error?: string;
@@ -188,6 +196,13 @@ export interface DesktopApi {
     ): Promise<ArchiveTask>;
   };
   library: {
+    searchPage(
+      query: string,
+      kind: MediaKind | "all",
+      quality: string,
+      limit?: number,
+      offset?: number,
+    ): Promise<MediaPage>;
     search(
       query: string,
       kind: MediaKind | "all",

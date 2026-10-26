@@ -3,4 +3,9 @@ dist/
 .DS_Store
 
 # Local integration evidence, disposable media/DB fixtures and short-lived fixture tokens.
-/evidence/
+/evidence/*
+# ui-slice-1 的构建与测试输出按交接要求入库。
+!/evidence/ui-slice-1/
+/evidence/ui-slice-module/
+/evidence/adapter-module/
+/evidence/adapter-fixture-*/
