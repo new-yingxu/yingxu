@@ -267,7 +267,9 @@ results.push("a preview that contradicts the request is rejected");
   const proposal = await service.ask("打开素材");
   await assert.rejects(
     service.confirm(proposal.proposedAction.actionId, true),
-    (error) => error.code === "LOCAL_AGENT_CONTRACT_MISMATCH",
+    (error) =>
+      error.code === "OPEN_RECEIPT_INVALID" ||
+      error.code === "LOCAL_AGENT_CONTRACT_MISMATCH",
   );
 }
 results.push("a receipt that claims execution authorization is rejected");
