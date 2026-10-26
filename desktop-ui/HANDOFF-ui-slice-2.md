@@ -126,17 +126,33 @@ native-adapter 本轮新增断言：首页 `limit=2,offset=0` → `items 2 / tot
 
 ## 与并行会话的交叉改动（需知会）
 
-- 本会话执行期间，同一工作目录有并行会话同时修改 `desktop-ui/src/api/local-agent.ts`、`src/api/contracts.ts`、`src/components/ModelConsent.vue`、`tests/local-agent.mjs`（本机 Agent 状态 `availability` / `cloudFallback` 边界与状态视图）。
-- 本会话的两步确认改动与该批改动在同文件内并存，已一起通过 `vue-tsc -b` 与全部测试。
-- 为让 `vue-tsc -b` 通过，本会话在 `src/components/ModelConsent.vue` 补了一行 `computed` 导入（并行会话使用了 `computed` 但未导入）。如对方已自行修复，可回退该行。
-- 本会话提交时 `desktop-ui/` 内可能仍留有并行会话的未提交改动（如 `tests/local-agent.mjs` 的可用性用例），本会话未夹带提交归属不明的内容；提交只含本片文件。
+- 本会话执行期间，同一工作目录有并行会话同时修改 `desktop-ui/src/api/local-agent.ts`、`src/api/contracts.ts`、`src/components/ModelConsent.vue`、`tests/local-agent.mjs`（本机 Agent 状态 `availability` / `cloudFallback` 边界、状态视图 `localAgentStatusView`、打开回执校验 `verifiedOpenReceipt`）。
+- 本会话的两步确认改动与该批改动在同文件内并存，已一起通过 `vue-tsc -b` 与全部测试；`f947103` 因此**同时包含**了并行会话在 `local-agent.ts` / `contracts.ts` / `tests/local-agent.mjs` 里的未提交改动（这些改动必须与本片的 `prepareAction` / `confirmAction` 改名同批提交，否则 HEAD 不自洽）。
+- `src/components/ModelConsent.vue` 属并行会话文件，**未**纳入本会话提交；本会话为让 `vue-tsc -b` 通过补的一行 `computed` 导入仍留在工作树未提交（对方已自行修复可忽略）。
+- 本会话提交后工作树仍留有：`desktop-ui/HANDOFF-ui-slice-1.md`、`desktop-ui/evidence/ui-slice-1/*`（上一轮未提交的证据）、`src/components/ModelConsent.vue`（并行会话），均未夹带进本会话提交。
+- 并行会话仍在持续改写 `local-agent.ts`；若其后续提交再动同一文件，请以最终 `workbuddy/dev` 头为准复核本片的 `prepareAction` / `confirmAction` 契约。
 
 ## 汇总：提交与验证一览
 
 | 任务 | 提交 | 主要证据 |
 |---|---|---|
 | 任务 1 分页资料库检索 | `e907cb2` | `evidence/ui-slice-2-task1/` |
-| 任务 2 两步确认 | 见本文件末尾提交记录 | `evidence/ui-slice-2-task2/` |
-| 任务 3 清除直开路径 | 见本文件末尾提交记录 | `evidence/ui-slice-2-task3/` |
+| 任务 2 两步确认 | `f947103`（+ `f758fab` 测试断言对齐回执错误码） | `evidence/ui-slice-2-task2/` |
+| 任务 3 清除直开路径 | `e94d39f` | `evidence/ui-slice-2-task3/` |
 
-最终状态：`vue-tsc -b` 通过；`vite build` 通过；纯前端测试 library-paging 8/8、agent-open 6/6、no-direct-open 4/4、backup-flow-state 8/8、local-agent 9/9；真实 Rust CLI 端到端 native-adapter 18/18。未 push、未部署、未改 `backend/**`。
+最终验证（`workbuddy/dev` @ `f758fab`）：
+
+| 测试 | 结果 | 是否依赖 Rust/Tauri |
+|---|---|---|
+| `vue-tsc -b` | 通过 | 否 |
+| `vite build` | 通过（36 modules） | 否 |
+| `tests/library-paging.mjs` | 8/8 | 否 |
+| `tests/agent-open.mjs` | 6/6 | 否（SSR 渲染断言） |
+| `tests/no-direct-open.mjs` | 4/4 | 否 |
+| `tests/backup-flow-state.mjs` | 8/8 | 否 |
+| `tests/local-agent.mjs` | 9/9 | 否（注入式 mock 宿主） |
+| `tests/native-adapter.mjs` | 18/18 | **是**，真实 `backend/target/debug/yingxu-core` 端到端 |
+
+另在 `git archive HEAD` 导出的干净副本上复跑：`vue-tsc -b` + `vite build` 通过，五个纯前端测试全部通过（证明三个提交自洽，不依赖工作树里的其它改动）。
+
+未 push、未部署、未改 `backend/**`、未自造 Rust 没有的接口字段。任务 4（Agent 会话字段契约）按交接要求未开工，等契约文档到位。
