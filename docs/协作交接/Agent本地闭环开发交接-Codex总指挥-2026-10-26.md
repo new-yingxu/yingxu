@@ -4,7 +4,7 @@
 
 ## 分支与负责范围
 
-- 工作分支：`codex/cloud-agent-store`，隔离 worktree：`/Users/nanyu/Documents/AI工具/02_Codex数据_0907/worktrees/yingxu-cloud-agent/new-影序agent开发`。本次核查时 GitHub 尚无该远端分支。
+- 工作分支：`codex/cloud-agent-store`，隔离 worktree：`/Users/nanyu/Documents/AI工具/02_Codex数据_0907/worktrees/yingxu-cloud-agent/new-影序agent开发`。该分支已推送 GitHub；远端与本地分支头已回读一致。
 - 当前阶段职责：本地 LangGraph/runtime、本地模型 provider、Agent 工具 loop、持久步骤/恢复逻辑及其桌面宿主协议。云端 Agent、账号、CloudBase 和部署排到本地闭环之后。
 - 只修改该 worktree；不要直接写 `backend/**`、WorkBuddy 的 `desktop-ui/**`，或另一人的工作树。接口变化先在此分支更新本交接文档和协议请求。
 
