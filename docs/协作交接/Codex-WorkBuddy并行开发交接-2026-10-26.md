@@ -46,3 +46,11 @@ Codex 与 WorkBuddy 从共同已提交基线 `415d04f` 分开。Codex 分支不�
 每次交接至少记录：接收方、来源和目标分支、基线 commit、负责文件、完成/未完成项、实际验证命令与结果、证据路径、阻塞和下一步。接收方只依据该文档继续。提交时只暂存本交接任务拥有的文件，不夹带其他工作树的脏代码。
 
 当前已按用户新指示完成本地/远端分支同步，可开始开发。不得跨角色覆盖未提交改动；不得部署或发布。
+
+## 授权后进展：桌面 Agent 前端 adapter
+
+- 负责人：WorkBuddy 前端分支 `workbuddy/dev`；本次基线 `7bd5a23`。工作范围为 Agent UI 与本机 adapter；本次只提交 Agent 相关 hunks，保留并行出现的 `desktop-ui/src/api/format.ts`、`desktop-ui/src/style.css`、`desktop-ui/src/api/backup-state.ts` 未提交改动，不纳入本次提交。
+- 已完成：Agent 发送统一经过逐次本机模型同意界面；状态确认失败时不发送。Adapter 只允许 `ollama` / `local`，不请求远端模型；将模型轮次、至多 2 项工具请求/响应、10 项本地工具调用上限纳入边界校验；读工具结果裁剪到脱敏字段；`open_item` 先生成宿主操作计划，再等用户明确确认，回执校验素材编号和状态。仅处理打开素材，不执行改名、移动、删除或上传。
+- 前端 IPC 合同：`agent_local_status()`；`agent_local_turn({ request: { query, sessionId, turnId, useModel: true, capabilities, destinationGrantIds: [] } })`；`agent_local_turn_results({ sessionId, turnId, request: { continuationToken, results, useModel: true } })`；`agent_prepare_action({ actionId, tool: "open_item", fileId, expiresAtMs })`；`agent_confirm_action({ actionId, accepted })`。Sidecar bearer token 不进入 WebView。
+- 验证：`pnpm verify:adapter` 通过（本机 Agent adapter 6 项、现有 Rust CLI adapter 17 项）；`pnpm exec vite build` 通过。证据：`desktop-ui/evidence/adapter-fixture-1793018259532/result.json`。`pnpm build` 的全项目 `vue-tsc` 检查被未跟踪的 `desktop-ui/src/api/backup-state.ts:123` TS7053 阻塞（`running` 不能索引终态文案表）；此文件属于并行工作，本次保留未改。Vite 生产打包和 Agent adapter 测试已独立通过。
+- 边界/待办：以上 IPC 测试使用注入的 mock host，尚未证明 Tauri 宿主 IPC、sidecar 进程或真实本机 Ollama 已运行接通。宿主命令及 sidecar 生命周期仍由宿主/Agent 负责人按冻结合同实现并另行验收；桌面端本次代码不改 Rust、Python 或云服务。

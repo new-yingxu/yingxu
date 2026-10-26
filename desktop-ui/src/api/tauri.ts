@@ -6,9 +6,11 @@ import type {
   BackupPayload,
   Confirmation,
   LocalCapabilities,
+  ModelStatus,
   NamePreset,
   ScanReport, IndexResult, NetdiskProvider, NetdiskTask,
 } from "./contracts";
+import { createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
 import { formatBytes, formatTime, mapJob, mapMedia } from "./format";
 import type { RawJob, RawMedia } from "./format";
 export class ApiError extends Error {
@@ -84,6 +86,32 @@ export function createTauriApi(options: Options = {}): AppApi {
   let counter = 0;
   let lastIndex: IndexResult | null = null;
   const eventListen = options.listen || listen;
+  const localAgent = createLocalAgentService({
+    transport: {
+      status: () => invoke<ModelStatus>("agent_local_status"),
+      startTurn: (request: LocalTurnRequest) =>
+        invoke<LocalTurnResponse>("agent_local_turn", { request }),
+      submitResults: (sessionId: string, turnId: string, request: { continuationToken: string; results: LocalToolResult[]; useModel: true }) =>
+        invoke<LocalTurnResponse>("agent_local_turn_results", { sessionId, turnId, request }),
+    },
+    executeTool: (tool, args) =>
+      rpc("agent.executeTool", { tool, arguments: args }),
+    prepareOpen: async (actionId, fileId, expiresAt): Promise<LocalOpenPlan> => {
+      const expiresAtMs = Date.parse(expiresAt);
+      if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= Date.now())
+        throw new ApiError("ACTION_EXPIRED", "本机操作提议已过期，请重新查询");
+      const result = await invoke<Omit<LocalOpenPlan, "expiresAt"> & { expiresAtMs: number }>(
+        "agent_prepare_action",
+        { actionId, tool: "open_item", fileId, expiresAtMs },
+      );
+      if (!Number.isSafeInteger(result.expiresAtMs))
+        throw new ApiError("INVALID_REPLY", "本机预览有效期无效");
+      return { actionId: result.actionId, tool: "open_item", fileId: result.fileId, name: result.name, expiresAt: new Date(result.expiresAtMs).toISOString() };
+    },
+    confirmOpen: (actionId, accepted) =>
+      invoke<LocalActionReceipt>("agent_confirm_action", { actionId, accepted }),
+    confirmModelUse: confirm,
+  });
   async function rpc<T>(method: string, params: unknown = {}): Promise<T> {
     const requestId = `desktop-${Date.now()}-${++counter}`;
     let reply: {
@@ -269,6 +297,7 @@ export function createTauriApi(options: Options = {}): AppApi {
   }
   const api: AppApi = {
     mode: "native",
+    model: localAgent.model,
     auth: {
       restore: () => rpc("auth.restore"),
       login: () =>
@@ -414,17 +443,8 @@ export function createTauriApi(options: Options = {}): AppApi {
         ),
     },
     agent: {
-      ask: () =>
-        Promise.reject(
-          new ApiError("CLOUD_ADAPTER_NOT_CONNECTED", "Agent 服务尚未连接"),
-        ),
-      confirm: () =>
-        Promise.reject(
-          new ApiError(
-            "CLOUD_ADAPTER_NOT_CONNECTED",
-            "Agent 本地执行桥尚未连接",
-          ),
-        ),
+      ask: localAgent.ask,
+      confirm: localAgent.confirm,
     },
     account: {
       devices: () => rpc("account.devices"),

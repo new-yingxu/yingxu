@@ -180,6 +180,7 @@ const backupPreset = ref("preset-camera");
 const backupTask = ref<ArchiveTask | null>(null);
 const newPresetName = ref("");
 const agentInput = ref("");
+const modelConsentRef = ref<{ submit(query: string): Promise<void> } | null>(null);
 const agentMessages = ref<
   {
     role: "assistant" | "user";
@@ -751,6 +752,14 @@ async function stageSource() {
 async function askAgent() {
   const text = agentInput.value.trim();
   if (!text) return;
+  if (api.model) {
+    if (!modelConsentRef.value) {
+      showError(new Error("本机模型确认界面尚未就绪，请稍后重试"));
+      return;
+    }
+    await modelConsentRef.value.submit(text);
+    return;
+  }
   agentMessages.value.push({ role: "user", text });
   agentInput.value = "";
   try {
@@ -759,8 +768,9 @@ async function askAgent() {
       role: "assistant",
       text: reply.text,
       reply,
-      actionId:
-        isMock && reply.proposedAction ? `act-${Date.now()}` : undefined,
+      actionId: reply.proposedAction?.kind === "open"
+        ? reply.proposedAction.actionId
+        : isMock && reply.proposedAction ? `act-${Date.now()}` : undefined,
     });
   } catch (error) {
     showError(error);
@@ -768,13 +778,29 @@ async function askAgent() {
 }
 function appendModelReply(value: { query: string; reply: AgentReply }) {
   agentMessages.value.push({ role: "user", text: value.query });
-  agentMessages.value.push({ role: "assistant", text: value.reply.text, reply: value.reply });
+  agentMessages.value.push({
+    role: "assistant",
+    text: value.reply.text,
+    reply: value.reply,
+    actionId: value.reply.proposedAction?.kind === "open"
+      ? value.reply.proposedAction.actionId
+      : undefined,
+  });
   if (agentInput.value === value.query) agentInput.value = "";
 }
 async function confirmAgent(message: { actionId?: string }, accepted: boolean) {
   if (!message.actionId) return;
   try {
-    say(await api.agent.confirm(message.actionId, accepted));
+    const result = await api.agent.confirm(message.actionId, accepted);
+    if (typeof result === "string") say(result);
+    else agentMessages.value.push({
+      role: "assistant",
+      text: result.text,
+      reply: result,
+      actionId: result.proposedAction?.kind === "open"
+        ? result.proposedAction.actionId
+        : undefined,
+    });
     message.actionId = undefined;
   } catch (error) {
     showError(error);
@@ -2247,12 +2273,12 @@ function taskStateLabel(state: TaskState) {
                       >
                         <article
                           v-for="match in message.reply.matches"
-                          :key="match.kind === 'media' ? match.media.id : `${match.deviceId}:${match.jobId}`"
+                          :key="match.kind === 'media' ? match.media.id : match.kind === 'local_media' ? match.media.mediaId : `${match.deviceId}:${match.jobId}`"
                         >
                           <Image :size="15" /><span
-                            ><b>{{ match.kind === "media" ? match.media.name : match.name }}</b
+                            ><b>{{ match.kind === "media" || match.kind === "local_media" ? match.media.name : match.name }}</b
                             ><small
-                              >{{ match.kind === "media" ? `${match.media.path} · ${match.media.quality}` : `已同步任务 · ${match.state} · 设备 ${match.deviceId} · ${match.jobId}` }}</small
+                              >{{ match.kind === "media" ? `${match.media.path} · ${match.media.quality}` : match.kind === "local_media" ? `${match.media.kind} · ${formatBytes(match.media.bytes)} · ${match.media.qualityState}` : `已同步任务 · ${match.state} · 设备 ${match.deviceId} · ${match.jobId}` }}</small
                             ></span
                           >
                         </article>
@@ -2263,7 +2289,7 @@ function taskStateLabel(state: TaskState) {
                       >
                         <b>待确认操作计划</b
                         ><span
-                          >操作：{{ message.reply.proposedAction.kind }} ·
+                          >操作：{{ message.reply.proposedAction.kind === "open" ? "打开" : message.reply.proposedAction.kind }} ·
                           {{ message.reply.proposedAction.label }}</span
                         ><span
                           >对象：{{
@@ -2272,7 +2298,7 @@ function taskStateLabel(state: TaskState) {
                         ><span
                           >目标：{{ message.reply.proposedAction.target }}</span
                         >
-                        <div v-if="message.actionId" class="plan-actions">
+                        <div v-if="message.actionId && message.reply.proposedAction.canConfirm !== false" class="plan-actions">
                           <button
                             class="secondary-button compact"
                             @click="confirmAgent(message, false)"
@@ -2282,14 +2308,14 @@ function taskStateLabel(state: TaskState) {
                             class="primary-button compact"
                             @click="confirmAgent(message, true)"
                           >
-                            确认演示操作
+                            {{ message.reply.proposedAction.kind === "open" ? "确认并在本机打开" : "确认演示操作" }}
                           </button>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
-                <ModelConsent :service="api.model" :query="agentInput" @reply="appendModelReply" />
+                <ModelConsent ref="modelConsentRef" :service="api.model" :query="agentInput" @reply="appendModelReply" />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"
@@ -2299,8 +2325,7 @@ function taskStateLabel(state: TaskState) {
                   </button>
                 </form>
                 <p class="table-foot centered">
-                  演示 Agent
-                  不会读取或修改本机文件；真实工具采用白名单与逐次确认。
+                  {{ isMock ? "演示 Agent 使用合成素材。" : "本机 LangGraph Agent 仅调用白名单工具；打开素材须经本机确认，模型请求不会自动切换到云端。" }}
                 </p>
               </div>
             </section>
