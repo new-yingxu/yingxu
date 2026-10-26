@@ -4,6 +4,7 @@ import NetdiskPanel from "./components/NetdiskPanel.vue";
 import ModelConsent from "./components/ModelConsent.vue";
 import OllamaOnboarding from "./components/OllamaOnboarding.vue";
 import AgentActionCard from "./components/AgentActionCard.vue";
+import { canEnterNativeLocalMode, canShowDevDiagnostics, canUseCloudFeatures, enterNativeLocalMode, runCloudAction } from "./api/local-mode";
 import {
   computed,
   nextTick,
@@ -108,11 +109,13 @@ const api = (props.createApi || createDesktopApi)(
 );
 const isMock = api.mode === "mock";
 const localWorkspace = ref(false);
-const canUseLocalWorkspace = !isMock && import.meta.env.DEV;
+const canEnterLocalWorkspace = canEnterNativeLocalMode(api.mode, !!api.local);
+const canUseCloud = computed(() => canUseCloudFeatures(session.value, localWorkspace.value));
+const canShowLocalDiagnostics = canShowDevDiagnostics(api.mode, !!api.local, import.meta.env.DEV);
 const displayName = computed(
   () =>
     session.value?.displayName ||
-    (localWorkspace.value ? "本机联调" : "未登录"),
+    (localWorkspace.value ? "本机模式" : "未登录"),
 );
 const displayEmail = computed(() => session.value?.email || "云端未登录");
 const localCapabilities = ref<LocalCapabilities | null>(null);
@@ -301,12 +304,12 @@ const globalSearchItems = computed(() => [
   ...navGroups.flatMap((group) =>
     group.items.map((item) => ({ ...item, group: group.title })),
   ),
-  {
+  ...(canUseCloud.value ? [{
     id: "account" as Page,
     label: "账号与设备",
     group: "工具",
     icon: LockKeyhole,
-  },
+  }] : []),
   { id: "settings" as Page, label: "偏好设置", group: "工具", icon: Settings2 },
 ]);
 const globalSearchMatches = computed(() => {
@@ -494,10 +497,19 @@ async function loadData() {
   document.documentElement.dataset.theme = settings.theme;
 }
 async function enterLocalWorkspace() {
+  if (!canEnterLocalWorkspace) return;
   await runAction(async () => {
-    await loadData();
-    localWorkspace.value = true;
-    page.value = "home";
+    const entered = await enterNativeLocalMode({
+      mode: api.mode,
+      hasLocalAdapter: !!api.local,
+      loadLocalData: loadData,
+      setSession: (value) => { session.value = value; },
+      setEnabled: (value) => { localWorkspace.value = value; },
+    });
+    if (entered) {
+      page.value = "home";
+      say("已进入本机模式：不登录、不云同步，数据仅在此设备处理。");
+    }
   });
 }
 function onAppError(event: Event) {
@@ -575,6 +587,7 @@ onUnmounted(() => {
   finishConfirmation(false);
 });
 async function signIn() {
+  if (localWorkspace.value) return;
   loginError.value = "";
   if (isMock && loginMode.value === "wechat")
     loginIdentifier.value ||= "wechat-demo";
@@ -604,6 +617,7 @@ async function signIn() {
 async function logout() {
   if (localWorkspace.value) {
     localWorkspace.value = false;
+    session.value = null;
     page.value = "home";
     return;
   }
@@ -774,7 +788,14 @@ async function beginTransfer() {
   });
 }
 async function queueBaidu(file: MediaFile) {
-  if (api.netdisk) await runAction(async () => { await api.netdisk!.enqueue("baidu", file); say("已加入上传队列，尚未上传；请到偏好设置确认上传。"); });
+  if (!api.netdisk) return;
+  await runAction(async () => {
+    const allowed = await runCloudAction(session.value, localWorkspace.value, async () => {
+      await api.netdisk!.enqueue("baidu", file);
+      say("已加入上传队列，尚未上传；请到偏好设置确认上传。");
+    });
+    if (!allowed) say("本机模式已禁用网盘上传；不会发送云端请求。");
+  });
 }
 async function indexLibrary() {
   if (api.local)
@@ -893,6 +914,10 @@ async function updateSetting<K extends keyof AppSettings>(
   key: K,
   value: AppSettings[K],
 ) {
+  if (localWorkspace.value && (["syncHistory", "syncAgent", "syncThumbnails", "syncPaths", "maxUploadMbps", "webhookEnabled", "webhookUrl"].includes(key) || (key === "aiProvider" && value === "OpenAI 兼容 API"))) {
+    say("本机模式已禁用云同步、Webhook 和云端模型设置；不会发送远端请求。");
+    return;
+  }
   try {
     Object.assign(settings, await api.settings.update({ [key]: value }));
     document.documentElement.dataset.theme = settings.theme;
@@ -963,7 +988,11 @@ async function createDelivery() {
   });
 }
 async function revokeDevice(device: Device) {
-  if (!device.current) await api.account.revoke(device.id);
+  if (!device.current) {
+    await runCloudAction(session.value, localWorkspace.value, async () => {
+      await api.account.revoke(device.id);
+    });
+  }
 }
 async function clearHistory() {
   await runAction(async () => {
@@ -982,7 +1011,10 @@ async function renameTask(task: ArchiveTask) {
 }
 async function connectProvider(provider: "baidu" | "quark") {
   try {
-    say(await api.settings.connectProvider(provider));
+    const allowed = await runCloudAction(session.value, localWorkspace.value, async () => {
+      say(await api.settings.connectProvider(provider));
+    });
+    if (!allowed) say("本机模式已禁用网盘授权；不会发送云端请求。");
   } catch (error) {
     showError(error);
   }
@@ -996,11 +1028,15 @@ async function resetSettings() {
   }
 }
 function setPage(next: Page) {
+  if (localWorkspace.value && next === "account") {
+    say("账号与设备功能在本机模式下不可用。");
+    return;
+  }
   page.value = next;
   taskDetail.value = next === "task" ? selectedTask.value : null;
   if (next === "history") void refreshHistory().catch(showError);
   if (next === "library") void searchFiles().catch(showError);
-  if (next === "account")
+  if (next === "account" && canUseCloud.value)
     void api.account
       .devices()
       .then((value) => (devices.value = value))
@@ -1151,13 +1187,16 @@ function taskStateLabel(state: TaskState) {
                 : "登录影序（演示）"
         }}
       </button>
+      <p v-if="canEnterLocalWorkspace" class="local-mode-note">
+        本机模式无需登录，照片、任务和 Agent 留在此设备；账号、云同步与网盘功能将停用。
+      </p>
       <button
-        v-if="canUseLocalWorkspace"
+        v-if="canEnterLocalWorkspace"
         class="secondary-button full-width local-entry"
         @click="enterLocalWorkspace"
         :disabled="operationBusy"
       >
-        打开本地联调工作区（不登录云端）
+        进入本机模式（不登录、不云同步）
       </button>
       <p class="login-disclaimer">
         {{ isMock ? "浏览器预览 · 登录仅为界面演示" : hostStatus }}
@@ -1221,10 +1260,11 @@ function taskStateLabel(state: TaskState) {
           class="nav-item"
           :class="{ active: page === 'account' }"
           aria-label="账号与设备"
-          title="账号与设备"
+          :title="localWorkspace ? '本机模式下不可用' : '账号与设备'"
+          :disabled="localWorkspace"
           @click="setPage('account')"
         >
-          <LockKeyhole :size="17" /><span>账号与设备</span></button
+          <LockKeyhole :size="17" /><span>{{ localWorkspace ? '账号与设备（已停用）' : '账号与设备' }}</span></button
         ><button
           class="nav-item"
           :class="{ active: page === 'settings' }"
@@ -1239,7 +1279,7 @@ function taskStateLabel(state: TaskState) {
           ><span
             ><b>{{ displayName }}</b
             ><small>{{ displayEmail }}</small></span
-          ><button class="icon-button" title="退出登录" @click="logout">
+          ><button class="icon-button" :title="localWorkspace ? '退出本机模式' : '退出登录'" @click="logout">
             <MoreHorizontal :size="16" />
           </button>
         </div>
@@ -1251,9 +1291,9 @@ function taskStateLabel(state: TaskState) {
           <span>影序</span><ChevronRight :size="13" /><b>{{ activeTitle }}</b>
         </div>
         <div class="top-actions">
-          <span class="draft-chip"><i></i> V2 草稿预览</span
+          <span v-if="!localWorkspace" class="draft-chip"><i></i> V2 草稿预览</span
           ><span class="demo-chip"
-            ><i></i>{{ isMock ? "演示数据" : "本地真实数据" }}</span
+            ><i></i>{{ isMock ? "演示数据" : localWorkspace ? "本机模式 · 云端已停用" : "本地真实数据" }}</span
           >
           <div class="search-action-wrap">
             <button
@@ -1347,11 +1387,14 @@ function taskStateLabel(state: TaskState) {
       <div class="page-scroll">
         <div class="page-content">
           <div v-if="notice" class="toast inline-toast">{{ notice }}</div>
+          <div v-if="localWorkspace" class="local-mode-banner" role="status">
+            <b>本机模式已开启</b><span>无需账号；本地 Agent、素材索引和备份仅在此设备运行。云账号、跨设备同步与网盘入口均已停用。</span>
+          </div>
           <ScanSummary :report="page === 'backup' ? backupScan : page === 'transfer' ? transferScan : page === 'library' ? indexScan : null" />
 
           <template v-if="page === 'home' && !isMock"
             ><PageHeading
-              eyebrow="本地联调工作区 · 云端未登录"
+              :eyebrow="localWorkspace ? '本机模式 · 未登录、不云同步' : '本地联调工作区 · 云端未登录'"
               title="工作台"
               :description="props.testTransport || hostStatus"
             />
@@ -1365,9 +1408,7 @@ function taskStateLabel(state: TaskState) {
                   ><b>{{ summary.reviewCount }}</b> 待复核</span
                 >
               </div>
-              <p>
-                结果来自本地 Rust / SQLite；云端身份、Agent、设备同步未连接。
-              </p>
+              <p>{{ localWorkspace ? "本地 Rust / SQLite；Agent、素材索引和备份仅在此设备运行，云账号与同步已停用。" : "结果来自本地 Rust / SQLite；云端身份、Agent、设备同步未连接。" }}</p>
               <button class="primary-button" @click="setPage('backup')">
                 开始本地备份</button
               ><button class="secondary-button" @click="setPage('library')">
@@ -2026,7 +2067,7 @@ function taskStateLabel(state: TaskState) {
                         {{
                           file.kind === "video" ? "分析视频" : "分析 / 预览"
                         }}</button
-                      ><button v-if="api.netdisk" class="text-button" @click="queueBaidu(file)">加入百度上传队列</button><button
+                      ><button v-if="api.netdisk && !localWorkspace" class="text-button" @click="queueBaidu(file)">加入百度上传队列</button><button
                         v-if="isMock"
                         class="text-button"
                         @click="restoreFile(file)"
@@ -3025,7 +3066,7 @@ function taskStateLabel(state: TaskState) {
                       <p>命名先预览；模型不直接执行文件操作</p>
                     </div>
                   </div>
-                  <label class="setting-row"
+                  <label v-if="!localWorkspace" class="setting-row"
                     ><span
                       ><b>AI 命名建议</b
                       ><small>离线备份不依赖 AI；执行前仍需确认</small></span
@@ -3036,9 +3077,10 @@ function taskStateLabel(state: TaskState) {
                     >
                       <option>本地规则优先</option>
                       <option>Ollama</option>
-                      <option>OpenAI 兼容 API</option>
+                      <option v-if="!localWorkspace">OpenAI 兼容 API</option>
                     </select></label
                   >
+                  <p v-else class="cloud-disabled-note">本机模式不使用云端模型；Agent 仅连接本机 Ollama，命名建议使用本机规则。</p>
                   <div class="setting-row">
                     <span
                       ><b>当前命名预设</b
@@ -3099,34 +3141,22 @@ function taskStateLabel(state: TaskState) {
                 <section id="cloud" class="panel settings-section">
                   <div class="panel-heading">
                     <div>
-                      <h3>百度网盘与云同步</h3>
-                      <p>仅接官方允许的 API 与个人账号授权</p>
+                      <h3>{{ localWorkspace ? "百度网盘与云同步（已停用）" : "百度网盘与云同步" }}</h3>
+                      <p>{{ localWorkspace ? "本机模式不发起任何网盘或云同步请求。" : "仅接官方允许的 API 与个人账号授权" }}</p>
                     </div>
                   </div>
-                  <NetdiskPanel v-if="api.netdisk" :api="api.netdisk" />
-                  <p v-else>浏览器演示不连接真实网盘。请在原生应用查看本机资质、授权与上传队列。</p>
-                  <div class="setting-row">
-                    <span
-                      ><b>同步速度上限</b
-                      ><small
-                        >0 表示不限制 · {{ settings.maxUploadMbps }} Mbps</small
-                      ></span
-                    ><input
-                      class="number-control"
-                      type="number"
-                      min="0"
-                      :value="settings.maxUploadMbps"
-                      @change="
-                        updateSetting(
-                          'maxUploadMbps',
-                          Number(($event.target as HTMLInputElement).value),
-                        )
-                      "
-                    />
-                  </div>
-                  <button class="text-button" @click="setPage('account')">
-                    管理同步范围与设备 <ArrowRight :size="13" />
-                  </button>
+                  <template v-if="localWorkspace">
+                    <p class="cloud-disabled-note">本机模式下云账号、跨设备同步和网盘授权均不可用；相关操作不会发出远端请求。</p>
+                  </template>
+                  <template v-else>
+                    <NetdiskPanel v-if="api.netdisk" :api="api.netdisk" />
+                    <p v-else>浏览器演示不连接真实网盘。请在原生应用查看本机资质、授权与上传队列。</p>
+                    <div class="setting-row">
+                      <span><b>同步速度上限</b><small>0 表示不限制 · {{ settings.maxUploadMbps }} Mbps</small></span>
+                      <input class="number-control" type="number" min="0" :value="settings.maxUploadMbps" @change="updateSetting('maxUploadMbps', Number(($event.target as HTMLInputElement).value))" />
+                    </div>
+                    <button class="text-button" @click="setPage('account')">管理同步范围与设备 <ArrowRight :size="13" /></button>
+                  </template>
                 </section>
                 <section id="advanced" class="panel settings-section">
                   <div class="panel-heading">
@@ -3135,7 +3165,7 @@ function taskStateLabel(state: TaskState) {
                       <p>Webhook、带宽和相似度</p>
                     </div>
                   </div>
-                  <label class="setting-row"
+                  <label v-if="!localWorkspace" class="setting-row"
                     ><span
                       ><b>Webhook 通知</b
                       ><small>真实发送需后端配置并由用户授权</small></span
@@ -3148,7 +3178,7 @@ function taskStateLabel(state: TaskState) {
                           ($event.target as HTMLInputElement).checked,
                         )
                       " /></label
-                  ><label v-if="settings.webhookEnabled" class="setting-row"
+                  ><label v-if="settings.webhookEnabled && !localWorkspace" class="setting-row"
                     ><span
                       ><b>Webhook 地址</b
                       ><small>演示表单；请勿填写真实密钥</small></span
@@ -3156,6 +3186,7 @@ function taskStateLabel(state: TaskState) {
                       v-model="settings.webhookUrl"
                       class="text-control"
                       placeholder="https://example.com/hook" /></label
+                  ><p v-if="localWorkspace" class="cloud-disabled-note">本机模式不会配置或发送 Webhook 请求。</p>
                   ><button
                     class="secondary-button"
                     @click="say('高级参数已保存至演示状态。')"
@@ -3192,14 +3223,14 @@ function taskStateLabel(state: TaskState) {
       <footer class="statusbar">
         <span
           ><i class="status-dot online"></i
-          >{{ isMock ? "浏览器演示模式" : "本地后端联调" }}</span
+          >{{ isMock ? "浏览器演示模式" : localWorkspace ? "本机模式 · 不登录、不云同步" : "本地后端" }}</span
         ><span>{{
           isMock
             ? "MockDesktopApi · 不读取磁盘"
-            : "Rust / SQLite · 云端账号和 Agent 未连接"
+            : localWorkspace ? "Rust / SQLite · 云账号、同步和网盘功能已停用" : "Rust / SQLite · 云端账号和 Agent 未连接"
         }}</span
         ><span class="statusbar-right"
-          ><CircleHelp :size="13" />帮助与反馈 <i></i> V2 草稿预览</span
+          ><CircleHelp :size="13" />帮助与反馈 <i></i>{{ localWorkspace ? "本机模式" : "V2 草稿预览" }}</span
         >
       </footer>
     </section>
@@ -3273,7 +3304,7 @@ function taskStateLabel(state: TaskState) {
           <dd>{{ row.value }}</dd>
         </div>
       </dl>
-      <details v-if="canUseLocalWorkspace">
+      <details v-if="canShowLocalDiagnostics">
         <summary>开发联调诊断 JSON</summary>
         <pre>{{ JSON.stringify(taskReport || analysis, null, 2) }}</pre>
       </details>
