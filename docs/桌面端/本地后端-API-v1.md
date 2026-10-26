@@ -27,6 +27,7 @@ Tauri 主窗口通过 `backend_request` 调用；目录须先通过原生 `selec
 | `history.clear` | `{confirmation:"清空归档记录"}`；存在活动任务时拒绝 |
 | `library.index` | `{source}` → 只读索引计数，变化来源使旧分析/缩略图失效 |
 | `library.search` | `{query,kind:all|photo|video|other,quality:all|good|review|unanalyzed}`；最多 500 项，名称/路径/选定元数据及 FTS5 |
+| `library.searchPage` | `{query,kind,quality,limit:1..200,offset}` → `{items,total,offset,limit,hasMore}`；查询结果稳定按名称和 ID 排序，搜索条件变化时由调用方从 `offset:0` 重新查询 |
 | `library.analyzePhoto` | `{mediaId}` → 元数据、解码状态、质量候选、缩略图可用性 |
 | `library.thumbnail` | `{mediaId}` → `{mimeType,bytes,maxEdge:512,exifIncluded:false}`；来源变化拒绝读取 |
 | `library.review` | `{mediaId,state:good|review|unanalyzed,note,confirmed}` → 人工复核标签；不操作原片 |
@@ -54,6 +55,7 @@ Tauri 主窗口通过 `backend_request` 调用；目录须先通过原生 `selec
 - runtime：itemId/currentFile/currentBytes/currentTotalBytes/speedBytesPerSecond/updatedAt；复制时约每 200ms 更新 SQLite，UI 可轮询详情。Tauri 的 `local-job-updated` 当前是每次 worker 返回的摘要，不是逐块推送。
 - 一项复制失败会记录原因并继续其他目标；部分成功保留成功结果。显式跳过校验的任务 phase 为 copied_without_verification，verified 为 false。
 - 前端 `DesktopApi` 中已格式化的 size/speed、sourceId、pattern 等不能直接传给 Rust；正式 adapter 必须处理字节/时间格式及原生目录选择、预检确认、跨端登录门禁。当前 V2 mock 不变。
+- Tauri 按当前进程内的目录授权检查 `backup.scan`、`backup.scanReport`、预检、`library.index`，以及按 mediaId 读取原片的照片/RAW/视频分析、缩略图、交付包和网盘入队。应用重启后需重新授权来源目录；路径通过 IPC 时不能只依赖 SQLite 中缓存的旧授权。
 - `auth.restore` 为 null；真实登录、Agent、账号/网盘连接返回 CLOUD_ADAPTER_NOT_CONNECTED，不产生假会话。
 
 ## 云端兼容意见（2026-10-25）

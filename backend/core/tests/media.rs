@@ -167,3 +167,84 @@ fn oversized_dimensions_are_unanalyzed_not_damaged() {
     assert_eq!(response["thumbnailAvailable"], false);
     assert!(f.target.join("wide.png").is_file());
 }
+
+#[test]
+fn library_search_page_covers_501_rows_and_applies_filters_from_zero() {
+    let f = F::new();
+    {
+        let c = f.e.store.connect().unwrap();
+        for i in 0..501 {
+            let kind = if i % 2 == 0 { "photo" } else { "video" };
+            let quality = if i % 3 == 0 { "review" } else { "good" };
+            c.execute(
+                "INSERT INTO media_items(id,path,name,kind,bytes,quality_state,metadata) VALUES(?1,?2,?3,?4,1,?5,'{}')",
+                rusqlite::params![
+                    format!("media-{i:04}"),
+                    format!("/fixture/{i:04}.jpg"),
+                    format!("fixture-{i:04}"),
+                    kind,
+                    quality,
+                ],
+            )
+            .unwrap();
+        }
+    }
+
+    let page = |query: &str, kind: &str, quality: &str, offset| {
+        f.e.dispatch(Request {
+            request_id: "page".into(),
+            version: 1,
+            method: "library.searchPage".into(),
+            params: json!({
+                "query": query,
+                "kind": kind,
+                "quality": quality,
+                "limit": 200,
+                "offset": offset,
+            }),
+        })
+    };
+
+    let first = page("", "all", "all", 0).data.unwrap();
+    let second = page("", "all", "all", 200).data.unwrap();
+    let third = page("", "all", "all", 400).data.unwrap();
+    assert_eq!(first["items"].as_array().unwrap().len(), 200);
+    assert_eq!(second["items"].as_array().unwrap().len(), 200);
+    assert_eq!(third["items"].as_array().unwrap().len(), 101);
+    assert_eq!(first["total"], 501);
+    assert_eq!(first["offset"], 0);
+    assert_eq!(third["offset"], 400);
+    assert_eq!(first["hasMore"], true);
+    assert_eq!(second["hasMore"], true);
+    assert_eq!(third["hasMore"], false);
+    let ids: Vec<_> = [first, second, third]
+        .into_iter()
+        .flat_map(|p| {
+            p["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(ids.len(), 501);
+    assert_eq!(
+        ids.iter().collect::<std::collections::HashSet<_>>().len(),
+        501
+    );
+
+    let filtered = page("fixture-0500", "photo", "good", 0).data.unwrap();
+    assert_eq!(filtered["offset"], 0);
+    assert_eq!(filtered["total"], 1);
+    assert_eq!(filtered["items"][0]["id"], "media-0500");
+    assert_eq!(filtered["hasMore"], false);
+
+    let invalid = f.e.dispatch(Request {
+        request_id: "invalid-page".into(),
+        version: 1,
+        method: "library.searchPage".into(),
+        params: json!({"query":"", "kind":"all", "quality":"all", "limit":201, "offset":0}),
+    });
+    assert_eq!(invalid.error.unwrap().code, "INVALID_PAGE");
+}

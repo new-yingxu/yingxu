@@ -1,0 +1,10 @@
+   Compiling yingxu-desktop-host v0.2.0-draft.1 (/Users/nanyu/Documents/AI项目/new-影序agent开发/backend/tauri-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running unittests src/main.rs (backend/tauri-host/target/debug/deps/yingxu_desktop_host-63909a161232e299)
+
+running 2 tests
+test tests::scan_report_requires_an_explicit_source_directory_grant ... ok
+test tests::indexed_media_reads_require_a_current_source_directory_grant ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

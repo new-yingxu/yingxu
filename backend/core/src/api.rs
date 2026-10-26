@@ -45,6 +45,13 @@ arg!(Search {
     kind: String,
     quality: String
 });
+arg!(SearchPage {
+    query: String,
+    kind: String,
+    quality: String,
+    limit: u32,
+    offset: u64
+});
 arg!(History {
     query: String,
     state: String
@@ -190,6 +197,10 @@ impl Engine {
             "library.search" => {
                 let a: Search = decode(p)?;
                 value(self.search(&a.query, &a.kind, &a.quality)?)
+            }
+            "library.searchPage" => {
+                let a: SearchPage = decode(p)?;
+                self.search_page(&a.query, &a.kind, &a.quality, a.limit, a.offset)
             }
             "agent.tools" => Ok(crate::agent::tool_directory()),
             "agent.searchMedia" => {

@@ -97,6 +97,7 @@ fn check_paths(state: &HostState, request: &Request) -> Result<(), CoreError> {
     let p = &request.params;
     if [
         "backup.scan",
+        "backup.scanReport",
         "backup.preview",
         "transfer.preview",
         "library.index",
@@ -116,6 +117,41 @@ fn check_paths(state: &HostState, request: &Request) -> Result<(), CoreError> {
                 )?;
             }
         }
+    }
+    let indexed_media_ids: Vec<&str> = match request.method.as_str() {
+        "library.analyze"
+        | "library.analyzePhoto"
+        | "library.analyzeRaw"
+        | "library.thumbnail"
+        | "video.probe"
+        | "video.analyze"
+        | "netdisk.enqueue" => vec![
+            p["mediaId"]
+                .as_str()
+                .ok_or_else(|| CoreError::new("INVALID_PARAMS", "缺少 mediaId"))?,
+        ],
+        "delivery.create" => p["mediaIds"]
+            .as_array()
+            .ok_or_else(|| CoreError::new("INVALID_PARAMS", "缺少 mediaIds"))?
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| CoreError::new("INVALID_PARAMS", "mediaIds 必须为字符串"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => vec![],
+    };
+    for media_id in indexed_media_ids {
+        let path = state.engine.agent_resolve_open_item(media_id)?;
+        let roots = state
+            .sources
+            .lock()
+            .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "来源目录授权状态不可用"))?
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        yingxu_core::agent::validate_open_grant(&path, &roots)?;
     }
     if ["reports.export", "restore.start", "delivery.create"].contains(&request.method.as_str())
         && let Some(path) = p["destination"].as_str()
@@ -640,4 +676,110 @@ fn main() {
             request_quit(app.clone());
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host_fixture() -> (PathBuf, PathBuf, PathBuf, HostState, String) {
+        let base = std::env::temp_dir().canonicalize().unwrap();
+        let temp = base.join(format!(
+            "yingxu-host-grant-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = temp.join("source");
+        let target = temp.join("target");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(source.join("fixture.jpg"), b"indexed fixture bytes").unwrap();
+        let engine = Engine::open(temp.join("app-data")).unwrap();
+        engine.index_source(&source).unwrap();
+        let media_id = engine.search("", "all", "all").unwrap()[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let state = HostState {
+            engine,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            worker_ready: Arc::new(AtomicBool::new(false)),
+            worker: Mutex::new(None),
+            sources: Mutex::new(HashSet::new()),
+            targets: Mutex::new(HashSet::new()),
+        };
+        (temp, source, target, state, media_id)
+    }
+
+    #[test]
+    fn scan_report_requires_an_explicit_source_directory_grant() {
+        let (temp, source, _, state, _) = host_fixture();
+        let request = Request {
+            request_id: "grant-test".into(),
+            version: PROTOCOL_VERSION,
+            method: "backup.scanReport".into(),
+            params: serde_json::json!({"source": source}),
+        };
+
+        let denied = check_paths(&state, &request).unwrap_err();
+        assert_eq!(denied.code, "DIRECTORY_GRANT_REQUIRED");
+
+        state
+            .sources
+            .lock()
+            .unwrap()
+            .insert(source.canonicalize().unwrap());
+        assert!(check_paths(&state, &request).is_ok());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn indexed_media_reads_require_a_current_source_directory_grant() {
+        let (temp, source, target, state, media_id) = host_fixture();
+        for method in [
+            "library.analyze",
+            "library.analyzePhoto",
+            "library.analyzeRaw",
+            "library.thumbnail",
+            "video.probe",
+            "video.analyze",
+            "netdisk.enqueue",
+        ] {
+            let request = Request {
+                request_id: "media-grant-test".into(),
+                version: PROTOCOL_VERSION,
+                method: method.into(),
+                params: serde_json::json!({"mediaId": media_id}),
+            };
+            let denied = check_paths(&state, &request).unwrap_err();
+            assert_eq!(denied.code, "DIRECTORY_GRANT_REQUIRED", "{method}");
+        }
+
+        let delivery = Request {
+            request_id: "delivery-grant-test".into(),
+            version: PROTOCOL_VERSION,
+            method: "delivery.create".into(),
+            params: serde_json::json!({"mediaIds":[media_id], "destination":target}),
+        };
+        let denied = check_paths(&state, &delivery).unwrap_err();
+        assert_eq!(denied.code, "DIRECTORY_GRANT_REQUIRED");
+
+        state
+            .sources
+            .lock()
+            .unwrap()
+            .insert(source.canonicalize().unwrap());
+        let denied_destination = check_paths(&state, &delivery).unwrap_err();
+        assert_eq!(denied_destination.code, "DIRECTORY_GRANT_REQUIRED");
+        state
+            .targets
+            .lock()
+            .unwrap()
+            .insert(target.canonicalize().unwrap());
+        assert!(check_paths(&state, &delivery).is_ok());
+        std::fs::remove_dir_all(temp).unwrap();
+    }
 }

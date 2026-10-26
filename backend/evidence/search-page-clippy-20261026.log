@@ -1,0 +1,7 @@
+    Checking ring v0.17.14
+    Checking libsqlite3-sys v0.39.1
+    Checking rusqlite v0.41.0
+    Checking rustls-webpki v0.103.16
+    Checking rustls v0.23.46
+    Checking yingxu-core v0.2.0-draft.1 (/Users/nanyu/Documents/AI项目/new-影序agent开发/backend/core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.46s

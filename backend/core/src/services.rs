@@ -8,6 +8,70 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 impl Engine {
+    /// Paginated media search for UI consumers. The explicit hard limit keeps each
+    /// IPC response bounded while `total`/`hasMore` let callers fetch the full set.
+    pub fn search_page(
+        &self,
+        query: &str,
+        kind: &str,
+        quality: &str,
+        limit: u32,
+        offset: u64,
+    ) -> CoreResult<Value> {
+        if query.len() > 500
+            || !["all", "photo", "video", "other"].contains(&kind)
+            || !["all", "good", "review", "unanalyzed"].contains(&quality)
+        {
+            return Err(CoreError::new("INVALID_FILTER", "检索条件无效"));
+        }
+        if !(1..=200).contains(&limit) || offset > i64::MAX as u64 {
+            return Err(CoreError::new(
+                "INVALID_PAGE",
+                "每页数量需为 1–200，偏移量超出范围",
+            ));
+        }
+        let c = self.store.connect()?;
+        let literal = format!("\"{}\"*", query.replace('"', "\"\""));
+        let fts_query = if query.is_empty() {
+            "\"__empty__\""
+        } else {
+            &literal
+        };
+        let total: i64 = c.query_row(
+            "SELECT COUNT(*) FROM media_items WHERE (?1='all' OR kind=?1) AND (?2='all' OR quality_state=?2) AND (?3='' OR instr(lower(name || ' ' || path || ' ' || metadata),lower(?3))>0 OR rowid IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?4))",
+            params![kind, quality, query, fts_query],
+            |r| r.get(0),
+        )?;
+        let mut statement = c.prepare(
+            "SELECT id,path,name,kind,bytes,sha256,quality_state,metadata FROM media_items WHERE (?1='all' OR kind=?1) AND (?2='all' OR quality_state=?2) AND (?3='' OR instr(lower(name || ' ' || path || ' ' || metadata),lower(?3))>0 OR rowid IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?4)) ORDER BY name,id LIMIT ?5 OFFSET ?6",
+        )?;
+        let rows = statement.query_map(
+            params![kind, quality, query, fts_query, limit, offset as i64],
+            |r| {
+                Ok(json!({
+                    "id": r.get::<_, String>(0)?,
+                    "path": r.get::<_, String>(1)?,
+                    "name": r.get::<_, String>(2)?,
+                    "kind": r.get::<_, String>(3)?,
+                    "bytes": r.get::<_, i64>(4)?,
+                    "sha256": r.get::<_, Option<String>>(5)?,
+                    "qualityState": r.get::<_, String>(6)?,
+                    "metadata": serde_json::from_str::<Value>(&r.get::<_, String>(7)?)
+                        .unwrap_or(Value::Null),
+                }))
+            },
+        )?;
+        let items: Vec<Value> = rows.map(|row| Ok(row?)).collect::<CoreResult<_>>()?;
+        let next = offset.saturating_add(items.len() as u64);
+        Ok(json!({
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "hasMore": next < total as u64,
+        }))
+    }
+
     pub fn search(&self, query: &str, kind: &str, quality: &str) -> CoreResult<Vec<Value>> {
         if query.len() > 500
             || !["all", "photo", "video", "other"].contains(&kind)

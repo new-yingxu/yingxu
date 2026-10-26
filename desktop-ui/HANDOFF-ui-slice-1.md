@@ -76,3 +76,42 @@
 
 - 三方本地集成时，用真实 Tauri 宿主验证 `local-job-updated` 事件驱动下的终态横幅与 currentFile 呈现（本片仅在 Rust CLI 端到端 + 纯前端单测验证）。
 - partial/failed 的单目标重试在 UI 已接 `api.history.retry`；集成时确认 Rust `jobs.control retry` 的 targetId 语义一致。
+
+## 补记：library.searchPage 分页（b92e859 之后追加）
+
+**目的**：对齐 B1 的 `library.search` 500 项返回上限。Rust 端 `library.search` 最多返回 500 条，
+资料库增长后 UI 一次拉全量会被截断。b92e859 已把契约（`MediaPage`、`DesktopApi.library.searchPage`）
+提交进 `contracts.ts`；本次补齐 adapter 实现，使 native 路径改为分页拉取、聚合成全量：
+
+- `src/api/tauri.ts`：
+  - `searchMediaPage()`：调用 `library.searchPage`（limit ≤ 200、offset ≥ 0 校验，错误码
+    `INVALID_PAGINATION`），并严格校验分页响应（`INVALID_REPLY`：items ≤ limit、total/offset/limit
+    回显一致、hasMore 与 offset+items/total 关系互洽）；
+  - `searchAllMedia()`：循环翻页聚合 `library.search` 语义，跨页去重（重复素材编号 →
+    `INVALID_REPLY`）、total 漂移检测（`LIBRARY_PAGING_CHANGED`）、1000 页安全上限
+    （`LIBRARY_PAGE_LIMIT`）；`transfer.inspect` 与 `library.search` 均走该聚合。
+- `src/api/mock.ts`：mock 同步实现 `searchPage`（limit 默认 200，返回 items/total/offset/limit/hasMore），
+  保持与 native 契约一致。
+- UI 接入范围：**本片止于 adapter 层**。`App.vue` 资料库页调用 `api.library.search`
+  （`App.vue:456` 初载、`App.vue:666` `searchFiles()`，切到资料库页时触发，见 `App.vue:933`），
+  native 路径下该方法已映射为
+  `searchAllMedia`（分页聚合后仍返回全量 `MediaFile[]`），UI 无需改动即自动受益。资料库页改为
+  增量分页加载（首屏 200 条 + 滚动续拉）属于独立 UI 片，未包含在本片。
+- `tests/native-adapter.mjs`：因当前已提交的 Rust CLI 尚无 `library.searchPage`
+  （并行会话的 backend host slice 尚未提交），测试注入垫片把 `library.searchPage` 请求转译为
+  真实 `library.search` 并按 offset/limit 切片，以验证 adapter 的分页信封校验与聚合循环
+  （通过真实 Rust CLI 端到端执行）。**待 backend host slice 提交后，应移除该垫片，
+  让 adapter 直接打真实 `library.searchPage` RPC。**
+
+**验证（实际命令与结果，2026-10-26 21:02 追加）**：
+
+| 命令 | 结果 | 证据 |
+|---|---|---|
+| `./node_modules/.bin/vite build --ssr src/api/tauri.ts --outDir evidence/adapter-module` | 通过，5 modules，46.65 kB | `evidence/ui-slice-1/build.log`（追加段） |
+| `node tests/native-adapter.mjs`（真实 Rust CLI 端到端，重建 adapter-module 后） | 17/17 通过，exit 0 | `evidence/ui-slice-1/native-adapter-run.log`（追加段，fixture `adapter-fixture-1793019759874`） |
+| `./node_modules/.bin/vite build --ssr tests/backup-flow-entry.ts --outDir evidence/ui-slice-module && node tests/backup-flow-state.mjs` | 回归 8/8 通过，exit 0 | `evidence/ui-slice-1/ssr-build.log`、`backup-flow-state-run.log`（追加段）、`backup-flow-state-result.json` |
+| `./node_modules/.bin/vue-tsc -b && ./node_modules/.bin/vite build` | 通过，35 modules，dist 201.69 kB JS | `evidence/ui-slice-1/build.log`（追加段） |
+
+**边界说明**：工作区同时存在并行会话未提交的 backend/ 与 docs/ 改动（含 Rust 端 `library.searchPage`
+实现与 20:51 重建的 debug 二进制），本片未触碰、未提交这些文件；上述验证在含该二进制的当前环境下执行，
+垫片对新旧二进制均兼容。

@@ -1,0 +1,64 @@
+{
+  "sourceType": "user-authorized removable card",
+  "indexedFileCount": 929,
+  "formatCounts": {
+    "[no extension]": 1,
+    ".dng": 495,
+    ".jpg": 289,
+    ".html": 11,
+    ".lrf": 44,
+    ".mp4": 44,
+    ".srt": 44,
+    ".db": 1
+  },
+  "networkUsed": false,
+  "privatePathsIncluded": false,
+  "qualityAccuracy": "not_established_no_ground_truth_labels",
+  "index": {
+    "files": 929,
+    "changed": 929,
+    "sourceReadOnly": true,
+    "copyStarted": false
+  },
+  "sampleAnalysis": {
+    "jpeg": {
+      "available": true,
+      "indexed": true,
+      "analysisSucceeded": true,
+      "qualityState": "unanalyzed",
+      "decodeStatus": "decoded",
+      "rawFormat": null,
+      "previewSource": null,
+      "thumbnailAvailable": true,
+      "frameSource": null,
+      "framesAnalyzed": null
+    },
+    "raw": {
+      "available": true,
+      "indexed": true,
+      "analysisSucceeded": true,
+      "qualityState": "unanalyzed",
+      "decodeStatus": "raw_preview_decoded",
+      "rawFormat": "tiff_le",
+      "previewSource": "tiff_ifd",
+      "thumbnailAvailable": true,
+      "frameSource": null,
+      "framesAnalyzed": null
+    },
+    "video": {
+      "available": true,
+      "indexed": true,
+      "analysisSucceeded": true,
+      "qualityState": "unanalyzed",
+      "decodeStatus": "frames_sampled",
+      "rawFormat": null,
+      "previewSource": null,
+      "thumbnailAvailable": true,
+      "frameSource": "embedded_cover",
+      "framesAnalyzed": 1
+    }
+  },
+  "sourceStatUnchanged": true,
+  "sampleContentUnchanged": true,
+  "elapsedSeconds": 1.78
+}
