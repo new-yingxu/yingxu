@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+export PYTHONPATH="$(pwd)/third_party:$(pwd):${PYTHONPATH:-}"
+exec /var/lang/python311/bin/python3.11 -m uvicorn app.main:app --host 0.0.0.0 --port 9000

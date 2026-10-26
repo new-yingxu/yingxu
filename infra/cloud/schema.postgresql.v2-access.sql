@@ -1,0 +1,13 @@
+BEGIN;
+REVOKE ALL ON TABLE devices, sync_events, agent_actions, sync_preferences, schema_migrations FROM anon, authenticated, PUBLIC;
+REVOKE ALL ON SEQUENCE devices_id_seq, sync_events_id_seq FROM anon, authenticated, PUBLIC;
+ALTER TABLE devices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE agent_actions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_preferences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE schema_migrations ENABLE ROW LEVEL SECURITY;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE devices, sync_events, agent_actions, sync_preferences TO service_role;
+GRANT SELECT ON TABLE schema_migrations TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE devices_id_seq, sync_events_id_seq TO service_role;
+INSERT INTO schema_migrations (version, applied_at) VALUES (2, CURRENT_TIMESTAMP) ON CONFLICT (version) DO NOTHING;
+COMMIT;
