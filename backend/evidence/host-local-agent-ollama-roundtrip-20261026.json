@@ -1,0 +1,23 @@
+{
+  "status": "passed",
+  "test": "packaged_local_agent_real_model_tool_round_trip_from_host",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "model": "qwen2.5:7b",
+  "modelRequests": 2,
+  "flow": [
+    "host starts packaged sidecar",
+    "host authenticates local status",
+    "Ollama requests search_media",
+    "host indexes an isolated fixture in SQLite and executes the Rust read tool",
+    "host submits the actual indexed search result",
+    "Ollama summarizes the result",
+    "continuation replay is served idempotently"
+  ],
+  "toolResult": "actual Engine SQLite index result for an isolated fixture; no user media accessed",
+  "fixture": "target-local temporary directory; IMG_2048.jpg",
+  "filesChanged": false,
+  "executionAuthorized": false,
+  "cloudFallback": false,
+  "tauriWebviewInvoked": false
+}

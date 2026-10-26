@@ -1262,7 +1262,7 @@ fn main() {
 mod agent_action_tests {
     use super::{
         HostState, check_paths, local_agent_request, spawn_local_agent, stop_local_agent_process,
-        validate_action_expiry, validate_local_turn_request,
+        validate_action_expiry, validate_local_turn_request, validate_local_turn_response,
     };
     use std::collections::{HashMap, HashSet};
     use std::{
@@ -1272,6 +1272,7 @@ mod agent_action_tests {
     };
     use yingxu_core::{
         Engine,
+        agent::execute_read_tool,
         api::{PROTOCOL_VERSION, Request},
     };
 
@@ -1436,6 +1437,128 @@ mod agent_action_tests {
             )
             .is_err()
         );
+        stop_local_agent_process(&mut process);
+        assert!(process.child.try_wait().unwrap().is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn packaged_local_agent_real_model_tool_round_trip_from_host() {
+        if std::env::var("YINGXU_RUN_OLLAMA_HOST_TESTS").as_deref() != Ok("1") {
+            return;
+        }
+        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("agent-sidecar/yingxu-local-agent/yingxu-local-agent");
+        assert!(
+            executable.is_file(),
+            "stage the platform sidecar package first"
+        );
+        use rsa::pkcs8::EncodePrivateKey;
+        let signing_key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048)
+            .unwrap()
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "yingxu-host-ollama-smoke-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("media-source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("IMG_2048.jpg"), b"indexed local photo fixture").unwrap();
+        let media_engine = Engine::open(root.join("media-db")).unwrap();
+        media_engine.index_source(&source).unwrap();
+        let indexed = media_engine
+            .agent_search_media("IMG_2048", "photo", "all", 10)
+            .unwrap();
+        assert_eq!(indexed["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(indexed["matches"][0]["name"], "IMG_2048.jpg");
+        let mut process =
+            spawn_local_agent(&executable, &root.join("agent.sqlite"), &signing_key).unwrap();
+        let status = local_agent_request(
+            process.port,
+            &process.token,
+            "GET",
+            "/v1/agent/local-status",
+            None,
+            Duration::from_secs(4),
+        )
+        .unwrap();
+        assert_eq!(
+            status["configured"], true,
+            "Ollama model must be installed for this opt-in test"
+        );
+        let request = serde_json::json!({
+            "query": "请先使用 search_media 工具，在本机照片索引里搜索文件名包含 IMG_2048 的照片。收到结果后用中文总结，不再调用工具，也不要打开文件。",
+            "sessionId": "host-verify-session",
+            "turnId": "host-verify-turn",
+            "useModel": true,
+            "capabilities": ["search_media", "get_metadata", "get_backup_job", "open_item"],
+            "destinationGrantIds": []
+        });
+        validate_local_turn_request(&request).unwrap();
+        let mut turn = local_agent_request(
+            process.port,
+            &process.token,
+            "POST",
+            "/v1/agent/local-turns",
+            Some(&request),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+        validate_local_turn_response(&turn, "host-verify-session", "host-verify-turn").unwrap();
+        assert_eq!(turn["status"], "awaiting_local_tools");
+        let tool = &turn["localToolRequests"][0];
+        assert_eq!(tool["tool"], "search_media");
+        let local_result =
+            execute_read_tool(&media_engine, "search_media", &tool["arguments"]).unwrap();
+        assert_eq!(local_result["matches"].as_array().unwrap().len(), 1);
+        assert_eq!(local_result["matches"][0]["name"], "IMG_2048.jpg");
+        let replay_body = serde_json::json!({
+            "continuationToken": turn["continuationToken"],
+            "useModel": true,
+            "results": [{
+                "callId": tool["callId"],
+                "tool": "search_media",
+                "status": "succeeded",
+                "data": {
+                    "matches": local_result["matches"],
+                    "truncated": local_result["truncated"]
+                }
+            }]
+        });
+        let path = "/v1/agent/local-turns/host-verify-session/host-verify-turn/results";
+        turn = local_agent_request(
+            process.port,
+            &process.token,
+            "POST",
+            path,
+            Some(&replay_body),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+        validate_local_turn_response(&turn, "host-verify-session", "host-verify-turn").unwrap();
+        assert_eq!(turn["status"], "completed");
+        assert_eq!(turn["executionAuthorized"], false);
+        assert_eq!(turn["filesChanged"], false);
+        assert!(turn.to_string().contains("IMG_2048.jpg"));
+        let replay = local_agent_request(
+            process.port,
+            &process.token,
+            "POST",
+            path,
+            Some(&replay_body),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert_eq!(replay["duplicate"], true);
         stop_local_agent_process(&mut process);
         assert!(process.child.try_wait().unwrap().is_some());
         std::fs::remove_dir_all(root).unwrap();
