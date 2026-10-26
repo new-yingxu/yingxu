@@ -1,0 +1,15 @@
+{
+  "buildId": "512dedd4525d70f36c1b5ed4584b167c82f4bfa5de1703b694cb5615305d48fa",
+  "appVersion": "0.7.1-session-rotation-preview",
+  "schemaVersion": 11,
+  "filesVerified": 2729,
+  "packagesVerified": 60,
+  "sourceMatched": true,
+  "credentialsChecked": true,
+  "deployed": false,
+  "package": "/Users/nanyu/Documents/AI\u5de5\u5177/02_Codex\u6570\u636e_0907/worktrees/yingxu-cloud-agent/new-\u5f71\u5e8fagent\u5f00\u53d1/infra/cloud/function-packages/0.7.1-session-rotation-preview-512dedd4525d.zip",
+  "sha256": "530e252a9fc9d933d2afaf51ead13bd4cc0c54894624b7f29835cdeeb19379f3",
+  "bytes": 34246015,
+  "archiveFiles": 2730,
+  "archiveReadback": true
+}

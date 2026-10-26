@@ -1,0 +1,18 @@
+test_action_compare_and_swap (test_store_contract.CloudBaseContract.test_action_compare_and_swap) ... ok
+test_agent_turn_history_idempotency_and_opt_out (test_store_contract.CloudBaseContract.test_agent_turn_history_idempotency_and_opt_out) ... ERROR
+
+======================================================================
+ERROR: test_agent_turn_history_idempotency_and_opt_out (test_store_contract.CloudBaseContract.test_agent_turn_history_idempotency_and_opt_out)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/nanyu/Documents/AI工具/02_Codex数据_0907/worktrees/yingxu-cloud-agent/new-影序agent开发/cloud-service/tests/test_store_contract.py", line 265, in tearDown
+    self.store.request(table, 'DELETE', self.store._filters(owner))
+  File "<stdin>", line 15, in guarded
+  File "/Users/nanyu/Documents/AI工具/02_Codex数据_0907/worktrees/yingxu-cloud-agent/new-影序agent开发/cloud-service/app/store.py", line 349, in request
+    raise StoreUnavailable('CloudBase database unavailable') from None
+app.store.StoreUnavailable: CloudBase database unavailable
+
+----------------------------------------------------------------------
+Ran 2 tests in 195.885s
+
+FAILED (errors=1)

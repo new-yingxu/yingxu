@@ -1,0 +1,9 @@
+{
+  "appVersion": "0.3.0-agent-preview",
+  "schemaVersion": 10,
+  "filesVerified": 1499,
+  "packageCount": 32,
+  "privateKeyMatches": 0,
+  "bootstrapExecutable": true,
+  "deployed": false
+}

@@ -33,9 +33,20 @@ def principal_from_token(token: str, settings: Settings) -> Principal:
         if settings.dev_auth_token and compare_digest(token.encode(), settings.dev_auth_token.encode()) and settings.app_env == "development":
             return Principal(owner_id="local-dev-owner", device_id="local-dev-device", origin="desktop")
         raise ValueError("invalid development token")
+    if settings.auth_mode == "cloudbase":
+        import json
+        from .session_tokens import verify_device_session
+        session=verify_device_session(token,settings.session_private_key,settings.session_key_id,settings.jwt_issuer,settings.jwt_audience,verification_jwks=json.loads(settings.session_verification_jwks) if settings.session_verification_jwks else None)
+        return Principal(session.owner_id,session.device_id,session.origin)
     if settings.auth_mode != "jwt" or not settings.jwt_jwks_url:
         raise ValueError("authentication provider is not configured")
-    client = _jwks_clients.setdefault(settings.jwt_jwks_url, PyJWKClient(settings.jwt_jwks_url, cache_keys=True))
+    client = _jwks_clients.get(settings.jwt_jwks_url)
+    if client is None:
+        # Cache the key set for a bounded period. Per-kid caching has no expiry
+        # and would keep accepting a removed signing key until process restart.
+        client = PyJWKClient(settings.jwt_jwks_url, cache_keys=False,
+                            cache_jwk_set=True, lifespan=300, timeout=5)
+        _jwks_clients[settings.jwt_jwks_url] = client
     key = client.get_signing_key_from_jwt(token)
     claims = jwt.decode(
         token,

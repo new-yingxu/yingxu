@@ -1,0 +1,12 @@
+{
+  "attempts": 1,
+  "path": "function healthz",
+  "timeoutSeconds": 12,
+  "status": 200,
+  "body": {
+    "ok": true,
+    "service": "yingxu-cloud",
+    "version": "0.2.0-store-preview"
+  },
+  "elapsedSeconds": 4.89
+}

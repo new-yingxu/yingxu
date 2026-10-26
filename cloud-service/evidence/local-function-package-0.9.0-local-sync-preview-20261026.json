@@ -1,0 +1,33 @@
+{
+  "status": "local_built_source_matched_archive_readback_passed",
+  "verifiedAt": "2026-10-26",
+  "appVersion": "0.9.0-local-sync-preview",
+  "requiredSchemaVersion": 14,
+  "buildId": "d1256bcf1307cfa5a0726785a0dcba85f10b22a58925aec47edc1f04ee805499",
+  "contextFilesVerified": 2738,
+  "linuxRuntimePackagesIncluded": 60,
+  "artifact": {
+    "path": "/Users/nanyu/Documents/AI工具/02_Codex数据_0907/worktrees/yingxu-cloud-agent/new-影序agent开发/infra/cloud/function-packages/0.9.0-local-sync-preview-d1256bcf1307.zip",
+    "bytes": 34273203,
+    "sha256": "db18553bb2297ce1fe07755f4d5d6cdc5395a28d9e1a3968533d02d0c6d22753",
+    "archiveEntries": 2739,
+    "allManifestedFilesReadBack": true,
+    "bootstrapExecutableBitPreserved": true
+  },
+  "checks": [
+    "function context matches current cloud-service/app, contracts, dependency lock, bootstrap and version/schema source",
+    "deployment ZIP recreated as a new versioned artifact without overwriting prior packages",
+    "archive entry set matches build manifest",
+    "every archived file SHA-256 matches build manifest",
+    "credential scanner checked with synthetic non-secret test deployment config only",
+    "Tauri macOS arm64 local Agent DMG separately built and verified"
+  ],
+  "deployed": false,
+  "cloudbaseContacted": false,
+  "limitations": [
+    "This is a local deployment candidate; it was not uploaded or deployed.",
+    "Production identity secrets and CloudBase credentials were not used or validated.",
+    "The candidate requires schema 14 while cloud schema is still version 10; migration and cleanup must precede any future upload/deploy.",
+    "Agent runtime is distributed with the desktop package; model weights and Ollama are not bundled."
+  ]
+}

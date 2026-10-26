@@ -1,2 +1,4 @@
 build/
 function-build/
+function-build-*/
+function-packages/

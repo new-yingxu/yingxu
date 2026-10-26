@@ -1,0 +1,9 @@
+{
+  "owners": [
+    "yingxu-store-test-62de6b01f02741ce86e27777a78b68c0-a,\"x\\y",
+    "yingxu-store-test-f35c9e44707e4eb781e531e91ce3a16e-b",
+    "yingxu-store-test-173a71ced18343778a67596116d62d27-a,\"x\\y",
+    "yingxu-store-test-aa2ec2c753a64fa38cdbd08579efdb48-b"
+  ],
+  "reason": "network circuit opened; exact owner cleanup required before retry"
+}
