@@ -34,15 +34,15 @@ Codex 与 WorkBuddy 从共同已提交基线 `415d04f` 分开。Codex 分支不�
 
 ## 当前状态（本次只读核查）
 
-- 已将五条独立开发分支推到 GitHub，并用 `git ls-remote --heads origin` 回读验证：`codex/yingxu-desktop-agent`=`4ab2571`，`workbuddy/dev`=`d771ed6`，`codex/cloud-agent-store`=`5528e92`，`mobile/expo-v1`=`8cbe0b1`，`qa/windows-acceptance`=`a86708b`。远端 `main` 仍为 `aaf46d1`，未推送或合并。
+- 已推送主线和五条开发分支，并用 `git ls-remote --heads origin` 回读验证本地/远端分支头一致。为防止公开仓库历史暴露已删除的本机工作笔记，六条分支历史已清理并在最终文件树不变的前提下重写；`main` 为此次恢复源码快照。当前不提交未完成的工作树改动。
 - WorkBuddy 的 `workbuddy/dev` 有未提交前端文件：`desktop-ui/src/App.vue`、`desktop-ui/src/api/contracts.ts`、`desktop-ui/src/api/tauri.ts`、`desktop-ui/src/components/ModelConsent.vue`，且 `desktop-ui/src/api/local-agent.ts` 未跟踪。它们保持原样，尚不能算作分支提交或 GitHub 交付。
 - Agent 的 `codex/cloud-agent-store` 有大量未提交本地 Agent/云端代码、测试、迁移和 evidence。它们只留在隔离 worktree，未提交、未推送，也未并入 Codex 分支；待用户审阅后，再依新阶段顺序处理。不要据此宣称本地/云端闭环已验收。
 - 对应交接文档已随上述分支提交并回读到 GitHub；各分支头见本节首项。WorkBuddy UI 与 Agent worktree 的未提交实现均没有进入这些推送提交。
-- 本机 `diskutil list` 当前未显示外接存储卡；卡片实测暂不能完成。Windows x64 验收与移动端设备验收均由同学负责。
+- 本机已识别外接卡 `/dev/disk4`（NTFS，`SD_Card`，约 64 GB），挂载在 `/Volumes/SD_Card`；目前只确认系统挂载，不代表已完成照片读取/备份验收。Windows x64 验收与移动端设备验收均由同学负责。
 - 本机存储目录里的 `target`、`evidence`、测试材料、日志、安装包和当前使用的依赖目录都有构建/验收用途，暂不清理。只读扫描未发现可安全删除且确认无人使用的项目文件。
 
 ## 交接与暂停要求
 
 每次交接至少记录：接收方、来源和目标分支、基线 commit、负责文件、完成/未完成项、实际验证命令与结果、证据路径、阻塞和下一步。接收方只依据该文档继续。提交时只暂存本交接任务拥有的文件，不夹带其他工作树的脏代码。
 
-本轮完成文档和分支状态汇报后，Codex、WorkBuddy、Agent 开发会话暂停功能开发，保留所有未提交内容，等待用户阅读与明确继续指示。不得合并主线、部署或发布。
+当前已按用户新指示完成本地/远端分支同步，可开始开发。不得跨角色覆盖未提交改动；不得部署或发布。
