@@ -37,6 +37,20 @@ import {
 import { formatBytes } from "./api/format";
 import type { RawJob } from "./api/format";
 import {
+  applyLibraryPage,
+  canLoadNextPage,
+  canLoadPreviousPage,
+  createLibraryPage,
+  describeLibraryPage,
+  failLibraryLoad,
+  LIBRARY_PAGE_SIZE,
+  nextLibraryOffset,
+  previousLibraryOffset,
+  resetLibraryPage,
+  startLibraryLoad,
+} from "./api/library-paging";
+import type { LibraryPageState } from "./api/library-paging";
+import {
   Activity,
   Archive,
   ArrowDownToLine,
@@ -157,6 +171,7 @@ const selectedTaskId = ref("YX-20250422-014");
 const taskDetail = ref<ArchiveTask | null>(null);
 const tasks = ref<ArchiveTask[]>([]);
 const files = ref<MediaFile[]>([]);
+const libraryPage = ref<LibraryPageState>(createLibraryPage());
 const sources = ref<
   {
     id: string;
@@ -449,17 +464,19 @@ async function runAction(action: () => Promise<void>) {
   }
 }
 async function loadData() {
-  const [snapshot, settingData, presetData, fileData] = await Promise.all([
+  const [snapshot, settingData, presetData, page] = await Promise.all([
     api.workbench.snapshot(),
     api.settings.get(),
     api.presets.list(),
-    api.library.search("", "all", "all"),
+    api.library.searchPage("", "all", "all", LIBRARY_PAGE_SIZE, 0),
   ]);
   tasks.value = snapshot.tasks;
   Object.assign(summary, snapshot);
   Object.assign(settings, settingData);
   presets.value = presetData;
-  files.value = fileData;
+  const next = applyLibraryPage(libraryPage.value, page);
+  libraryPage.value = next;
+  files.value = next.items;
   if (!presetData.some((p) => p.id === backupPreset.value))
     backupPreset.value =
       presetData.find((p) => p.isDefault)?.id || presetData[0]?.id || "";
@@ -661,28 +678,59 @@ async function openTask(task: ArchiveTask) {
 async function refreshHistory() {
   tasks.value = await api.history.list(query.value, filterState.value);
 }
-async function searchFiles() {
-  const epoch = ++thumbnailEpoch;
-  const found = await api.library.search(
-    query.value,
-    filterKind.value,
-    filterQuality.value,
-  );
-  if (epoch !== thumbnailEpoch) return;
-  files.value = found;
-  if (api.local) {
-    const previews = found.filter((f) => f.kind !== "other").slice(0, 24);
-    for (const f of found) delete thumbnails[f.id];
-    for (let i = 0; i < previews.length; i += 4) {
-      if (epoch !== thumbnailEpoch) return;
-      await Promise.allSettled(
-        previews.slice(i, i + 4).map(async (file) => {
-          const image = await api.local!.thumbnail(file.id);
-          if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
-        }),
-      );
-    }
+async function loadThumbnails(list: MediaFile[], epoch: number) {
+  if (!api.local) return;
+  const pending = list
+    .filter((file) => file.kind !== "other" && !thumbnails[file.id])
+    .slice(0, 24);
+  for (let i = 0; i < pending.length; i += 4) {
+    if (epoch !== thumbnailEpoch) return;
+    await Promise.allSettled(
+      pending.slice(i, i + 4).map(async (file) => {
+        const image = await api.local!.thumbnail(file.id);
+        if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
+      }),
+    );
   }
+}
+async function loadLibraryPage(offset: number, append: boolean) {
+  const epoch = ++thumbnailEpoch;
+  const base = append
+    ? libraryPage.value
+    : resetLibraryPage(libraryPage.value);
+  libraryPage.value = startLibraryLoad(base);
+  try {
+    const page = await api.library.searchPage(
+      query.value,
+      filterKind.value,
+      filterQuality.value,
+      libraryPage.value.limit,
+      offset,
+    );
+    if (epoch !== thumbnailEpoch) return;
+    const next = applyLibraryPage(libraryPage.value, page);
+    libraryPage.value = next;
+    files.value = next.items;
+    await loadThumbnails(next.items, epoch);
+  } catch (error) {
+    if (epoch !== thumbnailEpoch) return;
+    libraryPage.value = failLibraryLoad(
+      libraryPage.value,
+      errorText(error),
+    );
+    showError(error);
+  }
+}
+async function searchFiles() {
+  await loadLibraryPage(0, false);
+}
+async function loadNextPage() {
+  if (!canLoadNextPage(libraryPage.value)) return;
+  await loadLibraryPage(nextLibraryOffset(libraryPage.value), true);
+}
+async function loadPreviousPage() {
+  if (!canLoadPreviousPage(libraryPage.value)) return;
+  await loadLibraryPage(previousLibraryOffset(libraryPage.value), false);
 }
 async function inspectTransfer() {
   transferBusy.value = true;
@@ -1967,10 +2015,45 @@ function taskStateLabel(state: TaskState) {
                     </div>
                   </div>
                 </article>
-                <div v-if="!files.length" class="empty-state">
+                <div
+                  v-if="libraryPage.status === 'empty'"
+                  class="empty-state"
+                >
                   没有匹配素材，请调整搜索或筛选条件。
                 </div>
+                <p
+                  v-else-if="libraryPage.status === 'loading'"
+                  class="empty-state"
+                >
+                  正在读取资料库…
+                </p>
               </div>
+              <div class="library-pager">
+                <span class="pager-summary">{{
+                  describeLibraryPage(libraryPage)
+                }}</span>
+                <button
+                  class="text-button"
+                  :disabled="!canLoadPreviousPage(libraryPage)"
+                  @click="loadPreviousPage"
+                >
+                  上一页
+                </button>
+                <button
+                  class="text-button"
+                  :disabled="!canLoadNextPage(libraryPage)"
+                  @click="loadNextPage"
+                >
+                  下一页
+                </button>
+              </div>
+              <p
+                v-if="libraryPage.status === 'error'"
+                class="library-error"
+                role="alert"
+              >
+                {{ libraryPage.error }}
+              </p>
               <p class="table-foot">
                 {{
                   isMock

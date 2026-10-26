@@ -64,7 +64,15 @@ export function createMockApi(): DesktopApi {
         return { id: `YX-MOVE-${Date.now().toString().slice(-5)}`, name: '老内容转移演示', state: confirmSourceRemoval ? 'running' : 'failed', createdAt: '刚刚', files: ids.length, size: '12.4 GB', progress: 0, speed: '0 MB/s', phase: confirmSourceRemoval ? '复制并校验目标' : '等待来源移除确认', source: '旧素材目录', destinations: [{ id: 'local', name: target, state: 'queued', progress: 0 }] }
       },
     },
-    library: { async search(query, kind, quality) { await delay(100); return fileData.filter(file => (!query || `${file.name} ${file.device} ${file.location} ${file.path}`.toLowerCase().includes(query.toLowerCase())) && (kind === 'all' || file.kind === kind) && (quality === 'all' || file.qualityState === quality)) } },
+    library: {
+      async searchPage(query, kind, quality, limit = 200, offset = 0) {
+        await delay(80);
+        const filtered = fileData.filter(file => (!query || `${file.name} ${file.device} ${file.location} ${file.path}`.toLowerCase().includes(query.toLowerCase())) && (kind === 'all' || file.kind === kind) && (quality === 'all' || file.qualityState === quality));
+        const items = filtered.slice(offset, offset + limit);
+        return { items, total: filtered.length, offset, limit, hasMore: offset + items.length < filtered.length };
+      },
+      async search(query, kind, quality) { await delay(100); return fileData.filter(file => (!query || `${file.name} ${file.device} ${file.location} ${file.path}`.toLowerCase().includes(query.toLowerCase())) && (kind === 'all' || file.kind === kind) && (quality === 'all' || file.qualityState === quality)) },
+    },
     history: {
       async list(query, state) { await delay(90); return tasks.filter(task => (!query || `${task.name} ${task.id}`.toLowerCase().includes(query.toLowerCase())) && (state === 'all' || task.state === state)) },
       async detail(id) { await delay(80); return tasks.find(task => task.id === id) || tasks[0] },

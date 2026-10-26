@@ -1,0 +1,13 @@
+{
+  "passed": 8,
+  "checks": [
+    "initial page state is idle at offset 0",
+    "first page replaces the list and keeps the total",
+    "next page appends and drops duplicate ids",
+    "last page disables the next-page button",
+    "going back truncates the list and disables the previous button",
+    "contradictory page replies are rejected instead of shown",
+    "a new search resets the paging to offset 0",
+    "page offsets and the counter text follow the server total"
+  ]
+}
