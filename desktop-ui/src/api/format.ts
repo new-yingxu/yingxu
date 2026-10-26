@@ -23,7 +23,7 @@ export interface RawJob {
   targets: RawTarget[];
   items?: { targetId: string; state: string; error?: string | null }[];
   error?: string | null;
-  runtime?: { speedBytesPerSecond?: number };
+  runtime?: { speedBytesPerSecond?: number; currentFile?: string | null };
 }
 export interface RawMedia {
   id: string;
@@ -84,6 +84,10 @@ export function mapJob(j: RawJob): ArchiveTask {
         ? `${formatBytes(j.runtime?.speedBytesPerSecond || 0)}/s`
         : "—",
     phase: phases[j.phase] || j.phase,
+    currentFile:
+      j.state === "running"
+        ? (j.runtime?.currentFile || undefined)
+        : undefined,
     source: j.source,
     error: j.error || undefined,
     destinations: j.targets.map((t) => ({

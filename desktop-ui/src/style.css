@@ -142,3 +142,21 @@ body{min-width:0}
 .integration-confirm .modal-actions{position:sticky;bottom:-25px;margin-inline:-25px;padding:14px 25px;background:var(--card);border-top:1px solid var(--line);z-index:1}.source-card>div,.option-row>span{min-width:0;overflow-wrap:anywhere}.summary-list dd{min-width:0;overflow-wrap:anywhere}.native-task{overflow-wrap:anywhere}
 .integration-result dd{white-space:pre-wrap;overflow-wrap:anywhere}.integration-result details{font-size:11px;margin:12px 0}.integration-result .summary-list{margin-top:16px}
 .media-art{position:relative}.media-art>img{position:absolute;inset:0;background:var(--card-soft)}.media-art>img~span{display:none}
+
+/* 任务详情终态结果摘要与当前文件（ui-slice-1） */
+.result-banner{display:flex;align-items:baseline;gap:10px;border-radius:12px;padding:12px 14px;margin:0 0 14px;font-size:11px;line-height:1.5}
+.result-banner b{font-size:12px;flex:none}
+.result-banner span{color:inherit;opacity:.82}
+.result-banner.success{background:#eaf3ec;color:#27804a}
+.result-banner.partial{background:#f5efdf;color:#887344}
+.result-banner.failed{background:#faeeeb;color:#a33a32}
+.result-banner.cancelled{background:#f2f0eb;color:#76766e}
+.current-file{font-size:10px;color:var(--muted);margin:-8px 0 14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.library-pager{display:flex;align-items:center;gap:12px;margin:14px 0 6px;font-size:11px;color:var(--muted)}
+.library-pager .pager-summary{flex:1;min-width:0}
+.library-error{margin:6px 0 0;font-size:11px;color:var(--red)}
+.local-mode-note{margin:10px 0 0;padding:10px 12px;border-radius:10px;background:#edf3ed;color:var(--muted);font-size:11px;line-height:1.55}
+.local-mode-banner{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:baseline;margin:0 0 14px;padding:11px 14px;border:1px solid #dce8dc;border-radius:11px;background:#edf3ed;color:#334c3c;font-size:12px;line-height:1.55}
+.local-mode-banner span{color:var(--muted)}
+.cloud-disabled-note{padding:12px 14px;border-radius:10px;background:var(--page);color:var(--muted);font-size:12px;line-height:1.6}
+.nav-item:disabled{opacity:.52;cursor:not-allowed}

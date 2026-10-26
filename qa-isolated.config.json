@@ -1,0 +1,15 @@
+{
+  "productName": "影序本机验收",
+  "version": "0.2.0-draft.3-local-qa",
+  "identifier": "app.yingxu.desktop.qa.codex20261026",
+  "app": {
+    "windows": [{
+      "label": "main",
+      "title": "影序本机 Agent 隔离验收",
+      "width": 1100,
+      "height": 800,
+      "minWidth": 760,
+      "minHeight": 500
+    }]
+  }
+}

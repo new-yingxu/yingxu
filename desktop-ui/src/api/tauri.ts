@@ -6,9 +6,12 @@ import type {
   BackupPayload,
   Confirmation,
   LocalCapabilities,
+  MediaFile,
+  ModelStatus,
   NamePreset,
   ScanReport, IndexResult, NetdiskProvider, NetdiskTask,
 } from "./contracts";
+import { ACTION_WINDOW_MS, createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
 import { formatBytes, formatTime, mapJob, mapMedia } from "./format";
 import type { RawJob, RawMedia } from "./format";
 export class ApiError extends Error {
@@ -55,6 +58,13 @@ interface Plan {
   totalBytes: number;
   availableBytes: number[];
 }
+interface RawMediaPage {
+  items: RawMedia[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}
 const fieldLabels: Record<string, string> = {
   date: "日期",
   event: "事件",
@@ -84,6 +94,39 @@ export function createTauriApi(options: Options = {}): AppApi {
   let counter = 0;
   let lastIndex: IndexResult | null = null;
   const eventListen = options.listen || listen;
+  const localAgent = createLocalAgentService({
+    transport: {
+      status: () => invoke<ModelStatus>("agent_local_status"),
+      startTurn: (request: LocalTurnRequest) =>
+        invoke<LocalTurnResponse>("agent_local_turn", { request }),
+      submitResults: (sessionId: string, turnId: string, request: { continuationToken: string; results: LocalToolResult[]; useModel: true }) =>
+        invoke<LocalTurnResponse>("agent_local_turn_results", { sessionId, turnId, request }),
+    },
+    executeTool: (tool, args) =>
+      rpc("agent.executeTool", { tool, arguments: args }),
+    prepareAction: async (actionId, fileId, expiresAtMs): Promise<LocalOpenPlan> => {
+      const current = Date.now();
+      if (!Number.isSafeInteger(expiresAtMs) || expiresAtMs <= current || expiresAtMs > current + ACTION_WINDOW_MS)
+        throw new ApiError("ACTION_EXPIRED", "本机操作提议已过期，请重新查询", "agent_prepare_action");
+      const result = await invoke<LocalOpenPlan>("agent_prepare_action", { actionId, tool: "open_item", fileId, expiresAtMs });
+      if (!result || typeof result !== "object")
+        throw new ApiError("INVALID_REPLY", "本机预览响应无效", "agent_prepare_action");
+      if (Object.keys(result).some((key) => !["actionId", "tool", "fileId", "name", "expiresAtMs"].includes(key)))
+        throw new ApiError("INVALID_REPLY", "本机预览响应包含未允许的字段", "agent_prepare_action");
+      if (result.actionId !== actionId || result.tool !== "open_item" || result.fileId !== fileId || typeof result.name !== "string" || !result.name.trim())
+        throw new ApiError("INVALID_REPLY", "本机预览与请求不一致", "agent_prepare_action");
+      if (!Number.isSafeInteger(result.expiresAtMs) || result.expiresAtMs <= Date.now() || result.expiresAtMs > Date.now() + ACTION_WINDOW_MS)
+        throw new ApiError("INVALID_REPLY", "本机预览有效期无效", "agent_prepare_action");
+      return result;
+    },
+    confirmAction: async (actionId, accepted): Promise<LocalActionReceipt> => {
+      const receipt = await invoke<LocalActionReceipt>("agent_confirm_action", { actionId, accepted });
+      if (!receipt || typeof receipt !== "object" || receipt.actionId !== actionId || receipt.tool !== "open_item" || receipt.executionAuthorized !== false || !["succeeded", "declined", "failed"].includes(receipt.status))
+        throw new ApiError("INVALID_REPLY", "本机操作回执无效", "agent_confirm_action");
+      return receipt;
+    },
+    confirmModelUse: confirm,
+  });
   async function rpc<T>(method: string, params: unknown = {}): Promise<T> {
     const requestId = `desktop-${Date.now()}-${++counter}`;
     let reply: {
@@ -118,6 +161,46 @@ export function createTauriApi(options: Options = {}): AppApi {
         method,
       );
     return reply.data as T;
+  }
+  async function searchMediaPage(
+    query: string,
+    kind: MediaFile["kind"] | "all",
+    quality: string,
+    limit = 200,
+    offset = 0,
+  ) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200 || !Number.isSafeInteger(offset) || offset < 0)
+      throw new ApiError("INVALID_PAGINATION", "资料库分页参数无效", "library.searchPage");
+    const page = await rpc<RawMediaPage>("library.searchPage", { query, kind, quality, limit, offset });
+    if (
+      !page || !Array.isArray(page.items) || page.items.length > limit ||
+      !Number.isSafeInteger(page.total) || page.total < 0 || page.offset !== offset ||
+      page.limit !== limit || typeof page.hasMore !== "boolean" ||
+      offset + page.items.length > page.total ||
+      (page.hasMore && (page.items.length === 0 || offset + page.items.length >= page.total)) ||
+      (!page.hasMore && offset + page.items.length < page.total)
+    ) throw new ApiError("INVALID_REPLY", "资料库分页响应不完整或与请求不匹配", "library.searchPage");
+    return { ...page, items: page.items.map(mapMedia) };
+  }
+  async function searchAllMedia(query: string, kind: MediaFile["kind"] | "all", quality: string) {
+    const rows: MediaFile[] = [];
+    const seen = new Set<string>();
+    let offset = 0;
+    let total: number | undefined;
+    for (let pageNumber = 0; pageNumber < 10_000; pageNumber++) {
+      const page = await searchMediaPage(query, kind, quality, 200, offset);
+      if (total !== undefined && page.total !== total)
+        throw new ApiError("LIBRARY_PAGING_CHANGED", "资料库在分页读取期间发生变化，请重新搜索", "library.searchPage");
+      total = page.total;
+      for (const row of page.items) {
+        if (seen.has(row.id)) throw new ApiError("INVALID_REPLY", "资料库分页返回了重复素材编号", "library.searchPage");
+        seen.add(row.id);
+        rows.push(row);
+      }
+      if (!page.hasMore) return rows;
+      offset += page.items.length;
+    }
+    throw new ApiError("LIBRARY_PAGE_LIMIT", "资料库分页数量超过安全上限", "library.searchPage");
   }
   async function durableWrite<T>(
     method: string,
@@ -269,6 +352,7 @@ export function createTauriApi(options: Options = {}): AppApi {
   }
   const api: AppApi = {
     mode: "native",
+    model: localAgent.model,
     auth: {
       restore: () => rpc("auth.restore"),
       login: () =>
@@ -329,11 +413,7 @@ export function createTauriApi(options: Options = {}): AppApi {
       async inspect() {
         const source = await chooseDirectory("source");
         lastIndex = await rpc<IndexResult>("library.index", { source });
-        const files = await rpc<RawMedia[]>("library.search", {
-          query: source,
-          kind: "all",
-          quality: "all",
-        });
+        const files = await searchAllMedia(source, "all", "all");
         transferSelections.clear();
         const sourceBase = source.replace(/[\\/]$/, "");
         const result = files.filter(
@@ -346,7 +426,7 @@ export function createTauriApi(options: Options = {}): AppApi {
             source,
             relative: f.path.slice(sourceBase.length + 1),
           });
-        return result.map(mapMedia);
+        return result;
       },
       async start(ids, target, confirmed) {
         if (!confirmed)
@@ -375,10 +455,8 @@ export function createTauriApi(options: Options = {}): AppApi {
       },
     },
     library: {
-      search: async (query, kind, quality) =>
-        (await rpc<RawMedia[]>("library.search", { query, kind, quality })).map(
-          mapMedia,
-        ),
+      searchPage: searchMediaPage,
+      search: searchAllMedia,
     },
     history: {
       list: async (query, state) =>
@@ -414,17 +492,8 @@ export function createTauriApi(options: Options = {}): AppApi {
         ),
     },
     agent: {
-      ask: () =>
-        Promise.reject(
-          new ApiError("CLOUD_ADAPTER_NOT_CONNECTED", "Agent 服务尚未连接"),
-        ),
-      confirm: () =>
-        Promise.reject(
-          new ApiError(
-            "CLOUD_ADAPTER_NOT_CONNECTED",
-            "Agent 本地执行桥尚未连接",
-          ),
-        ),
+      ask: localAgent.ask,
+      confirm: localAgent.confirm,
     },
     account: {
       devices: () => rpc("account.devices"),

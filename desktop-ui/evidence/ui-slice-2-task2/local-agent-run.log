@@ -1,0 +1,15 @@
+$ node tests/local-agent.mjs  (regression)
+{
+  "passed": 9,
+  "checks": [
+    "local status tri-state presentation",
+    "unavailable local states never fall back",
+    "read tool continuation",
+    "model consent cancellation",
+    "remote provider blocked",
+    "path argument rejected before execution",
+    "open waits for confirmation",
+    "malformed open receipts are rejected",
+    "Tauri IPC mapping"
+  ]
+}
