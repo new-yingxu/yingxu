@@ -22,7 +22,7 @@ assert.equal(canUseCloudFeatures({ ownerId: 'fixture' }, true), false, 'local mo
   let cloudCalls = 0
   const cloud = { login: async () => { cloudCalls++ }, sync: async () => { cloudCalls++ }, netdisk: async () => { cloudCalls++ } }
   const entered = await enterNativeLocalMode({
-    mode: 'native', hasLocalAdapter: true,
+    mode: 'native', hasLocalDataAdapter: true,
     loadLocalData: async () => { localLoads++ },
     setSession: (value) => { session = value },
     setEnabled: (value) => { enabled = value },
@@ -40,7 +40,7 @@ assert.equal(canUseCloudFeatures({ ownerId: 'fixture' }, true), false, 'local mo
 {
   let localLoads = 0
   const entered = await enterNativeLocalMode({
-    mode: 'mock', hasLocalAdapter: true,
+    mode: 'mock', hasLocalDataAdapter: true,
     loadLocalData: async () => { localLoads++ }, setSession: () => {}, setEnabled: () => {},
   })
   assert.equal(entered, false)

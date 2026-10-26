@@ -67,3 +67,10 @@
 - 前端 IPC 合同：`agent_local_status()`；`agent_local_turn({ request: { query, sessionId, turnId, useModel: true, capabilities, destinationGrantIds: [] } })`；`agent_local_turn_results({ sessionId, turnId, request: { continuationToken, results, useModel: true } })`；`agent_prepare_action({ actionId, tool: "open_item", fileId, expiresAtMs })`；`agent_confirm_action({ actionId, accepted })`。Sidecar bearer token 不进入 WebView。
 - 验证：`pnpm verify:adapter` 通过（本机 Agent adapter 6 项、现有 Rust CLI adapter 17 项）；`pnpm exec vite build` 通过。证据：`desktop-ui/evidence/adapter-fixture-1793018259532/result.json`。`pnpm build` 的全项目 `vue-tsc` 检查被未跟踪的 `desktop-ui/src/api/backup-state.ts:123` TS7053 阻塞（`running` 不能索引终态文案表）；此文件属于并行工作，本次保留未改。Vite 生产打包和 Agent adapter 测试已独立通过。
 - 历史边界（本交接条目生成时）：以上 IPC 测试使用注入的 mock host，尚未证明 Tauri 宿主 IPC、sidecar 进程或真实本机 Ollama 已运行接通。此后 Codex 已在 `codex/yingxu-desktop-agent` 实现并验证 Tauri 宿主与 sidecar 的真实 Ollama 工具往返；WebView 端到端仍需完成。
+
+## Codex 后续复核：Agent 页面连接状态横幅修正（2026-10-26）
+
+- 实际隔离 Tauri UI 同时显示“本机 Agent 已就绪 · qwen2.5:7b”和“本机 Agent 与 Ollama 可用”，但旧版固定横幅仍报告“本地执行桥未连接”。因此该横幅不是 bridge 状态证据。
+- `desktop-ui/src/App.vue` 现仅在 native runtime 缺少 `api.model` adapter 时显示集成提示；adapter 存在时以 `ModelConsent` 的 `api.model.status()` 为实际模型/sidecar 状态来源。`api.local` 仅代表本地资料库与备份能力，本机模式入口不会依赖 Agent 模型是否可用。
+- `npm run build` 和 8 组局部回归均通过；详细证据见 `desktop-ui/evidence/agent-bridge-status-20261026.json` 与 `desktop-ui/HANDOFF-ui-slice-2.md`。
+- 这项修正尚未在新构建的 Tauri UI 实际观察；此前 Agent 测试查询显示工具调用后未收到最终回答，因此完整 WebView→Tauri→sidecar→SQLite→模型闭环继续列为未完成。

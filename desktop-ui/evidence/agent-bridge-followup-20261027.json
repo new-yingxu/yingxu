@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-27",
+  "branch": "codex/local-agent-ui-closure",
+  "previousTurn": {
+    "sessionIdPrefix": "d9ac7641",
+    "turnIdPrefix": "634f33a7",
+    "databaseScope": "app.yingxu.desktop.qa.codex20261026",
+    "stepIndex": 0,
+    "state": "awaiting_tools",
+    "modelRequests": 1,
+    "localToolRequests": 1,
+    "tool": "search_media",
+    "syntheticFixture": "IMG_2048.png",
+    "step1Present": false,
+    "agentTurnsPresent": false,
+    "agentActionsPresent": false,
+    "continuationExpired": true
+  },
+  "frontendChange": {
+    "errorCode": "LOCAL_AGENT_CONTINUATION_UNCONFIRMED",
+    "diagnosticCodePolicy": "allowlisted symbol only; raw IPC error and payload are not displayed",
+    "automaticRetry": false
+  },
+  "verification": {
+    "viteVueBuild": "passed; 44 modules",
+    "localAgentChecks": "10 passed",
+    "nativeAdapterChecks": "18 passed",
+    "modelR6Checks": "14 passed",
+    "diffCheck": "passed",
+    "dmg": {
+      "name": "影序本机验收 20261027_0.2.0-draft.4-local-qa_aarch64.dmg",
+      "sha256": "ccb3f9fd770ff183836e374ce40f3af75509649eb2761925170fe345af854552",
+      "hdiutilVerify": "passed",
+      "adHocCodeSignature": "passed",
+      "notarized": false
+    }
+  },
+  "runtimeBlocker": {
+    "stage": "agent_local_status",
+    "observed": "status call remains pending; no sidecar process starts",
+    "sampledStack": "SecKeychainFindGenericPassword",
+    "ui": "正在检查…; refresh remains disabled",
+    "fullWebviewAgentRoundTrip": "not verified"
+  },
+  "safety": {
+    "cloudAccess": false,
+    "userMediaAccess": false,
+    "oldTurnResubmitted": false,
+    "rawContinuationTokenRecorded": false
+  },
+  "next": "User must unlock the macOS login keychain or handle an OS keychain access prompt locally; then resume status check and use a fresh synthetic UI turn."
+}

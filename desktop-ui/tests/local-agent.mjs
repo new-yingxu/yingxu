@@ -5,8 +5,10 @@ import { pathToFileURL } from "node:url";
 const moduleDir = process.env.YINGXU_UI_TEST_MODULE_DIR;
 const localAgentPath = moduleDir ? pathToFileURL(resolve(moduleDir, "local-agent.js")).href : "../evidence/local-agent-module/local-agent.js";
 const tauriPath = moduleDir ? pathToFileURL(resolve(moduleDir, "tauri.js")).href : "../evidence/adapter-module/tauri.js";
-const { createLocalAgentService, localAgentStatusView } = await import(localAgentPath);
+const modelConsentPath = moduleDir ? pathToFileURL(resolve(moduleDir, "model-consent.js")).href : "../evidence/model-consent-module/model-consent.js";
+const { createLocalAgentService, localAgentStatusView, shouldShowLocalAgentAdapterNotice } = await import(localAgentPath);
 const { createTauriApi } = await import(tauriPath);
+const { modelFailure } = await import(modelConsentPath);
 
 const modelStatus = {
   configured: true,
@@ -54,6 +56,9 @@ const completed = (sessionId, turnId, answer = "已找到素材") => ({
     assert.equal(view.ready, expectedState === "ready");
   }
   assert.equal(localAgentStatusView(null, false).ready, false);
+  assert.equal(shouldShowLocalAgentAdapterNotice('native', true), false, 'runtime health is shown by model.status when the native adapter exists');
+  assert.equal(shouldShowLocalAgentAdapterNotice('native', false), true, 'show the adapter notice only when a native adapter is missing');
+  assert.equal(shouldShowLocalAgentAdapterNotice('mock', false), false, 'mock preview does not claim a native bridge failure');
 }
 
 {
@@ -127,6 +132,43 @@ const completed = (sessionId, turnId, answer = "已找到素材") => ({
     data: { query: "海边", truncated: false, matches: toolData.matches },
   });
   assert.equal(JSON.stringify(calls).includes("path"), false);
+}
+
+{
+  const service = createLocalAgentService({
+    transport: {
+      status: async () => modelStatus,
+      startTurn: async (request) => ({
+        status: "awaiting_local_tools", sessionId: request.sessionId, turnId: request.turnId,
+        query: request.query, orchestrator: "langgraph", executionAuthorized: false,
+        filesChanged: false, modelRequests: 1, continuationToken: "opaque-continuation",
+        localToolRequests: [{
+          callId: "call-uncertain", tool: "search_media", arguments: { query: "IMG_2048.png", kind: "photo", quality: "all", limit: 10 },
+          sessionId: request.sessionId, turnId: request.turnId, scope: "current_desktop_device",
+          expiresAt: expiresAt(), executionAuthorized: false, requiresLocalConfirmation: false,
+        }],
+      }),
+      submitResults: async () => { throw { code: "LOCAL_AGENT_REQUEST_REJECTED", message: "do not expose transport detail" }; },
+    },
+    executeTool: async () => ({
+      tool: "search_media", scope: "current_device", query: "IMG_2048.png", matches: [],
+      truncated: false, executionAuthorized: false,
+    }),
+    prepareAction: async () => { throw new Error("unexpected"); },
+    confirmAction: async () => { throw new Error("unexpected"); },
+    confirmModelUse: async () => true,
+  });
+  await assert.rejects(service.ask("查找 IMG_2048.png"), (error) => {
+    assert.equal(error.code, "LOCAL_AGENT_CONTINUATION_UNCONFIRMED");
+    assert.equal(error.modelDispatched, true);
+    assert.equal(error.diagnosticCode, "LOCAL_AGENT_REQUEST_REJECTED");
+    assert.equal(error.message.includes("do not expose"), false);
+    const visible = modelFailure(error);
+    assert.equal(visible.code, "LOCAL_AGENT_CONTINUATION_UNCONFIRMED");
+    assert.match(visible.message, /本机 Agent 工具结果或后续回答未确认返回/);
+    assert.match(visible.message, /LOCAL_AGENT_REQUEST_REJECTED/);
+    return true;
+  });
 }
 
 {
@@ -321,4 +363,4 @@ const completed = (sessionId, turnId, answer = "已找到素材") => ({
   assert.equal(ipc.at(-1).args.accepted, true);
 }
 
-console.log(JSON.stringify({ passed: 9, checks: ["local status tri-state presentation", "unavailable local states never fall back", "read tool continuation", "model consent cancellation", "remote provider blocked", "path argument rejected before execution", "open waits for confirmation", "malformed open receipts are rejected", "Tauri IPC mapping"] }, null, 2));
+console.log(JSON.stringify({ passed: 10, checks: ["local status tri-state presentation", "unavailable local states never fall back", "read tool continuation", "continuation IPC failure stays local and uncertain", "model consent cancellation", "remote provider blocked", "path argument rejected before execution", "open waits for confirmation", "malformed open receipts are rejected", "Tauri IPC mapping"] }, null, 2));

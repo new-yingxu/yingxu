@@ -5,6 +5,7 @@ import ModelConsent from "./components/ModelConsent.vue";
 import OllamaOnboarding from "./components/OllamaOnboarding.vue";
 import AgentActionCard from "./components/AgentActionCard.vue";
 import { canEnterNativeLocalMode, canShowDevDiagnostics, canUseCloudFeatures, enterNativeLocalMode, runCloudAction } from "./api/local-mode";
+import { shouldShowLocalAgentAdapterNotice } from "./api/local-agent";
 import {
   computed,
   nextTick,
@@ -109,7 +110,9 @@ const api = (props.createApi || createDesktopApi)(
 );
 const isMock = api.mode === "mock";
 const localWorkspace = ref(false);
+// LocalIntegration enables offline library/backup; Agent model IPC is checked independently.
 const canEnterLocalWorkspace = canEnterNativeLocalMode(api.mode, !!api.local);
+const showLocalAgentAdapterNotice = shouldShowLocalAgentAdapterNotice(api.mode, !!api.model);
 const canUseCloud = computed(() => canUseCloudFeatures(session.value, localWorkspace.value));
 const canShowLocalDiagnostics = canShowDevDiagnostics(api.mode, !!api.local, import.meta.env.DEV);
 const displayName = computed(
@@ -501,7 +504,7 @@ async function enterLocalWorkspace() {
   await runAction(async () => {
     const entered = await enterNativeLocalMode({
       mode: api.mode,
-      hasLocalAdapter: !!api.local,
+      hasLocalDataAdapter: !!api.local,
       loadLocalData: loadData,
       setSession: (value) => { session.value = value; },
       setEnabled: (value) => { localWorkspace.value = value; },
@@ -2394,8 +2397,8 @@ function taskStateLabel(state: TaskState) {
           </template>
 
           <template v-else-if="page === 'agent'"
-            ><p v-if="!isMock" class="integration-banner">
-              Agent 服务和本地执行桥未连接，不会模拟执行。
+            ><p v-if="showLocalAgentAdapterNotice" class="integration-banner">
+              当前桌面环境未接入本机 Agent 模型适配器，Agent 对话不可用。
             </p>
             <PageHeading
               eyebrow="受限工具 · 操作需确认"

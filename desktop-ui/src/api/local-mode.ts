@@ -1,11 +1,11 @@
 export type DesktopRuntimeMode = 'native' | 'mock'
 
-export function canEnterNativeLocalMode(mode: DesktopRuntimeMode, hasLocalAdapter: boolean): boolean {
-  return mode === 'native' && hasLocalAdapter
+export function canEnterNativeLocalMode(mode: DesktopRuntimeMode, hasLocalDataAdapter: boolean): boolean {
+  return mode === 'native' && hasLocalDataAdapter
 }
 
-export function canShowDevDiagnostics(mode: DesktopRuntimeMode, hasLocalAdapter: boolean, isDev: boolean): boolean {
-  return canEnterNativeLocalMode(mode, hasLocalAdapter) && isDev
+export function canShowDevDiagnostics(mode: DesktopRuntimeMode, hasLocalDataAdapter: boolean, isDev: boolean): boolean {
+  return canEnterNativeLocalMode(mode, hasLocalDataAdapter) && isDev
 }
 
 export function canUseCloudFeatures(session: unknown, localMode: boolean): boolean {
@@ -20,12 +20,12 @@ export async function runCloudAction(session: unknown, localMode: boolean, actio
 
 export async function enterNativeLocalMode(options: {
   mode: DesktopRuntimeMode
-  hasLocalAdapter: boolean
+  hasLocalDataAdapter: boolean
   loadLocalData: () => Promise<void>
   setSession: (session: null) => void
   setEnabled: (enabled: true) => void
 }): Promise<boolean> {
-  if (!canEnterNativeLocalMode(options.mode, options.hasLocalAdapter)) return false
+  if (!canEnterNativeLocalMode(options.mode, options.hasLocalDataAdapter)) return false
   options.setSession(null)
   await options.loadLocalData()
   options.setSession(null)

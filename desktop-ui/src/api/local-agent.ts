@@ -12,6 +12,25 @@ const MAX_RESPONSE_TOOLS = 2
 const MAX_TURN_TOOLS = 10
 const MAX_MODEL_REQUESTS = 3
 
+function localTransportFailure(stage: 'TURN' | 'CONTINUATION', error: unknown): CloudError {
+  const diagnosticCode = error && typeof error === 'object' && 'code' in error &&
+    typeof error.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
+    ? error.code
+    : undefined
+  const failure = new CloudError(
+    `LOCAL_AGENT_${stage}_UNCONFIRMED`,
+    stage === 'TURN'
+      ? '本机 Agent 首轮状态未确认返回。模型可能已经运行；请保留本轮，不要重发或另建轮次。'
+      : '本机 Agent 工具结果或后续回答未确认返回。只读检索可能已经执行；请保留本轮，不要重发或另建轮次。',
+    0,
+    false,
+  )
+  // Expose only a bounded symbolic code, never a raw IPC error or payload.
+  failure.modelDispatched = true
+  failure.diagnosticCode = diagnosticCode
+  return failure
+}
+
 type Json = Record<string, unknown>
 export interface LocalTurnRequest {
   query: string
@@ -102,6 +121,11 @@ export interface LocalAgentStatusView {
   detail: string
   ready: boolean
   availability: LocalAgentAvailability | 'unknown'
+}
+
+/** Runtime health is reported by status(); this notice only covers a missing native adapter. */
+export function shouldShowLocalAgentAdapterNotice(mode: 'native' | 'mock', hasModelAdapter: boolean): boolean {
+  return mode === 'native' && !hasModelAdapter
 }
 
 /** User-facing local runtime state; unavailable states never suggest cloud fallback. */
@@ -273,7 +297,10 @@ export function createLocalAgentService(options: {
     if (current.provider !== configured.provider || current.model !== configured.model || current.region !== configured.region) throw new CloudError('MODEL_CONFIGURATION_CHANGED', '本机模型配置在确认期间发生变化；本轮未发送，请重新核对', 0, false)
     attempted.add(key)
     const request: LocalTurnRequest = { query: query.trim(), sessionId, turnId, useModel: true, capabilities: CAPABILITIES, destinationGrantIds: [] }
-    const first = parseTurn(await options.transport.startTurn(request), sessionId, turnId)
+    let rawFirst: LocalTurnResponse
+    try { rawFirst = await options.transport.startTurn(request) }
+    catch (error) { throw localTransportFailure('TURN', error) }
+    const first = parseTurn(rawFirst, sessionId, turnId)
     return processResponse(first, query.trim(), toolsUsed)
   }
 
@@ -332,7 +359,11 @@ export function createLocalAgentService(options: {
     }
     const results: LocalToolResult[] = [...reads]
     if (toolsUsed + results.length > MAX_TURN_TOOLS) throw new CloudError('LOCAL_TOOL_LIMIT', '本轮达到 10 次本机工具调用上限', 0, true)
-    const next = parseContinuation(await options.transport.submitResults(response.sessionId, response.turnId, { continuationToken, results, useModel: true }), response)
+    let rawNext: LocalTurnResponse
+    try {
+      rawNext = await options.transport.submitResults(response.sessionId, response.turnId, { continuationToken, results, useModel: true })
+    } catch (error) { throw localTransportFailure('CONTINUATION', error) }
+    const next = parseContinuation(rawNext, response)
     return processResponse(next, query, toolsUsed + results.length)
   }
 

@@ -156,3 +156,18 @@ native-adapter 本轮新增断言：首页 `limit=2,offset=0` → `items 2 / tot
 另在 `git archive HEAD` 导出的干净副本上复跑：`vue-tsc -b` + `vite build` 通过，五个纯前端测试全部通过（证明三个提交自洽，不依赖工作树里的其它改动）。
 
 未 push、未部署、未改 `backend/**`、未自造 Rust 没有的接口字段。任务 4（Agent 会话字段契约）按交接要求未开工，等契约文档到位。
+
+## Codex 后续复核：本机 Agent 固定横幅误报（2026-10-26）
+
+- 现象：隔离 Tauri UI 同屏显示“已就绪 · qwen2.5:7b”“本机 Agent 与 Ollama 可用”，旧固定横幅仍显示“Agent 服务和本地执行桥未连接”。这能证明旧横幅误报，不能证明完整 Agent 工具往返通过。
+- 修改：横幅只在 native runtime 且 `api.model` adapter 缺失时显示；运行时健康状态继续由 `ModelConsent` 调用 `api.model.status()` 呈现。进入本机工作区的 `api.local` 是本地资料库/备份适配器，与 Agent 模型 adapter 分开判断；相关参数改名为 `hasLocalDataAdapter`。
+- 验证：`npm run build` 通过；本地 Agent 9 项、native adapter 18 项、本机模式 10 项、备份流程 8 项、资料库分页 8 项、打开确认 6 项、Ollama 引导 5 项、禁止直开 4 项均通过。证据：`evidence/agent-bridge-status-20261026.json`。
+- 未完成：新 banner 条件尚未在重建后的 Tauri app 实际观察；之前合成 Agent 查询返回工具调用文本但没有最终回答。WebView→Tauri→sidecar→SQLite→模型完整回合仍需继续验证。
+
+## Codex 后续复核：本机 Agent 续交失败与钥匙串阻塞（2026-10-27）
+
+- 在隔离 AppData 的 `agent.sqlite` 中确认上次 UI 失败对应一条 `local_agent_steps`：step 0 为 `awaiting_tools`，`modelRequests=1`，含一个只读 `search_media` 请求；无 step 1、无 `agent_turns`、无 `agent_actions`。续交令牌已过期，旧轮次不可恢复，未重发。
+- 前端把续交 IPC 异常统一包装为 `LOCAL_AGENT_CONTINUATION_UNCONFIRMED`，保留经过格式校验的诊断码，不回显原始 IPC 错误，并提示保留轮次/禁止重发；model failure 显示器改为按安全错误码字段识别，避免跨模块 Error 实例导致错误退回 `MODEL_OUTCOME_UNCERTAIN`。
+- 验证：Vue/TypeScript + Vite build 通过；local-agent 10 项、native adapter 18 项、R6 14 项通过。新增 macOS arm64 隔离 DMG `影序本机验收 20261027_0.2.0-draft.4-local-qa_aarch64.dmg`，SHA-256 `ccb3f9fd770ff183836e374ce40f3af75509649eb2761925170fe345af854552`；DMG CRC 与 ad-hoc code signature 校验通过，未做公证。
+- 阻塞：新包启动后 `agent_local_status` 卡在系统钥匙串读取；采样栈停于 `SecKeychainFindGenericPassword`，sidecar 未启动，UI 一直显示“正在检查”，所以新包的 Agent 往返和新错误提示尚未实机验收。详见 `evidence/agent-bridge-followup-20261027.json`。
+- 下一步：请用户在 Mac 本机解锁登录钥匙串，或处理 macOS 自己显示的影序钥匙串访问提示；不在聊天中提供密码或私钥。恢复后重开隔离包，先核验 Agent 状态，再用新的合成查询做 UI 闭环；不要续发已过期的旧轮次。
