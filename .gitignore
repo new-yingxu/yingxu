@@ -22,6 +22,8 @@ venv/
 # 各子项目自身 .gitignore 也覆盖了：
 #   backend/target/  desktop-ui/node_modules/  desktop-ui/dist/
 #   infra/cloud/build/  infra/cloud/function-build/
+backend/tauri-host/agent-sidecar/*
+!backend/tauri-host/agent-sidecar/README.md
 
 # 工作区 agent 数据（本地保留，不入库）
 .workbuddy/

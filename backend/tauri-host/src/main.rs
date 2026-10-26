@@ -2,16 +2,21 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    io::{BufRead, BufReader, Read, Write},
+    net::{Ipv4Addr, SocketAddrV4, TcpStream},
     path::PathBuf,
+    process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     Emitter, Manager,
     menu::{Menu, MenuItem},
+    path::BaseDirectory,
     tray::TrayIconBuilder,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -28,6 +33,23 @@ struct HostState {
     sources: Mutex<HashSet<PathBuf>>,
     targets: Mutex<HashSet<PathBuf>>,
     pending_agent_actions: Mutex<HashMap<String, PendingOpenAction>>,
+    app_data_dir: PathBuf,
+    local_agent: Mutex<Option<LocalAgentProcess>>,
+}
+
+struct LocalAgentProcess {
+    child: Child,
+    port: u16,
+    token: String,
+}
+
+impl Drop for LocalAgentProcess {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
 }
 
 struct PendingOpenAction {
@@ -44,6 +66,301 @@ fn validate_action_expiry(now_ms: u64, expires_at_ms: u64) -> Result<(), CoreErr
         ));
     }
     Ok(())
+}
+
+fn local_agent_unavailable() -> serde_json::Value {
+    serde_json::json!({
+        "configured": false,
+        "provider": "ollama",
+        "model": "qwen2.5:7b",
+        "region": "local",
+        "availability": "sidecar_unavailable",
+        "requiresExplicitConsent": true,
+        "executionAuthorized": false,
+        "cloudFallback": false
+    })
+}
+
+fn local_agent_executable(app: &tauri::AppHandle) -> Result<PathBuf, CoreError> {
+    let executable_name = if cfg!(windows) {
+        "yingxu-local-agent.exe"
+    } else {
+        "yingxu-local-agent"
+    };
+    let relative = format!("agent-sidecar/yingxu-local-agent/{executable_name}");
+    let resource = app.path().resolve(relative, BaseDirectory::Resource).ok();
+    if let Some(path) = resource.filter(|path| path.is_file()) {
+        return Ok(path);
+    }
+    if cfg!(debug_assertions) {
+        let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("agent-sidecar/yingxu-local-agent")
+            .join(executable_name);
+        if development.is_file() {
+            return Ok(development);
+        }
+    }
+    Err(CoreError::new(
+        "LOCAL_AGENT_SIDECAR_MISSING",
+        "本机 Agent 运行组件尚未安装",
+    ))
+}
+
+fn stable_agent_signing_key() -> Result<String, CoreError> {
+    let entry = keyring::Entry::new("app.yingxu.desktop.next.local-agent", "signing-key")
+        .map_err(|_| CoreError::new("LOCAL_AGENT_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
+    match entry.get_password() {
+        Ok(key) => Ok(key),
+        Err(keyring::Error::NoEntry) => {
+            use rsa::pkcs8::EncodePrivateKey;
+            let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).map_err(|_| {
+                CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥生成失败")
+            })?;
+            let pem = key
+                .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+                .map_err(|_| {
+                    CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥编码失败")
+                })?
+                .to_string();
+            entry.set_password(&pem).map_err(|_| {
+                CoreError::new(
+                    "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
+                    "无法保存本机 Agent 密钥",
+                )
+            })?;
+            Ok(pem)
+        }
+        Err(_) => Err(CoreError::new(
+            "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
+            "无法读取系统凭据库中的本机 Agent 密钥",
+        )),
+    }
+}
+
+fn start_local_agent(
+    app: &tauri::AppHandle,
+    app_data_dir: &std::path::Path,
+) -> Result<LocalAgentProcess, CoreError> {
+    let executable = local_agent_executable(app)?;
+    spawn_local_agent(
+        &executable,
+        &app_data_dir.join("agent.sqlite"),
+        &stable_agent_signing_key()?,
+    )
+}
+
+fn spawn_local_agent(
+    executable: &std::path::Path,
+    database_path: &std::path::Path,
+    signing_key: &str,
+) -> Result<LocalAgentProcess, CoreError> {
+    let database_path = database_path
+        .to_str()
+        .ok_or_else(|| CoreError::new("INVALID_PATH_ENCODING", "本机 Agent 数据目录无法读取"))?;
+    let mut random = [0u8; 48];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut random);
+    let token = random
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let mut command = Command::new(executable);
+    command
+        .env_clear()
+        .env("YINGXU_LOCAL_AGENT_MODE", "1")
+        .env("YINGXU_LOCAL_AGENT_TOKEN", &token)
+        .env(
+            "YINGXU_LOCAL_AGENT_DATABASE_URL",
+            format!("sqlite:///{database_path}"),
+        )
+        .env("YINGXU_LOCAL_AGENT_SIGNING_KEY", &signing_key)
+        .env("YINGXU_LOCAL_AGENT_KEY_ID", "local-agent-rsa-v1")
+        .env("YINGXU_LOCAL_AGENT_MODEL", "qwen2.5:7b")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for name in [
+        "HOME",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "SYSTEMROOT",
+        "WINDIR",
+        "USERPROFILE",
+    ] {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    if cfg!(windows)
+        && let Some(path) = std::env::var_os("PATH")
+    {
+        command.env("PATH", path);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|_| CoreError::new("LOCAL_AGENT_START_FAILED", "本机 Agent 未能启动"))?;
+    let stdout = child.stdout.take().ok_or_else(|| {
+        let _ = child.kill();
+        let _ = child.wait();
+        CoreError::new("LOCAL_AGENT_START_FAILED", "本机 Agent 未返回启动状态")
+    })?;
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = BufReader::new(stdout).read_line(&mut line);
+        let _ = sender.send(line);
+    });
+    let ready_line = match receiver.recv_timeout(Duration::from_secs(15)) {
+        Ok(line) => line,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CoreError::new(
+                "LOCAL_AGENT_START_TIMEOUT",
+                "本机 Agent 启动超时",
+            ));
+        }
+    };
+    let ready = (|| {
+        let ready: serde_json::Value = serde_json::from_str(&ready_line)
+            .map_err(|_| CoreError::new("LOCAL_AGENT_START_FAILED", "本机 Agent 启动状态无效"))?;
+        let port = ready["port"]
+            .as_u64()
+            .and_then(|value| u16::try_from(value).ok())
+            .filter(|port| *port > 0)
+            .ok_or_else(|| CoreError::new("LOCAL_AGENT_START_FAILED", "本机 Agent 端口无效"))?;
+        if ready["event"] != "ready" || ready["host"] != "127.0.0.1" {
+            return Err(CoreError::new(
+                "LOCAL_AGENT_START_FAILED",
+                "本机 Agent 地址不安全",
+            ));
+        }
+        Ok(port)
+    })();
+    let port = match ready {
+        Ok(port) => port,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    Ok(LocalAgentProcess { child, port, token })
+}
+
+fn local_agent_endpoint(
+    app: &tauri::AppHandle,
+    state: &HostState,
+) -> Result<(u16, String), CoreError> {
+    let mut runtime = state
+        .local_agent
+        .lock()
+        .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "本机 Agent 状态不可用"))?;
+    if runtime
+        .as_mut()
+        .is_some_and(|process| process.child.try_wait().ok().flatten().is_some())
+    {
+        runtime.take();
+    }
+    if runtime.is_none() {
+        *runtime = Some(start_local_agent(app, &state.app_data_dir)?);
+    }
+    let process = runtime
+        .as_ref()
+        .ok_or_else(|| CoreError::new("LOCAL_AGENT_START_FAILED", "本机 Agent 未启动"))?;
+    Ok((process.port, process.token.clone()))
+}
+
+fn local_agent_request(
+    port: u16,
+    token: &str,
+    method: &str,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    timeout: Duration,
+) -> Result<serde_json::Value, CoreError> {
+    let address = std::net::SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
+    let mut stream = TcpStream::connect_timeout(&address, timeout)
+        .map_err(|_| CoreError::new("LOCAL_AGENT_UNAVAILABLE", "本机 Agent 连接失败"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|_| CoreError::new("LOCAL_AGENT_UNAVAILABLE", "本机 Agent 连接失败"))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|_| CoreError::new("LOCAL_AGENT_UNAVAILABLE", "本机 Agent 连接失败"))?;
+    let payload = body
+        .map(serde_json::to_vec)
+        .transpose()
+        .map_err(|_| CoreError::new("INVALID_PARAMS", "本机 Agent 请求无法编码"))?
+        .unwrap_or_default();
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        payload.len()
+    )
+    .and_then(|_| stream.write_all(&payload))
+    .map_err(|_| CoreError::new("LOCAL_AGENT_UNAVAILABLE", "本机 Agent 请求发送失败"))?;
+    let mut response = Vec::new();
+    stream
+        .take(2 * 1024 * 1024 + 1)
+        .read_to_end(&mut response)
+        .map_err(|_| CoreError::new("LOCAL_AGENT_UNAVAILABLE", "本机 Agent 请求读取失败"))?;
+    if response.len() > 2 * 1024 * 1024 {
+        return Err(CoreError::new(
+            "LOCAL_AGENT_RESPONSE_TOO_LARGE",
+            "本机 Agent 响应超过大小限制",
+        ));
+    }
+    let header_end = response
+        .windows(4)
+        .position(|bytes| bytes == b"\r\n\r\n")
+        .ok_or_else(|| CoreError::new("LOCAL_AGENT_INVALID_RESPONSE", "本机 Agent 响应格式无效"))?;
+    let headers = std::str::from_utf8(&response[..header_end])
+        .map_err(|_| CoreError::new("LOCAL_AGENT_INVALID_RESPONSE", "本机 Agent 响应格式无效"))?;
+    let status = headers
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .ok_or_else(|| CoreError::new("LOCAL_AGENT_INVALID_RESPONSE", "本机 Agent 响应状态无效"))?;
+    let payload = &response[header_end + 4..];
+    if !(200..300).contains(&status) {
+        return Err(CoreError::new(
+            "LOCAL_AGENT_REQUEST_REJECTED",
+            "本机 Agent 未接受请求",
+        ));
+    }
+    serde_json::from_slice(payload)
+        .map_err(|_| CoreError::new("LOCAL_AGENT_INVALID_RESPONSE", "本机 Agent 返回了无效数据"))
+}
+
+fn stop_local_agent(state: &HostState) {
+    let Ok(mut runtime) = state.local_agent.lock() else {
+        return;
+    };
+    let Some(mut process) = runtime.take() else {
+        return;
+    };
+    stop_local_agent_process(&mut process);
+}
+
+fn stop_local_agent_process(process: &mut LocalAgentProcess) {
+    let _ = local_agent_request(
+        process.port,
+        &process.token,
+        "POST",
+        "/_host/shutdown",
+        Some(&serde_json::json!({})),
+        Duration::from_secs(2),
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if process.child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let _ = process.child.kill();
+    let _ = process.child.wait();
 }
 
 #[tauri::command]
@@ -209,6 +526,182 @@ async fn backend_request(
             error: Some(CoreError::new("BACKGROUND_TASK_FAILED", e)),
         },
     }
+}
+
+#[tauri::command]
+async fn agent_local_status(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可查询本机 Agent 状态",
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<HostState>();
+        let Ok((port, token)) = local_agent_endpoint(&app, &state) else {
+            return Ok(local_agent_unavailable());
+        };
+        Ok(local_agent_request(
+            port,
+            &token,
+            "GET",
+            "/v1/agent/local-status",
+            None,
+            Duration::from_secs(4),
+        )
+        .unwrap_or_else(|_| local_agent_unavailable()))
+    })
+    .await
+    .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "本机 Agent 状态查询失败"))?
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct LocalAgentTurnRequest {
+    query: String,
+    session_id: String,
+    turn_id: String,
+    use_model: bool,
+    capabilities: Vec<String>,
+    destination_grant_ids: Vec<String>,
+}
+
+fn local_agent_id_is_safe(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 160
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn validate_local_turn_request(value: &serde_json::Value) -> Result<(), CoreError> {
+    let request: LocalAgentTurnRequest = serde_json::from_value(value.clone())
+        .map_err(|_| CoreError::new("INVALID_PARAMS", "本机 Agent 请求字段无效"))?;
+    if request.query.trim().is_empty() || request.query.len() > 500 {
+        return Err(CoreError::new("INVALID_PARAMS", "查询内容需为 1 至 500 字"));
+    }
+    if !local_agent_id_is_safe(&request.session_id) || !local_agent_id_is_safe(&request.turn_id) {
+        return Err(CoreError::new("INVALID_PARAMS", "本机 Agent 会话编号无效"));
+    }
+    if !request.use_model
+        || request.capabilities
+            != [
+                "search_media",
+                "get_metadata",
+                "get_backup_job",
+                "open_item",
+            ]
+        || !request.destination_grant_ids.is_empty()
+    {
+        return Err(CoreError::new(
+            "AGENT_CAPABILITY_NOT_ALLOWED",
+            "当前本机 Agent 仅允许本地只读查询与需确认的打开提议",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_local_turn_response(
+    response: &serde_json::Value,
+    session_id: &str,
+    turn_id: &str,
+) -> Result<(), CoreError> {
+    if response["sessionId"] != session_id
+        || response["turnId"] != turn_id
+        || response["orchestrator"] != "langgraph"
+        || response["executionAuthorized"] != false
+        || response["filesChanged"] != false
+    {
+        return Err(CoreError::new(
+            "LOCAL_AGENT_INVALID_RESPONSE",
+            "本机 Agent 响应边界无效",
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn agent_local_turn(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可调用本机 Agent",
+        ));
+    }
+    validate_local_turn_request(&request)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let session_id = request["sessionId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let turn_id = request["turnId"].as_str().unwrap_or_default().to_string();
+        let state = app.state::<HostState>();
+        let (port, token) = local_agent_endpoint(&app, &state)?;
+        let response = local_agent_request(
+            port,
+            &token,
+            "POST",
+            "/v1/agent/local-turns",
+            Some(&request),
+            Duration::from_secs(180),
+        )?;
+        validate_local_turn_response(&response, &session_id, &turn_id)?;
+        Ok(response)
+    })
+    .await
+    .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "本机 Agent 请求失败"))?
+}
+
+#[tauri::command]
+async fn agent_local_turn_results(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    session_id: String,
+    turn_id: String,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可续交本机 Agent 结果",
+        ));
+    }
+    if !local_agent_id_is_safe(&session_id) || !local_agent_id_is_safe(&turn_id) {
+        return Err(CoreError::new("INVALID_PARAMS", "本机 Agent 会话编号无效"));
+    }
+    let continuation = request["continuationToken"].as_str().unwrap_or_default();
+    let results = request["results"].as_array();
+    if continuation.is_empty()
+        || continuation.len() > 16_384
+        || request["useModel"] != true
+        || results.is_none_or(|items| items.len() > 10)
+    {
+        return Err(CoreError::new("INVALID_PARAMS", "本机 Agent 续交结果无效"));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = format!("/v1/agent/local-turns/{session_id}/{turn_id}/results");
+        let state = app.state::<HostState>();
+        let (port, token) = local_agent_endpoint(&app, &state)?;
+        let response = local_agent_request(
+            port,
+            &token,
+            "POST",
+            &path,
+            Some(&request),
+            Duration::from_secs(180),
+        )?;
+        validate_local_turn_response(&response, &session_id, &turn_id)?;
+        Ok(response)
+    })
+    .await
+    .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "本机 Agent 续交失败"))?
 }
 
 /// Prepare a short-lived, single-use preview for an Agent open action. The
@@ -440,6 +933,7 @@ fn shutdown(app: tauri::AppHandle) {
         if let Some(handle) = handle {
             let _ = handle.join();
         }
+        stop_local_agent(&app.state::<HostState>());
         app.exit(0);
     });
 }
@@ -629,6 +1123,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             select_directory,
             backend_request,
+            agent_local_status,
+            agent_local_turn,
+            agent_local_turn_results,
             agent_prepare_action,
             agent_confirm_action
         ])
@@ -654,7 +1151,7 @@ fn main() {
                     &CoreError::new("APP_DATA_DIR_FAILED", e.to_string()),
                 ),
             };
-            let engine = match Engine::open(root) {
+            let engine = match Engine::open(root.clone()) {
                 Ok(engine) => engine,
                 Err(e) => fail_startup(app.handle(), &e),
             };
@@ -696,6 +1193,8 @@ fn main() {
                 sources: Mutex::new(HashSet::new()),
                 targets: Mutex::new(HashSet::new()),
                 pending_agent_actions: Mutex::new(HashMap::new()),
+                app_data_dir: root,
+                local_agent: Mutex::new(None),
             });
             let open = MenuItem::with_id(app, "open", "打开影序", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出影序", true, None::<&str>)?;
@@ -761,9 +1260,16 @@ fn main() {
 
 #[cfg(test)]
 mod agent_action_tests {
-    use super::{HostState, check_paths, validate_action_expiry};
+    use super::{
+        HostState, check_paths, local_agent_request, spawn_local_agent, stop_local_agent_process,
+        validate_action_expiry, validate_local_turn_request,
+    };
     use std::collections::{HashMap, HashSet};
-    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex, atomic::AtomicBool},
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
     use yingxu_core::{
         Engine,
         api::{PROTOCOL_VERSION, Request},
@@ -783,6 +1289,41 @@ mod agent_action_tests {
                 .unwrap_err()
                 .code,
             "ACTION_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn local_agent_turn_rejects_remote_or_write_capabilities() {
+        let mut request = serde_json::json!({
+            "query": "查找 IMG_2048.jpg",
+            "sessionId": "session-1",
+            "turnId": "turn-1",
+            "useModel": true,
+            "capabilities": ["search_media", "get_metadata", "get_backup_job", "open_item"],
+            "destinationGrantIds": []
+        });
+        assert!(validate_local_turn_request(&request).is_ok());
+        request["destinationGrantIds"] = serde_json::json!(["cloud-drive"]);
+        assert_eq!(
+            validate_local_turn_request(&request).unwrap_err().code,
+            "AGENT_CAPABILITY_NOT_ALLOWED"
+        );
+        request["destinationGrantIds"] = serde_json::json!([]);
+        request["capabilities"] = serde_json::json!(["delete_file"]);
+        assert_eq!(
+            validate_local_turn_request(&request).unwrap_err().code,
+            "AGENT_CAPABILITY_NOT_ALLOWED"
+        );
+        request["capabilities"] = serde_json::json!([
+            "search_media",
+            "get_metadata",
+            "get_backup_job",
+            "open_item"
+        ]);
+        request["useModel"] = serde_json::json!(false);
+        assert_eq!(
+            validate_local_turn_request(&request).unwrap_err().code,
+            "AGENT_CAPABILITY_NOT_ALLOWED"
         );
     }
 
@@ -809,6 +1350,8 @@ mod agent_action_tests {
             sources: Mutex::new(HashSet::new()),
             targets: Mutex::new(HashSet::new()),
             pending_agent_actions: Mutex::new(HashMap::new()),
+            app_data_dir: app_data,
+            local_agent: Mutex::new(None),
         };
         let request = Request {
             request_id: "scope-test".to_string(),
@@ -827,6 +1370,74 @@ mod agent_action_tests {
             .insert(source.canonicalize().unwrap());
         assert!(check_paths(&state, &request).is_ok());
         drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn packaged_local_agent_status_and_shutdown_round_trip() {
+        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("agent-sidecar/yingxu-local-agent/yingxu-local-agent");
+        if !executable.is_file() {
+            return;
+        }
+        use rsa::pkcs8::EncodePrivateKey;
+        let signing_key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048)
+            .unwrap()
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!(
+                "yingxu-host-agent-smoke-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut process =
+            spawn_local_agent(&executable, &root.join("agent.sqlite"), &signing_key).unwrap();
+        let health = local_agent_request(
+            process.port,
+            &process.token,
+            "GET",
+            "/healthz",
+            None,
+            Duration::from_secs(4),
+        )
+        .unwrap();
+        assert_eq!(health["service"], "yingxu-local-agent");
+        let status = local_agent_request(
+            process.port,
+            &process.token,
+            "GET",
+            "/v1/agent/local-status",
+            None,
+            Duration::from_secs(4),
+        )
+        .unwrap();
+        assert_eq!(status["requiresExplicitConsent"], true);
+        assert_eq!(status["executionAuthorized"], false);
+        assert_eq!(status["cloudFallback"], false);
+        assert!(matches!(
+            status["availability"].as_str(),
+            Some("ready" | "model_not_installed" | "ollama_unavailable")
+        ));
+        assert!(
+            local_agent_request(
+                process.port,
+                "wrong-token",
+                "GET",
+                "/v1/agent/local-status",
+                None,
+                Duration::from_secs(4),
+            )
+            .is_err()
+        );
+        stop_local_agent_process(&mut process);
+        assert!(process.child.try_wait().unwrap().is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 }
