@@ -544,13 +544,26 @@ impl Engine {
             frames.push(("cover".into(), cover, "embedded_cover"));
             frame_source = "embedded_cover".into();
         }
-        if extract && frames.is_empty() {
+        if extract {
+            // An embedded cover is only a poster image; it must not suppress
+            // sampling actual footage for video quality analysis.
             let (extracted, source) = extract_frames_with_modes(&path, meta.duration_ms);
-            frames = extracted;
-            if frames.is_empty() {
+            if extracted.is_empty() {
                 info["frameExtraction"] = json!(source);
+                if frames.is_empty() {
+                    frame_source = source;
+                }
+            } else {
+                frames.extend(extracted);
+                frame_source = if frames
+                    .iter()
+                    .any(|(_, _, frame_mode)| *frame_mode == "embedded_cover")
+                {
+                    format!("embedded_cover+{source}")
+                } else {
+                    source
+                };
             }
-            frame_source = source;
         }
         let mut quality = json!({"status":"unanalyzed","automaticCleanupAllowed":false});
         let mut state = "unanalyzed";
