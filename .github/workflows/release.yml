@@ -1,0 +1,170 @@
+name: Release
+
+# tag 触发 → 门禁 → 两平台构建 → 生成 SHA256SUMS/latest.json → 上传到 **草稿** Release。
+# 草稿不会自动对外：无签名（ad-hoc）产物必须由人复核后手动 Publish，
+# 避免把「无签名」写成「已签名发布」。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 已存在的 tag，例如 v0.2.0-draft.1
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  REPO: ${{ github.repository }}
+  PROJECT_PATH: backend/tauri-host
+
+jobs:
+  gate:
+    name: 发布前置门禁
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+      - run: cargo fmt --all --check
+      - run: cargo clippy -p yingxu-core --all-targets -- -D warnings
+      - run: cargo test -p yingxu-core --all-targets
+      - name: 版本号必须与 tag 一致
+        working-directory: .
+        run: |
+          ./scripts/check-versions.sh
+          VERSION=$(python3 -c "import json;print(json.load(open('backend/tauri-host/tauri.conf.json'))['version'])")
+          echo "产品版本: $VERSION / tag: $TAG"
+          case "$TAG" in
+            "v$VERSION"|"v$VERSION".*) echo "版本与 tag 一致" ;;
+            *) echo "tag($TAG) 与 tauri.conf.json($VERSION) 不一致，请先跑 scripts/bump-version.sh"; exit 1 ;;
+          esac
+
+  build-macos:
+    name: macOS arm64 构建
+    needs: gate
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: desktop-ui
+      - run: pnpm build
+        working-directory: desktop-ui
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/tauri-host -> target
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: ${{ env.PROJECT_PATH }}
+          tagName: ${{ env.TAG }}
+          releaseName: 影序桌面版 ${{ env.TAG }}（未签名测试版）
+          releaseDraft: true
+          prerelease: true
+          args: --target aarch64-apple-darwin --bundles app,dmg
+      - name: 记录签名状态（ad-hoc，不是正式签名）
+        run: |
+          set -e
+          APP=$(find backend/tauri-host/target -name "*.app" -maxdepth 6 | head -1)
+          echo "app: $APP"
+          codesign -dv --verbose=2 "$APP" 2>&1 | sed -n '1,6p' || true
+          echo "::notice::当前为 ad-hoc 签名；spctl 会拒绝，首次打开需右键打开或去隔离属性"
+          spctl -a -vv "$APP" 2>&1 || echo "（预期：spctl 拒绝 ad-hoc 签名）"
+          for f in $(find backend/tauri-host/target -name "*.dmg"); do shasum -a 256 "$f"; done
+
+  build-windows:
+    name: Windows x64 构建
+    needs: gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: desktop-ui
+      - run: pnpm build
+        working-directory: desktop-ui
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend/tauri-host -> target
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: ${{ env.PROJECT_PATH }}
+          tagName: ${{ env.TAG }}
+          releaseName: 影序桌面版 ${{ env.TAG }}（未签名测试版）
+          releaseDraft: true
+          prerelease: true
+          args: --bundles nsis
+      - name: 记录签名状态（未签名）
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Include *.exe -Path backend/tauri-host/target | ForEach-Object {
+            "exe: $($_.FullName)"
+            (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+          }
+          Write-Output "::notice::Windows 产物未签名，SmartScreen 会拦截，需点「更多信息 → 仍要运行」"
+
+  finalize:
+    name: 生成 SHA256SUMS 与 latest.json
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下载草稿 Release 的资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist-artifacts
+          gh release download "$TAG" --repo "$REPO" --dir dist-artifacts --clobber || true
+          ls -la dist-artifacts
+      - name: 生成清单
+        run: |
+          VERSION=$(python3 -c "import json;print(json.load(open('backend/tauri-host/tauri.conf.json'))['version'])")
+          python3 scripts/gen-latest-json.py \
+            --artifacts dist-artifacts \
+            --version "$VERSION" \
+            --repo "$REPO" \
+            --tag "$TAG" \
+            --out release-out
+          cp "docs/发布/首次打开说明.md" release-out/ || true
+      - name: 上传到 Release（含校验和与首次打开说明）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" release-out/* --repo "$REPO" --clobber
+      - name: 输出摘要
+        run: |
+          echo "### $TAG 构建完成（草稿，未对外）" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat release-out/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "签名状态：macOS ad-hoc / Windows 未签名。复核后再手动 Publish。" >> "$GITHUB_STEP_SUMMARY"

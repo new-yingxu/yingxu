@@ -1,0 +1,15 @@
+{
+  "removed": [
+    "docs/.DS_Store"
+  ],
+  "preserved": [
+    "source",
+    "lockfiles",
+    "dependencies",
+    "build_outputs",
+    "logs",
+    "snapshots",
+    "user_media"
+  ],
+  "oldArtifactReplacement": false
+}

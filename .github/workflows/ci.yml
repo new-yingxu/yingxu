@@ -1,0 +1,76 @@
+name: CI
+
+# 日常门禁：只在 PR 与主干分支跑，不跑打包矩阵（macOS runner 配额有限）。
+on:
+  pull_request:
+  push:
+    branches: [main, workbuddy/dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust 门禁（fmt / clippy / test）
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+      - name: 格式
+        run: cargo fmt --all --check
+      - name: Clippy（警告即失败）
+        run: cargo clippy -p yingxu-core --all-targets -- -D warnings
+      - name: 单元与集成测试
+        run: cargo test -p yingxu-core --all-targets
+      # tauri-host 需要 webkit2gtk 等系统依赖，Linux runner 上不编译；
+      # 它由各平台的打包任务实际构建，构建失败同样会阻断发布。
+
+  frontend:
+    name: 前端构建（vue-tsc + vite）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop-ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: desktop-ui
+      - run: pnpm build
+        working-directory: desktop-ui
+
+  versions-and-site:
+    name: 版本一致性与静态站点检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 版本号四处一致
+        run: ./scripts/check-versions.sh
+      - name: 站点文件齐全
+        run: |
+          for f in index.html features.html download.html changelog.html privacy.html support.html \
+                   assets/styles.css assets/site.js assets/icon-192.png; do
+            test -f "site/$f" || { echo "缺少 site/$f"; exit 1; }
+          done
+      - name: JS 语法检查
+        run: |
+          for f in site/assets/*.js; do node --check "$f"; done
+      - name: 安装脚本语法检查
+        run: bash -n scripts/*.sh && python3 -m py_compile scripts/*.py backend/scripts/*.py

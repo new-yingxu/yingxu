@@ -1,0 +1,59 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "影序桌面开发版",
+  "version": "0.2.0-draft.1",
+  "identifier": "app.yingxu.desktop.next",
+  "build": {
+    "devUrl": "http://127.0.0.1:5173",
+    "frontendDist": "../../desktop-ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "影序 YINGXU · 开发版",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 760,
+        "minHeight": 500
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:5173 ws://127.0.0.1:5173"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "dmg",
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "影序 YINGXU",
+    "copyright": "© 2026 影序 YINGXU",
+    "category": "Photography",
+    "shortDescription": "本地影像备份与整理",
+    "longDescription": "影序：本地优先的影像备份、校验、整理与检索工具。原片只读，副本逐文件校验 SHA-256。",
+    "createUpdaterArtifacts": false,
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}
