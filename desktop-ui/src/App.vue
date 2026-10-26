@@ -2,6 +2,7 @@
 import ScanSummary from "./components/ScanSummary.vue";
 import NetdiskPanel from "./components/NetdiskPanel.vue";
 import ModelConsent from "./components/ModelConsent.vue";
+import AgentActionCard from "./components/AgentActionCard.vue";
 import {
   computed,
   nextTick,
@@ -201,15 +202,15 @@ const backupPreset = ref("preset-camera");
 const backupTask = ref<ArchiveTask | null>(null);
 const newPresetName = ref("");
 const agentInput = ref("");
+const agentActionBusy = ref(false);
 const modelConsentRef = ref<{ submit(query: string): Promise<void> } | null>(null);
-const agentMessages = ref<
-  {
-    role: "assistant" | "user";
-    text: string;
-    reply?: AgentReply;
-    actionId?: string;
-  }[]
->([]);
+type AgentMessage = {
+  role: "assistant" | "user";
+  text: string;
+  reply?: AgentReply;
+  actionId?: string;
+};
+const agentMessages = ref<AgentMessage[]>([]);
 const settings = reactive<AppSettings>({
   theme: "light",
   startOnLogin: true,
@@ -272,6 +273,14 @@ const pageLabels: Record<Page, string> = {
   settings: "偏好设置",
 };
 const visibleFiles = computed(() => files.value);
+/** The newest proposal that still waits for an explicit local decision. */
+const pendingAgentAction = computed(() => {
+  for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
+    const message = agentMessages.value[index];
+    if (message.actionId && message.reply?.proposedAction) return message;
+  }
+  return null;
+});
 const selectedTask = computed(
   () =>
     taskDetail.value ||
@@ -850,8 +859,9 @@ function appendModelReply(value: { query: string; reply: AgentReply }) {
   });
   if (agentInput.value === value.query) agentInput.value = "";
 }
-async function confirmAgent(message: { actionId?: string }, accepted: boolean) {
-  if (!message.actionId) return;
+async function confirmAgent(message: AgentMessage, accepted: boolean) {
+  if (!message.actionId || agentActionBusy.value) return;
+  agentActionBusy.value = true;
   try {
     const result = await api.agent.confirm(message.actionId, accepted);
     if (typeof result === "string") say(result);
@@ -865,7 +875,17 @@ async function confirmAgent(message: { actionId?: string }, accepted: boolean) {
     });
     message.actionId = undefined;
   } catch (error) {
+    // A host action is single use: a failed decision never stays on screen.
+    message.actionId = undefined;
+    if (message.reply?.proposedAction?.kind === "open") {
+      agentMessages.value.push({
+        role: "assistant",
+        text: "打开未确认：本机没有返回可验证的成功回执，不能把素材标记为已打开。",
+      });
+    }
     showError(error);
+  } finally {
+    agentActionBusy.value = false;
   }
 }
 async function updateSetting<K extends keyof AppSettings>(
@@ -2415,19 +2435,9 @@ function taskStateLabel(state: TaskState) {
                         ><span
                           >目标：{{ message.reply.proposedAction.target }}</span
                         >
-                        <div v-if="message.actionId && message.reply.proposedAction.canConfirm !== false" class="plan-actions">
-                          <button
-                            class="secondary-button compact"
-                            @click="confirmAgent(message, false)"
-                          >
-                            取消</button
-                          ><button
-                            class="primary-button compact"
-                            @click="confirmAgent(message, true)"
-                          >
-                            {{ message.reply.proposedAction.kind === "open" ? "确认并在本机打开" : "确认演示操作" }}
-                          </button>
-                        </div>
+                        <small v-if="message.actionId"
+                          >等待你在确认卡片里明确同意或拒绝。</small
+                        >
                       </div>
                     </div>
                   </div>
@@ -2446,6 +2456,12 @@ function taskStateLabel(state: TaskState) {
                 </p>
               </div>
             </section>
+            <AgentActionCard
+              v-if="pendingAgentAction?.reply?.proposedAction"
+              :action="pendingAgentAction.reply.proposedAction"
+              :busy="agentActionBusy"
+              @decide="confirmAgent(pendingAgentAction, $event)"
+            />
           </template>
 
           <template v-else-if="page === 'account' && !isMock"
