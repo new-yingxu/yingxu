@@ -2,6 +2,7 @@
 import ScanSummary from "./components/ScanSummary.vue";
 import NetdiskPanel from "./components/NetdiskPanel.vue";
 import ModelConsent from "./components/ModelConsent.vue";
+import OllamaOnboarding from "./components/OllamaOnboarding.vue";
 import AgentActionCard from "./components/AgentActionCard.vue";
 import {
   computed,
@@ -2442,6 +2443,7 @@ function taskStateLabel(state: TaskState) {
                     </div>
                   </div>
                 </div>
+                <OllamaOnboarding :service="api.model" />
                 <ModelConsent ref="modelConsentRef" :service="api.model" :query="agentInput" @reply="appendModelReply" />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
