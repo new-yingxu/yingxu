@@ -1,0 +1,11 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "functions": [
+    {
+      "name": "yingxu-agent-api",
+      "timeout": 60,
+      "memorySize": 256,
+      "description": "Yingxu Agent API; requires production secrets before deployment"
+    }
+  ]
+}

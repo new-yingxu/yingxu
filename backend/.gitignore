@@ -1,0 +1,8 @@
+/target/
+/tauri-host/target/
+*.sqlite*
+*.db
+*.db-shm
+*.db-wal
+*.lockfile
+
