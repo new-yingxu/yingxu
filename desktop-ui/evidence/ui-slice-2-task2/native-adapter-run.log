@@ -21,5 +21,5 @@ $ node tests/native-adapter.mjs  (real Rust CLI: backend/target/debug/yingxu-cor
     "native transport failure never falls back to mock",
     "reply correlation rejects wrong request"
   ],
-  "evidence": "evidence/adapter-fixture-1793022159286"
+  "evidence": "evidence/adapter-fixture-1793022473809"
 }
