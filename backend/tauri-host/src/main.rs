@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -27,6 +27,23 @@ struct HostState {
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     sources: Mutex<HashSet<PathBuf>>,
     targets: Mutex<HashSet<PathBuf>>,
+    pending_agent_actions: Mutex<HashMap<String, PendingOpenAction>>,
+}
+
+struct PendingOpenAction {
+    media_id: String,
+    path: PathBuf,
+    expires_at_ms: u64,
+}
+
+fn validate_action_expiry(now_ms: u64, expires_at_ms: u64) -> Result<(), CoreError> {
+    if expires_at_ms <= now_ms || expires_at_ms > now_ms.saturating_add(5 * 60 * 1000) {
+        return Err(CoreError::new(
+            "ACTION_EXPIRED",
+            "操作预览有效期无效，请重新查询",
+        ));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -246,6 +263,158 @@ async fn agent_open_item(
         serde_json::json!({"receiptId":receipt_id,"opened":true}),
     )?;
     Ok(serde_json::json!({"mediaId":media_id,"opened":true,"receiptId":receipt_id}))
+}
+
+/// Prepare a short-lived, single-use preview for an Agent open action. The
+/// model supplies only an indexed media ID; the host resolves and authorizes
+/// the path, then requires a separate explicit confirmation before opening.
+#[tauri::command]
+async fn agent_prepare_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action_id: String,
+    tool: String,
+    file_id: String,
+    expires_at_ms: u64,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" || tool != "open_item" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可预览打开素材操作",
+        ));
+    }
+    if action_id.is_empty() || action_id.len() > 160 {
+        return Err(CoreError::new("INVALID_ACTION_ID", "操作编号无效"));
+    }
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    validate_action_expiry(now_ms, expires_at_ms)?;
+    let state = app.state::<HostState>();
+    let engine = state.engine.clone();
+    let lookup_id = file_id.clone();
+    let path =
+        tauri::async_runtime::spawn_blocking(move || engine.agent_resolve_open_item(&lookup_id))
+            .await
+            .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))??;
+    let roots = state
+        .sources
+        .lock()
+        .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "来源目录授权状态不可用"))?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    yingxu_core::agent::validate_open_grant(&path, &roots)?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| CoreError::new("INVALID_PATH_ENCODING", "素材名称无法显示"))?
+        .to_string();
+    let mut pending = state
+        .pending_agent_actions
+        .lock()
+        .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "操作预览状态不可用"))?;
+    pending.retain(|_, action| action.expires_at_ms > now_ms);
+    if pending.contains_key(&action_id) {
+        return Err(CoreError::new(
+            "DUPLICATE_ACTION_ID",
+            "操作编号已使用，请重新查询",
+        ));
+    }
+    pending.insert(
+        action_id.clone(),
+        PendingOpenAction {
+            media_id: file_id.clone(),
+            path,
+            expires_at_ms,
+        },
+    );
+    Ok(serde_json::json!({
+        "actionId": action_id,
+        "tool": "open_item",
+        "fileId": file_id,
+        "name": name,
+        "expiresAtMs": expires_at_ms
+    }))
+}
+
+/// Consume a prepared action exactly once. Declines never touch the file;
+/// acceptance revalidates the indexed identity and directory grant before the
+/// fixed OS default-app opener is called.
+#[tauri::command]
+async fn agent_confirm_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action_id: String,
+    accepted: bool,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可确认本机操作",
+        ));
+    }
+    let state = app.state::<HostState>();
+    let pending = state
+        .pending_agent_actions
+        .lock()
+        .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "操作预览状态不可用"))?
+        .remove(&action_id)
+        .ok_or_else(|| CoreError::new("ACTION_NOT_FOUND", "操作预览已失效或已使用"))?;
+    let receipt = |status: &str, data: serde_json::Value| {
+        serde_json::json!({
+            "actionId": action_id,
+            "tool": "open_item",
+            "status": status,
+            "data": data,
+            "executionAuthorized": false
+        })
+    };
+    if !accepted {
+        return Ok(receipt("declined", serde_json::json!({})));
+    }
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if pending.expires_at_ms <= now_ms {
+        return Ok(receipt("failed", serde_json::json!({})));
+    }
+    let current = state.engine.agent_resolve_open_item(&pending.media_id)?;
+    if current != pending.path {
+        return Ok(receipt("failed", serde_json::json!({})));
+    }
+    let roots = state
+        .sources
+        .lock()
+        .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "来源目录授权状态不可用"))?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    yingxu_core::agent::validate_open_grant(&current, &roots)?;
+    open_in_default_app(&current)?;
+    let receipt_id = format!(
+        "agent-open-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    state.engine.store.audit(
+        "agent_open_item",
+        &pending.media_id,
+        serde_json::json!({"receiptId": receipt_id, "opened": true, "actionId": action_id}),
+    )?;
+    Ok(receipt(
+        "succeeded",
+        serde_json::json!({
+            "mediaId": pending.media_id,
+            "opened": true,
+            "receiptId": receipt_id
+        }),
+    ))
 }
 
 /// Invoke only the operating system's fixed default-app opener. No shell,
@@ -514,7 +683,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             select_directory,
             backend_request,
-            agent_open_item
+            agent_open_item,
+            agent_prepare_action,
+            agent_confirm_action
         ])
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
@@ -579,6 +750,7 @@ fn main() {
                 worker: Mutex::new(Some(thread)),
                 sources: Mutex::new(HashSet::new()),
                 targets: Mutex::new(HashSet::new()),
+                pending_agent_actions: Mutex::new(HashMap::new()),
             });
             let open = MenuItem::with_id(app, "open", "打开影序", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出影序", true, None::<&str>)?;
@@ -640,4 +812,26 @@ fn main() {
             request_quit(app.clone());
         }
     });
+}
+
+#[cfg(test)]
+mod agent_action_tests {
+    use super::validate_action_expiry;
+
+    #[test]
+    fn agent_open_preview_must_be_future_and_at_most_five_minutes() {
+        let now = 1_000_000;
+        assert!(validate_action_expiry(now, now + 1).is_ok());
+        assert!(validate_action_expiry(now, now + 5 * 60 * 1000).is_ok());
+        assert_eq!(
+            validate_action_expiry(now, now).unwrap_err().code,
+            "ACTION_EXPIRED"
+        );
+        assert_eq!(
+            validate_action_expiry(now, now + 5 * 60 * 1000 + 1)
+                .unwrap_err()
+                .code,
+            "ACTION_EXPIRED"
+        );
+    }
 }
