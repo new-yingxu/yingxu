@@ -1,0 +1,10 @@
+$ node tests/no-direct-open.mjs
+{
+  "passed": 4,
+  "checks": [
+    "the removed direct-open IPC is not referenced anywhere in src/",
+    "only the agreed agent IPC commands are invoked",
+    "the open action is gated by the confirmation card",
+    "the host confirmation IPC is called with an explicit accepted flag"
+  ]
+}
