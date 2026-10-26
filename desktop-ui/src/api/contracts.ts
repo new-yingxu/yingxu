@@ -85,6 +85,7 @@ export interface AppSettings {
 }
 export type AgentMatch =
   | { kind: "media"; media: MediaFile }
+  | { kind: "local_media"; media: { mediaId: string; name: string; kind: MediaKind; bytes: number; qualityState: "good" | "review" | "unanalyzed" } }
   | { kind: "job"; deviceId: string; jobId: string; name: string; state: string; sequence: number; occurredAt: string; source: "synced_job_snapshot" };
 
 export interface AgentReply {
@@ -96,7 +97,12 @@ export interface AgentReply {
   text: string;
   matches: AgentMatch[];
   proposedAction?: {
-    kind: "rename" | "move" | "upload" | "cleanup";
+    actionId?: string;
+    tool?: string;
+    fileIds?: string[];
+    expiresAt?: string;
+    canConfirm?: boolean;
+    kind: "open" | "rename" | "move" | "upload" | "cleanup";
     label: string;
     target: string;
     objects: string[];
@@ -107,6 +113,19 @@ export interface AuditResult {
   healthy: number;
   issues: { path: string; reason: string; recoverable: boolean }[];
   lastRun: string;
+}
+export interface UnconfiguredModelStatus {
+  configured: false;
+  requiresExplicitConsent: true;
+  executionAuthorized: false;
+}
+export interface ConfiguredModelStatus {
+  configured: true;
+  provider: string;
+  model: string;
+  region: string;
+  requiresExplicitConsent: true;
+  executionAuthorized: false;
 }
 export interface DeliveryPackage {
   id: string;
@@ -184,7 +203,7 @@ export interface DesktopApi {
   };
   agent: {
     ask(text: string): Promise<AgentReply>;
-    confirm(actionId: string, accepted: boolean): Promise<string>;
+    confirm(actionId: string, accepted: boolean): Promise<string | AgentReply>;
   };
   account: {
     devices(): Promise<Device[]>;
@@ -280,9 +299,7 @@ export interface LocalIntegration {
     onNotice?: (message: string) => void,
   ): Promise<() => void>;
 }
-export type ModelStatus =
-  | { configured: false; requiresExplicitConsent: true; executionAuthorized: false }
-  | { configured: true; provider: string; model: string; region: string; requiresExplicitConsent: true; executionAuthorized: false };
+export type ModelStatus = UnconfiguredModelStatus | ConfiguredModelStatus;
 export interface ModelService {
   status(): Promise<ModelStatus>;
   ask(query: string, identity: { sessionId: string; turnId: string }, consent: { explicitConsent: true }): Promise<AgentReply>;

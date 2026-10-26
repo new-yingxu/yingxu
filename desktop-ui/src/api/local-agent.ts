@@ -1,0 +1,307 @@
+import { CloudError } from './cloud'
+import type { AgentMatch, AgentReply, Confirmation, ModelService, ModelStatus, MediaKind } from './contracts'
+
+const CAPABILITIES = ['search_media', 'get_metadata', 'get_backup_job', 'open_item'] as const
+const ALLOWED_ARGUMENTS: Record<string, readonly string[]> = {
+  search_media: ['query', 'kind', 'quality', 'limit'],
+  get_metadata: ['mediaId'],
+  get_backup_job: ['jobId'],
+  open_item: ['mediaId'],
+}
+const MAX_RESPONSE_TOOLS = 2
+const MAX_TURN_TOOLS = 10
+const MAX_MODEL_REQUESTS = 3
+
+type Json = Record<string, unknown>
+export interface LocalTurnRequest {
+  query: string
+  sessionId: string
+  turnId: string
+  useModel: true
+  capabilities: readonly string[]
+  destinationGrantIds: []
+}
+export interface LocalToolRequest {
+  callId: string
+  tool: string
+  arguments: unknown
+  sessionId: string
+  turnId: string
+  scope: 'current_desktop_device'
+  expiresAt: string
+  executionAuthorized: false
+  requiresLocalConfirmation: boolean
+}
+export interface LocalToolResult {
+  callId: string
+  tool: string
+  status: 'succeeded' | 'failed' | 'declined'
+  data: Json
+}
+export interface LocalTurnResponse {
+  status: 'awaiting_local_tools' | 'awaiting_local_confirmation' | 'completed'
+  sessionId: string
+  turnId: string
+  query: string
+  orchestrator: 'langgraph'
+  executionAuthorized: false
+  filesChanged: false
+  modelRequests: number
+  localToolRequests?: LocalToolRequest[]
+  continuationToken?: string
+  response?: {
+    answer: string
+    matches: unknown[]
+    model: string
+    provider: string
+    usage?: unknown
+    executionAuthorized: false
+    filesChanged: false
+  }
+  proposal?: {
+    actionId: string
+    tool: string
+    fileIds: string[]
+    requestedName?: string
+    destinationGrantId?: string
+    expiresAt: string
+  }
+}
+export interface LocalAgentTransport {
+  /** Native IPC keeps the sidecar bearer token inside the Rust host. */
+  status(): Promise<ModelStatus>
+  startTurn(request: LocalTurnRequest): Promise<LocalTurnResponse>
+  submitResults(sessionId: string, turnId: string, request: {
+    continuationToken: string
+    results: LocalToolResult[]
+    useModel: true
+  }): Promise<LocalTurnResponse>
+}
+export interface LocalOpenPlan {
+  actionId: string
+  tool: 'open_item'
+  fileId: string
+  name: string
+  expiresAt: string
+}
+export interface LocalActionReceipt {
+  actionId: string
+  tool: 'open_item'
+  status: 'succeeded' | 'declined' | 'failed'
+  data: Json
+  executionAuthorized: false
+}
+
+function object(value: unknown): Json {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 响应结构无效', 0, false)
+  return value as Json
+}
+function exactKeys(row: Json, allowed: readonly string[], label: string): void {
+  if (Object.keys(row).some(key => !allowed.includes(key))) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', `${label}包含未允许的字段`, 0, false)
+}
+function nonEmpty(value: unknown, label: string, max = 160): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > max) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', `${label}无效`, 0, false)
+  return value
+}
+function parseMatches(value: unknown): AgentMatch[] {
+  if (!Array.isArray(value) || value.length > 10) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 匹配列表无效', 0, false)
+  return value.map(raw => {
+    const item = object(raw)
+    if (item.kind !== 'local_media') throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 只允许返回本机影像结果', 0, false)
+    const media = object(item.media)
+    exactKeys(media, ['mediaId', 'name', 'kind', 'bytes', 'qualityState'], '影像摘要')
+    if (!['photo', 'video', 'other'].includes(String(media.kind)) || !['good', 'review', 'unanalyzed'].includes(String(media.qualityState)) || !Number.isSafeInteger(media.bytes) || (media.bytes as number) < 0) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机影像摘要字段无效', 0, false)
+    return { kind: 'local_media', media: { mediaId: nonEmpty(media.mediaId, '素材编号'), name: nonEmpty(media.name, '素材名称', 500), kind: media.kind as MediaKind, bytes: media.bytes as number, qualityState: media.qualityState as 'good' | 'review' | 'unanalyzed' } }
+  })
+}
+function parseTurn(value: unknown, sessionId: string, turnId: string): LocalTurnResponse {
+  const row = object(value)
+  if (row.sessionId !== sessionId || row.turnId !== turnId || row.orchestrator !== 'langgraph' || row.executionAuthorized !== false || row.filesChanged !== false || !Number.isSafeInteger(row.modelRequests) || (row.modelRequests as number) < 1 || (row.modelRequests as number) > MAX_MODEL_REQUESTS) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 轮次边界或标识无效', 0, false)
+  if (!['awaiting_local_tools', 'awaiting_local_confirmation', 'completed'].includes(String(row.status))) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 返回了未知状态', 0, false)
+  return row as unknown as LocalTurnResponse
+}
+function parseContinuation(value: unknown, previous: LocalTurnResponse): LocalTurnResponse {
+  const next = parseTurn(value, previous.sessionId, previous.turnId)
+  if (next.modelRequests !== previous.modelRequests + 1) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 续交没有按轮次递增模型请求计数', 0, false)
+  return next
+}
+function parseArguments(tool: string, raw: unknown): Json {
+  const args = object(raw)
+  const allowed = ALLOWED_ARGUMENTS[tool]
+  if (!allowed) throw new CloudError('AGENT_TOOL_NOT_ALLOWED', '本机 Agent 请求了未允许的工具', 0, false)
+  exactKeys(args, allowed, '工具参数')
+  if (tool === 'search_media') {
+    if (typeof args.query !== 'string' || !args.query.trim() || args.query.length > 500) throw new CloudError('INVALID_AGENT_TOOL_ARGS', '搜索条件无效', 0, false)
+    if (args.kind !== undefined && !['all', 'photo', 'video', 'other'].includes(String(args.kind))) throw new CloudError('INVALID_AGENT_TOOL_ARGS', '素材类型无效', 0, false)
+    if (args.quality !== undefined && !['all', 'good', 'review', 'unanalyzed'].includes(String(args.quality))) throw new CloudError('INVALID_AGENT_TOOL_ARGS', '质量筛选无效', 0, false)
+    if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > 10)) throw new CloudError('INVALID_AGENT_TOOL_ARGS', '结果数量需为 1 至 10', 0, false)
+  } else if (tool === 'get_metadata' || tool === 'open_item') nonEmpty(args.mediaId, '素材编号')
+  else nonEmpty(args.jobId, '任务编号')
+  return args
+}
+function pathlessToolData(tool: string, raw: unknown): Json {
+  const envelope = object(raw)
+  if (envelope.executionAuthorized !== false) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机工具返回了未授权执行状态', 0, false)
+  if (tool === 'search_media') {
+    exactKeys(envelope, ['tool', 'scope', 'query', 'matches', 'truncated', 'executionAuthorized'], '素材搜索结果')
+    if (envelope.tool !== tool || envelope.scope !== 'current_device' || typeof envelope.truncated !== 'boolean' || !Array.isArray(envelope.matches) || envelope.matches.length > 10) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机素材搜索结果无效', 0, false)
+    return { query: nonEmpty(envelope.query, '查询条件', 500), truncated: envelope.truncated, matches: parseMatches(envelope.matches.map(media => ({ kind: 'local_media', media }))).map(match => match.kind === 'local_media' ? match.media : null) }
+  }
+  if (tool === 'get_metadata') {
+    exactKeys(envelope, ['tool', 'scope', 'media', 'executionAuthorized'], '元数据结果')
+    const media = object(envelope.media)
+    exactKeys(media, ['mediaId', 'name', 'kind', 'bytes', 'qualityState', 'metadata'], '影像元数据')
+    const metadata = object(media.metadata)
+    exactKeys(metadata, ['width', 'height', 'durationMs'], '脱敏元数据')
+    if (envelope.tool !== tool || envelope.scope !== 'current_device') throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机元数据结果无效', 0, false)
+    return { media: { mediaId: nonEmpty(media.mediaId, '素材编号'), name: nonEmpty(media.name, '素材名称', 500), kind: media.kind, bytes: media.bytes, qualityState: media.qualityState, metadata } }
+  }
+  if (tool === 'get_backup_job') {
+    exactKeys(envelope, ['tool', 'scope', 'job', 'executionAuthorized'], '任务结果')
+    const job = object(envelope.job)
+    exactKeys(job, ['jobId', 'name', 'kind', 'state', 'phase', 'createdAt', 'files', 'totalBytes', 'progress', 'verify', 'targets'], '脱敏任务摘要')
+    if (envelope.tool !== tool || envelope.scope !== 'current_device' || !Array.isArray(job.targets) || job.targets.length > 10) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机任务结果无效', 0, false)
+    const targets = job.targets.map(rawTarget => { const target = object(rawTarget); exactKeys(target, ['state', 'copied', 'skipped', 'verified', 'failed'], '目的地任务摘要'); return target })
+    return { job: { ...job, targets } }
+  }
+  throw new CloudError('AGENT_TOOL_NOT_ALLOWED', '本机 Agent 结果不属于只读工具', 0, false)
+}
+function responseReply(response: LocalTurnResponse): AgentReply {
+  const row = object(response.response)
+  if (typeof row.answer !== 'string' || row.answer.length > 8000 || typeof row.model !== 'string' || !row.model.trim() || typeof row.provider !== 'string' || !row.provider.trim() || row.executionAuthorized !== false || row.filesChanged !== false) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 回答无效', 0, false)
+  const matches = parseMatches(row.matches)
+  return { text: row.answer, matches, orchestrator: 'langgraph', provider: row.provider, model: row.model, historySync: 'not_synced' }
+}
+
+export function createLocalAgentService(options: {
+  transport: LocalAgentTransport
+  executeTool: (tool: string, args: Json) => Promise<unknown>
+  prepareOpen: (actionId: string, fileId: string, expiresAt: string) => Promise<LocalOpenPlan>
+  confirmOpen: (actionId: string, accepted: boolean) => Promise<LocalActionReceipt>
+  confirmModelUse: (value: Confirmation) => Promise<boolean>
+  now?: () => number
+}) {
+  const now = options.now ?? Date.now
+  const attempted = new Set<string>()
+  const pending = new Map<string, { request: LocalToolRequest; plan: LocalOpenPlan; query: string; sessionId: string; turnId: string; continuationToken: string; priorResults: LocalToolResult[]; toolsUsed: number; modelRequests: number }>()
+
+  async function status(): Promise<ModelStatus> {
+    const value = await options.transport.status()
+    if (value.requiresExplicitConsent !== true || value.executionAuthorized !== false) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机模型状态缺少逐次确认边界', 0, false)
+    if (value.configured && (value.provider !== 'ollama' || value.region !== 'local')) throw new CloudError('LOCAL_PROVIDER_NOT_ALLOWED', '桌面 Agent 当前只允许使用本机 Ollama，不会切换到远端模型', 0, false)
+    return value
+  }
+
+  async function run(query: string, identity: { sessionId: string; turnId: string }, alreadyConsented: boolean, toolsUsed = 0): Promise<AgentReply> {
+    if (!query.trim() || query.length > 500) throw new CloudError('INVALID_QUERY', '请输入 1 至 500 字的查询', 0, false)
+    const sessionId = nonEmpty(identity.sessionId, '会话编号')
+    const turnId = nonEmpty(identity.turnId, '轮次编号')
+    const key = JSON.stringify([sessionId, turnId])
+    if (attempted.has(key)) throw new CloudError('MODEL_REQUEST_ALREADY_SENT', '本轮已提交，不能重复派发', 0, false)
+    const configured = await status()
+    if (!configured.configured) throw new CloudError('LOCAL_AGENT_UNAVAILABLE', '本机 Agent 或 Ollama 模型不可用；不会切换到云端', 0, false)
+    if (!alreadyConsented && !(await options.confirmModelUse({ title: '确认在本机运行 Agent', description: '本次查询只交给本机 LangGraph Agent 与本机 Ollama。云端不接收查询；照片内容、完整路径和 GPS 不会发送。本轮最多 3 次模型请求、10 条本地摘要。', rows: [{ label: '本机模型', value: configured.model }, { label: '查询', value: query.trim() }, { label: '本地工具', value: '影像检索、脱敏元数据、备份任务；打开素材需另行确认' }], confirmLabel: '确认本机运行' }))) throw new CloudError('USER_CANCELLED', '已取消，本机 Agent 未收到查询', 0, false)
+    const current = await status()
+    if (!current.configured) throw new CloudError('LOCAL_AGENT_UNAVAILABLE', '本机 Agent 或 Ollama 模型已不可用；本轮未发送', 0, false)
+    if (current.provider !== configured.provider || current.model !== configured.model || current.region !== configured.region) throw new CloudError('MODEL_CONFIGURATION_CHANGED', '本机模型配置在确认期间发生变化；本轮未发送，请重新核对', 0, false)
+    attempted.add(key)
+    const request: LocalTurnRequest = { query: query.trim(), sessionId, turnId, useModel: true, capabilities: CAPABILITIES, destinationGrantIds: [] }
+    const first = parseTurn(await options.transport.startTurn(request), sessionId, turnId)
+    return processResponse(first, query.trim(), toolsUsed)
+  }
+
+  async function processResponse(response: LocalTurnResponse, query: string, toolsUsed: number): Promise<AgentReply> {
+    if (response.status === 'completed') return responseReply(response)
+    if (response.status === 'awaiting_local_confirmation') {
+      const proposal = object(response.proposal)
+      exactKeys(proposal, ['actionId', 'tool', 'fileIds', 'requestedName', 'destinationGrantId', 'expiresAt'], '本机操作提议')
+      if (proposal.destinationGrantId !== undefined) throw new CloudError('AGENT_TOOL_NOT_ALLOWED', '当前本机 Agent 不接受目标目录授权提议', 0, false)
+      if (proposal.tool !== 'open_item' || !Array.isArray(proposal.fileIds) || proposal.fileIds.length !== 1 || typeof proposal.expiresAt !== 'string') {
+        const reply = responseReply(response)
+        return { ...reply, text: `${reply.text}\n此操作当前没有可用的本机执行桥，尚未执行。` }
+      }
+      const actionId = nonEmpty(proposal.actionId, '操作编号')
+      const fileId = nonEmpty(proposal.fileIds[0], '素材编号')
+      const plan = await options.prepareOpen(actionId, fileId, proposal.expiresAt)
+      const expires = Date.parse(plan.expiresAt)
+      if (plan.actionId !== actionId || plan.tool !== 'open_item' || plan.fileId !== fileId) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机打开计划与提议素材不一致', 0, false)
+      nonEmpty(plan.name, '素材名称', 500)
+      if (!Number.isFinite(expires) || expires <= now()) throw new CloudError('ACTION_EXPIRED', '本机打开提议已过期，请重新查询', 0, false)
+      pending.set(actionId, { request: { callId: actionId, tool: 'open_item', arguments: { mediaId: fileId }, sessionId: response.sessionId, turnId: response.turnId, scope: 'current_desktop_device', expiresAt: plan.expiresAt, executionAuthorized: false, requiresLocalConfirmation: true }, plan, query, sessionId: response.sessionId, turnId: response.turnId, continuationToken: '', priorResults: [], toolsUsed, modelRequests: response.modelRequests })
+      const reply = responseReply(response)
+      return { ...reply, proposedAction: { actionId, tool: 'open_item', fileIds: [fileId], expiresAt: plan.expiresAt, kind: 'open', label: plan.name, target: '本机默认应用', objects: [plan.name] } }
+    }
+    if (response.status !== 'awaiting_local_tools' || !response.continuationToken || !Array.isArray(response.localToolRequests) || response.localToolRequests.length < 1 || response.localToolRequests.length > MAX_RESPONSE_TOOLS || response.modelRequests < 1 || response.modelRequests >= MAX_MODEL_REQUESTS) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机工具续交状态无效或模型请求预算不足', 0, false)
+    const continuationToken = nonEmpty(response.continuationToken, '续交令牌', 4096)
+    const reads: LocalToolResult[] = []
+    const openRequests: LocalToolRequest[] = []
+    const callIds = new Set<string>()
+    if (toolsUsed + response.localToolRequests.length > MAX_TURN_TOOLS) throw new CloudError('LOCAL_TOOL_LIMIT', '本轮达到 10 次本机工具调用上限', 0, true)
+    for (const rawRequest of response.localToolRequests) {
+      const req = object(rawRequest) as unknown as LocalToolRequest
+      exactKeys(req as unknown as Json, ['callId', 'tool', 'arguments', 'sessionId', 'turnId', 'scope', 'expiresAt', 'executionAuthorized', 'requiresLocalConfirmation'], '本机工具请求')
+      const callId = nonEmpty(req.callId, '工具调用编号')
+      if (callIds.has(callId)) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机工具请求包含重复编号', 0, false)
+      callIds.add(callId)
+      if (req.sessionId !== response.sessionId || req.turnId !== response.turnId || req.scope !== 'current_desktop_device' || req.executionAuthorized !== false || typeof req.requiresLocalConfirmation !== 'boolean' || typeof req.expiresAt !== 'string' || !Number.isFinite(Date.parse(req.expiresAt)) || Date.parse(req.expiresAt) <= now()) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机工具请求的轮次、范围或有效期无效', 0, false)
+      const args = parseArguments(req.tool, req.arguments)
+      if (req.tool === 'open_item') {
+        if (!req.requiresLocalConfirmation) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '打开素材必须要求本机明确确认', 0, false)
+        openRequests.push(req)
+      } else {
+        if (req.requiresLocalConfirmation) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '当前只读工具不使用写操作确认协议', 0, false)
+        try { reads.push({ callId, tool: req.tool, status: 'succeeded', data: pathlessToolData(req.tool, await options.executeTool(req.tool, args)) }) }
+        catch { reads.push({ callId, tool: req.tool, status: 'failed', data: {} }) }
+      }
+    }
+    if (toolsUsed + reads.length + openRequests.length > MAX_TURN_TOOLS) throw new CloudError('LOCAL_TOOL_LIMIT', '本轮达到 10 次本机工具调用上限', 0, true)
+    if (openRequests.length > 1) throw new CloudError('MULTIPLE_PENDING_ACTIONS', '每轮只允许确认一个打开素材请求', 0, false)
+    if (openRequests.length) {
+      const req = openRequests[0]
+      const args = parseArguments('open_item', req.arguments)
+      const actionId = nonEmpty(req.callId, '工具调用编号')
+      const fileId = nonEmpty(args.mediaId, '素材编号')
+      const plan = await options.prepareOpen(actionId, fileId, req.expiresAt)
+      const expires = Date.parse(plan.expiresAt)
+      if (plan.actionId !== actionId || plan.tool !== 'open_item' || plan.fileId !== fileId) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机打开计划与工具请求素材不一致', 0, false)
+      nonEmpty(plan.name, '素材名称', 500)
+      if (!Number.isFinite(expires) || expires <= now()) throw new CloudError('ACTION_EXPIRED', '本机打开提议已过期，请重新查询', 0, false)
+      pending.set(actionId, { request: req, plan, query, sessionId: response.sessionId, turnId: response.turnId, continuationToken, priorResults: reads, toolsUsed: toolsUsed + reads.length, modelRequests: response.modelRequests })
+      const text = response.response?.answer || `找到“${plan.name}”。请确认后才会通过本机默认应用打开。`
+      const replyFields = response.response ? responseReply(response) : null
+      return { text, matches: replyFields?.matches ?? [], orchestrator: 'langgraph', provider: replyFields?.provider ?? 'ollama', ...(replyFields?.model ? { model: replyFields.model } : {}), historySync: 'not_synced', proposedAction: { actionId, tool: 'open_item', fileIds: [fileId], expiresAt: plan.expiresAt, kind: 'open', label: plan.name, target: '本机默认应用', objects: [plan.name] } }
+    }
+    const results: LocalToolResult[] = [...reads]
+    if (toolsUsed + results.length > MAX_TURN_TOOLS) throw new CloudError('LOCAL_TOOL_LIMIT', '本轮达到 10 次本机工具调用上限', 0, true)
+    const next = parseContinuation(await options.transport.submitResults(response.sessionId, response.turnId, { continuationToken, results, useModel: true }), response)
+    return processResponse(next, query, toolsUsed + results.length)
+  }
+
+  const model: ModelService = { status, ask: (query, identity, consent) => run(query, identity, consent.explicitConsent) }
+  return {
+    model,
+    ask: (query: string) => run(query, { sessionId: crypto.randomUUID(), turnId: crypto.randomUUID() }, false),
+    async confirm(actionId: string, accepted: boolean): Promise<string | AgentReply> {
+      const context = pending.get(actionId)
+      if (!context) throw new CloudError('ACTION_EXPIRED', '本机操作提议不存在或已处理，请重新查询', 0, false)
+      pending.delete(actionId)
+      if (Date.parse(context.plan.expiresAt) <= now()) throw new CloudError('ACTION_EXPIRED', '本机操作提议已过期，请重新查询', 0, false)
+      const receipt = await options.confirmOpen(actionId, accepted)
+      if (receipt.actionId !== actionId || receipt.tool !== 'open_item' || receipt.executionAuthorized !== false) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机操作回执无效', 0, false)
+      if (!['succeeded', 'declined', 'failed'].includes(receipt.status)) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机操作回执状态无效', 0, false)
+      if (receipt.status === 'succeeded') {
+        exactKeys(receipt.data, ['mediaId', 'opened', 'receiptId'], '打开素材回执')
+        if (receipt.data.mediaId !== context.plan.fileId || receipt.data.opened !== true) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机打开素材回执与计划不一致', 0, false)
+        nonEmpty(receipt.data.receiptId, '操作回执编号')
+      } else if (Object.keys(receipt.data).length) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '未成功的本机操作回执不能包含结果数据', 0, false)
+      if (!context.continuationToken) return receipt.status === 'succeeded'
+        ? `已通过本机默认应用打开 ${context.plan.name}。`
+        : receipt.status === 'declined'
+          ? '已取消本机操作，素材未打开。'
+          : '本机默认应用未能打开该素材；素材未修改。'
+      const result: LocalToolResult = { callId: context.request.callId, tool: 'open_item', status: receipt.status, data: receipt.status === 'succeeded' ? receipt.data : {} }
+      const next = parseContinuation(await options.transport.submitResults(context.sessionId, context.turnId, { continuationToken: context.continuationToken, results: [...context.priorResults, result], useModel: true }), { status: 'awaiting_local_tools', sessionId: context.sessionId, turnId: context.turnId, query: context.query, orchestrator: 'langgraph', executionAuthorized: false, filesChanged: false, modelRequests: context.modelRequests })
+      return processResponse(next, context.query, context.toolsUsed + 1)
+    },
+  }
+}

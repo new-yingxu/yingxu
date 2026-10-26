@@ -18,14 +18,18 @@ async function refresh() {
   busy.value=true;failure.value=null
   try { status.value=await controller.status() } catch(error) { if(mounted)failure.value=modelFailure(error,false) } finally { if(mounted)busy.value=false }
 }
-async function prepare() {
-  if(!controller||busy.value)return
+async function prepare(query=props.query) {
+  if(!controller||busy.value||plan.value||recoveryReview.value)return
   busy.value=true;failure.value=null
   try {
     // A fresh ID is created ONLY by this explicit user action, never in a retry handler.
-    plan.value=await controller.prepare(props.query,{sessionId,turnId:crypto.randomUUID()})
+    plan.value=await controller.prepare(query,{sessionId,turnId:crypto.randomUUID()})
     busy.value=false;await nextTick();cancel.value?.focus()
   }catch(error){if(mounted)failure.value=modelFailure(error,false)}finally{if(mounted)busy.value=false}
+}
+async function submit(query:string) {
+  if(!query.trim())return
+  await prepare(query.trim())
 }
 async function confirm(accepted:boolean) {
   if(!controller||!plan.value||busy.value)return
@@ -62,21 +66,22 @@ function keyboard(event:KeyboardEvent){
 }
 onMounted(()=>void refresh())
 onUnmounted(()=>{mounted=false;controller?.stop()})
+defineExpose({submit})
 </script>
 <template>
  <section class="model-consent-panel" aria-label="模型服务状态">
   <div class="model-status-row"><strong>模型服务</strong><span>{{ !controller ? '未连接' : !status ? '状态待确认' : status.configured ? `${status.provider === 'ollama' && status.region === 'local' ? '本机 Ollama' : status.provider} · ${status.model} · ${status.region}` : '模型未配置' }}</span><button class="text-button" :disabled="!controller||busy" @click="refresh">刷新状态</button></div>
-  <p v-if="status?.configured && status.provider === 'ollama' && status.region === 'local'">每次使用前确认本次查询及最多 10 条任务摘要；本轮最多 3 次模型请求。请求发送到本机 Ollama，不连接云端模型供应商。</p>
-  <p v-else>每次使用前确认本次查询及最多 10 条任务摘要的发送范围。本轮最多 3 次模型请求；供应商可能按实际模型调用计费。密钥由受控服务保管。</p>
-  <button ref="review" class="secondary-button compact" :disabled="!controller||!status?.configured||busy||recoveryRequired||!query.trim()" @click="prepare">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '新建模型轮次并查看发送内容' }}</button>
+  <p v-if="status?.configured">Agent 与 LangGraph 编排运行在本机，Ollama 只通过本机 sidecar 调用。本轮最多 3 次模型请求、10 条脱敏摘要；不连接 CloudBase 模型接口，也不会静默切换云端。</p>
+  <p v-else>本机 Agent 或 Ollama 模型当前不可用。请先安装并启动本机运行时；本应用不会自动下载模型或改用云端服务。</p>
+  <button ref="review" class="secondary-button compact" :disabled="!controller||!status?.configured||busy||recoveryRequired||!query.trim()" @click="prepare()">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '新建模型轮次并查看发送内容' }}</button>
   <button v-if="recoveryAvailable" class="secondary-button compact" :disabled="busy" @click="openRecovery">{{ busy ? '处理中…' : '查看并恢复本轮' }}</button>
   <p v-if="failure" role="alert" class="model-failure">[{{ failure.code }}] {{ failure.message }}</p>
  </section>
  <div v-if="plan" class="model-consent-overlay" @keydown="keyboard">
   <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="model-consent-title" class="model-consent-dialog">
-   <h2 id="model-consent-title">{{ plan.provider === 'ollama' && plan.region === 'local' ? '确认本次发送到本机 Ollama' : '确认本次发送到模型供应商' }}</h2>
-   <dl><dt>供应商 / 模型 / 区域</dt><dd>{{ plan.provider === 'ollama' && plan.region === 'local' ? '本机 Ollama' : plan.provider }} / {{ plan.model }} / {{ plan.region }}</dd><dt>数据目的地</dt><dd>{{ plan.provider === 'ollama' && plan.region === 'local' ? '本机 127.0.0.1:11434' : '受控模型供应商' }}</dd><dt>本次查询</dt><dd class="model-query">{{ plan.query }}</dd><dt>附带数据与调用上限</dt><dd>最多 10 条已同步任务摘要（任务名称、编号、状态及时间）。本轮最多 3 次模型请求。不附带照片、文件路径或 GPS 字段；请核对本次输入内容。</dd><dt>发送与权限</dt><dd>{{ plan.provider === 'ollama' && plan.region === 'local' ? '请求只发送到本机 Ollama，不连接云端模型供应商；本机服务仍可能按本轮最多 3 次请求执行。' : '供应商可能按实际模型调用次数计费，本轮最多 3 次模型请求。' }}只读工具仅查询任务摘要，不获得文件执行权限；回答不授权文件操作。失败或结果不确定时不自动重发。</dd></dl>
-   <div class="model-consent-actions"><button ref="cancel" class="secondary-button" :disabled="busy" @click="confirm(false)">取消，不发送</button><button class="primary-button" :disabled="busy" @click="confirm(true)">{{ busy ? '等待本轮结果…' : plan.provider === 'ollama' && plan.region === 'local' ? '确认发送到本机' : '确认本次发送' }}</button></div>
+   <h2 id="model-consent-title">确认在本机运行 Agent</h2>
+   <dl><dt>Agent / 模型</dt><dd>本机 LangGraph / {{ plan.model }} ({{ plan.provider }})</dd><dt>数据目的地</dt><dd>本机 sidecar 与本机 Ollama；不连接云端 Agent</dd><dt>本次查询</dt><dd class="model-query">{{ plan.query }}</dd><dt>本机工具与调用上限</dt><dd>最多 3 次模型请求、10 条脱敏查询摘要。不发送照片内容、完整路径或 GPS。素材打开会单独显示文件名并再次确认。</dd><dt>权限</dt><dd>本轮仅允许本机索引素材、脱敏元数据和备份任务查询。文件打开由桌面本机授权检查；不授权改名、移动、删除或上传。取消、超时和失败不会静默重发或切换云端。</dd></dl>
+   <div class="model-consent-actions"><button ref="cancel" class="secondary-button" :disabled="busy" @click="confirm(false)">取消，本机不运行</button><button class="primary-button" :disabled="busy" @click="confirm(true)">{{ busy ? '等待本机结果…' : '确认本机运行' }}</button></div>
   </section>
  </div>
  <div v-if="recoveryReview" class="model-consent-overlay" @keydown="keyboard">

@@ -118,11 +118,7 @@ try {
     api.auth.login("email-code", "fixture@example.invalid", "fixture"),
     (e) => e.code === "CLOUD_ADAPTER_NOT_CONNECTED",
   );
-  await assert.rejects(
-    api.agent.ask("fixture"),
-    (e) => e.code === "CLOUD_ADAPTER_NOT_CONNECTED",
-  );
-  results.push("cloud fails closed");
+  results.push("cloud login fails closed");
   const scan = await api.backup.scan();
   assert.equal(scan.sources[0].files, 3);
   assert.equal(scan.sources[0].path, source);
