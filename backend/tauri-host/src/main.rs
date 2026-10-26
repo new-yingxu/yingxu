@@ -114,6 +114,7 @@ fn check_paths(state: &HostState, request: &Request) -> Result<(), CoreError> {
     let p = &request.params;
     if [
         "backup.scan",
+        "backup.scanReport",
         "backup.preview",
         "transfer.preview",
         "library.index",
@@ -760,7 +761,13 @@ fn main() {
 
 #[cfg(test)]
 mod agent_action_tests {
-    use super::validate_action_expiry;
+    use super::{HostState, check_paths, validate_action_expiry};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+    use yingxu_core::{
+        Engine,
+        api::{PROTOCOL_VERSION, Request},
+    };
 
     #[test]
     fn agent_open_preview_must_be_future_and_at_most_five_minutes() {
@@ -777,5 +784,49 @@ mod agent_action_tests {
                 .code,
             "ACTION_EXPIRED"
         );
+    }
+
+    #[test]
+    fn scan_report_requires_a_granted_source_directory() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "yingxu-host-scan-report-scope-{}",
+                std::process::id()
+            ));
+        let app_data = root.join("app-data");
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        let engine = Engine::open(&app_data).unwrap();
+        let state = HostState {
+            engine,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            worker_ready: Arc::new(AtomicBool::new(false)),
+            worker: Mutex::new(None),
+            sources: Mutex::new(HashSet::new()),
+            targets: Mutex::new(HashSet::new()),
+            pending_agent_actions: Mutex::new(HashMap::new()),
+        };
+        let request = Request {
+            request_id: "scope-test".to_string(),
+            version: PROTOCOL_VERSION,
+            method: "backup.scanReport".to_string(),
+            params: serde_json::json!({"source": source}),
+        };
+        assert_eq!(
+            check_paths(&state, &request).unwrap_err().code,
+            "DIRECTORY_GRANT_REQUIRED"
+        );
+        state
+            .sources
+            .lock()
+            .unwrap()
+            .insert(source.canonicalize().unwrap());
+        assert!(check_paths(&state, &request).is_ok());
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
