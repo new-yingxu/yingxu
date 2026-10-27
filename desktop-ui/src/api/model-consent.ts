@@ -51,7 +51,7 @@ export function modelFailure(error: unknown, dispatched = true) {
   const diagnosticCode = typeof record?.diagnosticCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(record.diagnosticCode)
     ? record.diagnosticCode
     : undefined
-  return { code, message: diagnosticCode ? `${message}（本机诊断码：${diagnosticCode}）` : message, automaticRetryAllowed: false as const }
+  return { code, message, diagnosticCode, automaticRetryAllowed: false as const }
 }
 /** Ephemeral consent state only. Real identity bridge must bind service to one owner and
  * supply durable model-attempt records before production enablement. Never save secrets here.

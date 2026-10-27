@@ -138,7 +138,7 @@ const completed = (sessionId, turnId, answer = "已找到素材") => ({
   assert.equal(reply.matches[0].kind, "local_media");
   assert.deepEqual(calls.find((c) => c.type === "results").request.results[0], {
     callId: "call-1", tool: "search_media", status: "succeeded",
-    data: { query: "海边", truncated: false, matches: toolData.matches },
+    data: { truncated: false, matches: toolData.matches },
   });
   assert.equal(JSON.stringify(calls).includes("path"), false);
 }
@@ -175,7 +175,8 @@ const completed = (sessionId, turnId, answer = "已找到素材") => ({
     const visible = modelFailure(error);
     assert.equal(visible.code, "LOCAL_AGENT_CONTINUATION_UNCONFIRMED");
     assert.match(visible.message, /本机 Agent 工具结果或后续回答未确认返回/);
-    assert.match(visible.message, /LOCAL_AGENT_REQUEST_REJECTED/);
+    assert.equal(visible.message.includes("LOCAL_AGENT_REQUEST_REJECTED"), false);
+    assert.equal(visible.diagnosticCode, "LOCAL_AGENT_REQUEST_REJECTED");
     return true;
   });
 }

@@ -225,7 +225,11 @@ function pathlessToolData(tool: string, raw: unknown): Json {
   if (tool === 'search_media') {
     exactKeys(envelope, ['tool', 'scope', 'query', 'matches', 'truncated', 'executionAuthorized'], '素材搜索结果')
     if (envelope.tool !== tool || envelope.scope !== 'current_device' || typeof envelope.truncated !== 'boolean' || !Array.isArray(envelope.matches) || envelope.matches.length > 10) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机素材搜索结果无效', 0, false)
-    return { query: nonEmpty(envelope.query, '查询条件', 500), truncated: envelope.truncated, matches: parseMatches(envelope.matches.map(media => ({ kind: 'local_media', media }))).map(match => match.kind === 'local_media' ? match.media : null) }
+    // The local service already binds this result to the pending query. Keep
+    // the query out of the continuation payload; the server contract accepts
+    // only the bounded, pathless media summaries and truncation flag.
+    nonEmpty(envelope.query, '查询条件', 500)
+    return { truncated: envelope.truncated, matches: parseMatches(envelope.matches.map(media => ({ kind: 'local_media', media }))).map(match => match.kind === 'local_media' ? match.media : null) }
   }
   if (tool === 'get_metadata') {
     exactKeys(envelope, ['tool', 'scope', 'media', 'executionAuthorized'], '元数据结果')

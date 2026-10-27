@@ -87,7 +87,7 @@ defineExpose({submit})
   <p v-if="statusView.ready">Agent 与 LangGraph 编排运行在本机，Ollama 只通过本机 sidecar 调用。本轮最多 3 次模型请求、10 条脱敏摘要；不连接 CloudBase 模型接口，也不会静默切换云端。</p>
   <button ref="review" class="secondary-button compact" :disabled="!controller||!statusView.ready||busy||recoveryRequired||!query.trim()" @click="prepare()">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '新建模型轮次并查看发送内容' }}</button>
   <button v-if="recoveryAvailable" class="secondary-button compact" :disabled="busy" @click="openRecovery">{{ busy ? '处理中…' : '查看并恢复本轮' }}</button>
-  <p v-if="failure" role="alert" class="model-failure">[{{ failure.code }}] {{ failure.message }}</p>
+  <p v-if="failure" role="alert" class="model-failure">{{ failure.message }}</p>
  </section>
  <div v-if="plan" class="model-consent-overlay" @keydown="keyboard">
   <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="model-consent-title" class="model-consent-dialog">

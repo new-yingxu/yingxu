@@ -184,3 +184,12 @@ native-adapter 本轮新增断言：首页 `limit=2,offset=0` → `items 2 / tot
 - `ModelConsent` 的本机状态查询增加 25 秒上限。超时后显示本机 Agent 检查超时和“模型请求尚未发送”提示，并禁用继续刷新，避免重复调用卡住的 macOS Keychain；不会退回云端。
 - 对永不返回的 mock status 做了定向回归，确认只发起一次读取并以 `LOCAL_AGENT_STATUS_TIMEOUT` 结束；Vue/TypeScript + Vite 构建通过（44 modules），本机 Agent 测试通过，native adapter 18 项通过。证据：`evidence/agent-status-timeout-20261027.json`。
 - 未重启打包 App、未重复触发真实 Keychain；真实 WebView 超时文案仍需在 Tauri App 上观察。此 UI 保护不能取消已经挂起的 Rust `spawn_blocking`，但每个 App 会话不再自动或手动重复触发该读取。
+
+## Codex 续跑：Agent 续交契约与窄屏排版复核（2026-10-27）
+
+- 用户授权在体验环境仅应用 v11–v16；本轮仍未操作云端。CloudBase CLI dry-run 请求 `https://iaas.cloud.tencent.com/tcb_refresh` 超时，停止同原因重试。
+- 真实隔离 Tauri 界面显示本机模型就绪，但续交返回 `LOCAL_AGENT_REQUEST_REJECTED`。只读核对专用 `agent.sqlite`：该轮仅持久化 step 0 `awaiting_tools`、一次模型请求和一个只读 `search_media`；没有 step 1 或文件操作，未重发旧轮。
+- 根因：桌面端 `pathlessToolData(search_media)` 将 `query` 冗余放入续交 `data`；服务端严格 DTO 的 `SearchData` 仅接受 `matches` 与 `truncated`，因此在触发第二次模型请求前以校验错误拒绝。桌面端已改为只发送路径脱敏摘要及截断标志。
+- 用户界面错误提示不再显示括号中的内部 IPC 诊断码；诊断字段仍保留在结构化错误对象供开发排查。保留“不自动重发、不要新建轮次”的安全提示。
+- 验证：`npm run verify:adapter`（Agent 10 项、native adapter 18 项）通过；`npm run build` 通过；后端 `LocalToolResult` 严格 DTO 接受新结构并拒绝含 `query` 的旧结构。浏览器演示窄视口 391 px 截图与 DOM 宽度检查未见横向溢出；打包 Tauri 截图的侧栏和卡片文字未出界，长提示正常换行。
+- 未完成：原轮 continuation state 已过期，不能在不恢复保存令牌的情况下续接；未再次发送模型请求。本机 Agent 的真实 UI 完整问答闭环仍待新一轮逐次确认后验收。截图检查发现无需改 CSS。
