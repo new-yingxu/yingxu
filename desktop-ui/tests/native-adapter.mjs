@@ -116,9 +116,9 @@ try {
   results.push("actual capabilities");
   await assert.rejects(
     api.auth.login("email-code", "fixture@example.invalid", "fixture"),
-    (e) => e.code === "CLOUD_ADAPTER_NOT_CONNECTED",
+    (e) => e.code === "AUTH_NOT_CONFIGURED",
   );
-  results.push("cloud login fails closed");
+  results.push("cloud login fails closed until console configuration is ready");
   const scan = await api.backup.scan();
   assert.equal(scan.sources[0].files, 3);
   assert.equal(scan.sources[0].path, source);
