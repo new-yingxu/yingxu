@@ -14,6 +14,7 @@ import type {
 } from "./contracts";
 import { ACTION_WINDOW_MS, createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
 import { confirmLocalFileAction, prepareLocalFileAction, selectLocalDirectory } from "./local-file-actions";
+import { createNativeCloudBaseAuth } from "./native-cloudbase-auth";
 import { formatBytes, formatTime, mapJob, mapMedia } from "./format";
 import type { RawJob, RawMedia } from "./format";
 export class ApiError extends Error {
@@ -94,6 +95,7 @@ export function createTauriApi(options: Options = {}): AppApi {
   const pendingStarts = new Map<string, { plan: Plan; key: string }>();
   const writeKeys = new Map<string, string>();
   let counter = 0;
+  const cloudAuth = createNativeCloudBaseAuth();
   let lastIndex: IndexResult | null = null;
   const eventListen = options.listen || listen;
   const localAgent = createLocalAgentService({
@@ -363,15 +365,12 @@ export function createTauriApi(options: Options = {}): AppApi {
     },
     model: localAgent.model,
     auth: {
-      restore: () => rpc("auth.restore"),
-      login: () =>
-        Promise.reject(
-          new ApiError(
-            "CLOUD_ADAPTER_NOT_CONNECTED",
-            "真实登录尚未连接，不能创建登录会话",
-          ),
-        ),
-      logout: () => rpc("auth.logout"),
+      configuration: () => cloudAuth.configuration(),
+      sendEmailCode: (email, purpose) => cloudAuth.sendEmailCode(email, purpose),
+      registerEmail: (input) => cloudAuth.registerEmail(input),
+      restore: () => cloudAuth.restore(),
+      login: (method, identifier, proof) => cloudAuth.login(method, identifier, proof),
+      logout: () => cloudAuth.logout(),
     },
     workbench: {
       async snapshot() {

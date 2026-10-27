@@ -169,6 +169,8 @@ const registerPassword = ref("");
 const registerPasswordConfirm = ref("");
 const loginError = ref("");
 const loginBusy = ref(false);
+const emailCodeBusy = ref(false);
+const authConfiguration = computed(() => api.auth.configuration());
 const notice = ref("");
 const showModal = ref("");
 const globalSearchOpen = ref(false);
@@ -622,6 +624,56 @@ async function signIn() {
       loginIdentifier.value,
       loginProof.value,
     );
+    await loadData();
+    page.value = "home";
+  } catch (error) {
+    loginError.value = errorText(error);
+  } finally {
+    loginBusy.value = false;
+  }
+}
+async function sendEmailCode() {
+  loginError.value = "";
+  if (isMock) {
+    loginError.value = "浏览器预览不会发送真实验证码；可使用演示登录查看界面。";
+    return;
+  }
+  if (!authConfiguration.value.emailOtp) {
+    loginError.value = authConfiguration.value.reason;
+    return;
+  }
+  emailCodeBusy.value = true;
+  try {
+    await api.auth.sendEmailCode(loginIdentifier.value, authIntent.value);
+    say("验证码已发送，请检查邮箱。");
+  } catch (error) {
+    loginError.value = errorText(error);
+  } finally {
+    emailCodeBusy.value = false;
+  }
+}
+async function registerAccount() {
+  loginError.value = "";
+  if (isMock) {
+    loginError.value = "浏览器预览不会创建真实账号。";
+    return;
+  }
+  if (!authConfiguration.value.ready) {
+    loginError.value = authConfiguration.value.reason;
+    return;
+  }
+  if (registerPassword.value !== registerPasswordConfirm.value) {
+    loginError.value = "两次输入的密码不一致。";
+    return;
+  }
+  loginBusy.value = true;
+  try {
+    session.value = await api.auth.registerEmail({
+      email: loginIdentifier.value,
+      verificationCode: loginProof.value,
+      username: registerUsername.value,
+      password: registerPassword.value,
+    });
     await loadData();
     page.value = "home";
   } catch (error) {
@@ -1149,7 +1201,9 @@ function taskStateLabel(state: TaskState) {
             autocomplete="one-time-code"
             placeholder="请输入邮箱验证码"
           />
-          <button class="text-button" disabled>发送接口待接入</button>
+          <button class="text-button" :disabled="isMock || !authConfiguration.emailOtp || emailCodeBusy" @click="sendEmailCode">
+            {{ emailCodeBusy ? "发送中…" : authConfiguration.emailOtp ? "获取验证码" : "服务待配置" }}
+          </button>
         </div>
         <label>设置用户名</label>
         <input
@@ -1171,7 +1225,7 @@ function taskStateLabel(state: TaskState) {
           autocomplete="new-password"
           placeholder="请再次输入密码"
         />
-        <p class="login-method-note">邮箱验证码使用 CloudBase 邮件代发；桌面端注册/认证接口尚未接入，此预览不会发送验证码或创建账号。</p>
+        <p class="login-method-note">{{ isMock ? "浏览器预览仅提供演示登录，不会发送真实验证码或创建账号。" : authConfiguration.reason || "使用 CloudBase 邮箱验证后创建账号。" }}</p>
       </div>
       <div v-else class="login-fields">
         <label>
@@ -1210,13 +1264,13 @@ function taskStateLabel(state: TaskState) {
             :inputmode="loginMode === 'email-password' ? undefined : 'numeric'"
             :placeholder="loginMode === 'email-password' ? '请输入密码' : '请输入验证码'"
           />
-          <button v-if="loginMode !== 'email-password'" class="text-button" disabled>
-            {{ loginMode === 'phone-code' ? '暂不开放' : '发送接口待接入' }}
+          <button v-if="loginMode !== 'email-password'" class="text-button" :disabled="loginMode === 'phone-code' || isMock || !authConfiguration.emailOtp || emailCodeBusy" @click="loginMode === 'email-code' && sendEmailCode()">
+            {{ loginMode === 'phone-code' ? '暂不开放' : emailCodeBusy ? '发送中…' : authConfiguration.emailOtp ? '获取验证码' : '服务待配置' }}
           </button>
         </div>
         <p v-if="loginMode === 'phone-code'" class="login-method-note warning">短信暂不开放发送：腾讯大陆短信服务商、已审核签名和模板尚未配置。</p>
-        <p v-else-if="loginMode === 'email-code'" class="login-method-note">邮箱验证码方式采用 CloudBase 邮件代发；桌面端认证接口尚未接入，当前不会发送验证码。</p>
-        <p v-else class="login-method-note">用户名/密码登录；注册账号需先完成邮箱验证。真实认证服务尚未接入。</p>
+        <p v-else-if="loginMode === 'email-code'" class="login-method-note">{{ isMock ? "浏览器预览仅提供演示登录，不会发送真实验证码。" : authConfiguration.reason || "邮箱验证码通过 CloudBase 验证。" }}</p>
+        <p v-else class="login-method-note">{{ isMock ? "浏览器预览为演示账号；注册需先验证邮箱。" : authConfiguration.reason || "使用已验证邮箱注册的用户名和密码登录。" }}</p>
         <div v-if="loginMode === 'email-code'" class="form-foot">
           <button class="text-button" @click="loginMode = 'email-password'">使用用户名/密码</button>
           <button class="text-button" @click="authIntent = 'register'; loginProof = ''; loginError = ''">注册账号</button>
@@ -1230,24 +1284,24 @@ function taskStateLabel(state: TaskState) {
       <p v-if="props.testTransport" class="integration-banner">
         {{ props.testTransport }}
       </p>
-      <p v-if="!isMock" class="error-note">真实登录与注册接口尚未连接；当前不会创建账号或建立登录会话。</p>
+      <p v-if="!isMock && !authConfiguration.ready" class="error-note">{{ authConfiguration.reason }} 当前不会尝试登录或创建账号。</p>
       <button
         v-if="authIntent === 'login'"
         class="primary-button login-submit"
         @click="signIn"
-        :disabled="loginBusy || !isMock || loginMode === 'phone-code'"
+        :disabled="loginBusy || (!isMock && !authConfiguration.ready) || loginMode === 'phone-code'"
       >
         {{
-          !isMock
-            ? "真实登录尚未接入"
+          !isMock && !authConfiguration.ready
+            ? "认证服务待配置"
             : loginBusy
               ? "正在登录…"
-              : "登录影序（演示）"
+              : isMock ? "登录影序（演示）" : "登录影序"
         }}
       </button>
       <div v-else class="form-foot register-actions">
         <button class="secondary-button" @click="authIntent = 'login'; loginMode = 'email-code'; loginError = ''">返回登录</button>
-        <button class="primary-button" disabled>注册服务待接入</button>
+        <button class="primary-button" :disabled="loginBusy || isMock || !authConfiguration.ready" @click="registerAccount">{{ loginBusy ? "正在创建…" : isMock ? "演示模式不可注册" : authConfiguration.ready ? "验证并创建账号" : "注册服务待配置" }}</button>
       </div>
       <p v-if="canEnterLocalWorkspace" class="local-mode-note">
         本机模式无需登录，照片、任务和 Agent 留在此设备；账号、云同步与网盘功能将停用。
@@ -2575,15 +2629,15 @@ function taskStateLabel(state: TaskState) {
             />
           </template>
 
-          <template v-else-if="page === 'account' && !isMock"
+          <template v-else-if="page === 'account' && !isMock && !session"
             ><PageHeading
               eyebrow="云端未登录"
               title="账号与设备"
-              description="身份、设备注册和同步尚未连接。不会展示演示账号或伪造在线状态。"
+              description="CloudBase 账号尚未登录。登录成功后可查看当前账号和设备；跨设备管理接口仍待接入。"
             />
             <section class="panel">
               <p class="integration-banner">
-                本地联调工作区不是登录会话。请等待真实认证服务接入后使用账号与设备功能。
+                当前没有 CloudBase 账号会话。请先退出本机模式并完成邮箱或用户名密码登录。
               </p>
               <button class="secondary-button" @click="setPage('settings')">
                 查看本机偏好设置
@@ -2591,7 +2645,7 @@ function taskStateLabel(state: TaskState) {
             </section></template
           ><template v-else-if="page === 'account'"
             ><p v-if="!isMock" class="integration-banner">
-              云端身份和设备同步未连接；开关仅保存本机偏好，不代表云端已同步。
+              CloudBase 登录和桌面短会话已接入；跨设备设备管理与同步 API 仍待接入，偏好开关仅保存在本机。
             </p>
             <PageHeading
               eyebrow="个人账号与设备"
@@ -2606,7 +2660,7 @@ function taskStateLabel(state: TaskState) {
                   }}</span>
                   <div>
                     <h3>{{ displayName }}</h3>
-                    <p>{{ displayEmail }} · 已登录演示账号</p>
+                    <p>{{ displayEmail }} · {{ isMock ? "已登录演示账号" : "CloudBase 账号已登录" }}</p>
                   </div>
                   <span class="state-pill success">本机在线</span>
                 </div>
@@ -2621,14 +2675,14 @@ function taskStateLabel(state: TaskState) {
                   ><span
                     ><b>邮箱验证码</b
                     ><small
-                      >CloudBase 邮件代发 · 桌面认证接口待接入</small
+                      >CloudBase 邮箱验证码{{ authConfiguration.emailOtp ? " · 已开放" : " · 控制台配置待完成" }}</small
                     ></span
-                  ><button class="secondary-button compact" disabled>待接入</button>
+                  ><button class="secondary-button compact" disabled>{{ authConfiguration.emailOtp ? "已启用" : "待配置" }}</button>
                 </div>
                 <div class="provider-row">
                   <span class="method-icon">密</span>
-                  <span><b>用户名/密码</b><small>注册需先验证邮箱 · 真实认证服务待接入</small></span>
-                  <button class="secondary-button compact" disabled>待接入</button>
+                  <span><b>用户名/密码</b><small>注册需先验证邮箱 · CloudBase Authentication v2</small></span>
+                  <button class="secondary-button compact" disabled>{{ authConfiguration.usernamePassword ? "已启用" : "待配置" }}</button>
                 </div>
                 <button class="danger-button" @click="logout">
                   退出当前账号

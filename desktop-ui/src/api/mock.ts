@@ -86,6 +86,9 @@ export function createMockApi(): DesktopApi {
       async listQuarantine() { await delay(40); return demoQuarantine.map((item) => ({ ...item })) },
     },
     auth: {
+      configuration() { return { ready: false, emailOtp: false, usernamePassword: false, reason: "浏览器预览不会连接 CloudBase 或发送真实验证码。" } },
+      async sendEmailCode() { throw new Error("浏览器预览不会发送真实邮箱验证码。") },
+      async registerEmail() { throw new Error("浏览器预览不会创建真实账号。") },
       async restore() { await delay(80); return lastSession },
       async login(method, identifier) {
         await delay(260)

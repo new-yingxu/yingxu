@@ -7,9 +7,11 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "verify:adapter": "vite build --ssr src/api/tauri.ts --outDir evidence/adapter-module && vite build --ssr src/api/local-agent.ts --outDir evidence/local-agent-module && vite build --ssr src/api/local-file-actions.ts --outDir evidence/local-file-actions-module && node tests/local-agent.mjs && node tests/native-adapter.mjs && node tests/local-file-actions.mjs"
+    "verify:adapter": "vite build --ssr src/api/tauri.ts --outDir evidence/adapter-module && vite build --ssr src/api/local-agent.ts --outDir evidence/local-agent-module && vite build --ssr src/api/local-file-actions.ts --outDir evidence/local-file-actions-module && node tests/local-agent.mjs && node tests/native-adapter.mjs && node tests/local-file-actions.mjs",
+    "verify:cloudbase-auth": "vite build --ssr src/api/cloudbase-auth.ts --outDir evidence/cloudbase-auth-module && vite build --ssr src/api/cloud-identity.ts --outDir evidence/cloud-identity-module && node tests/cloudbase-auth.mjs"
   },
   "dependencies": {
+    "@cloudbase/js-sdk": "2.32.0",
     "@tauri-apps/api": "^2.12.4",
     "@vitejs/plugin-vue": "latest",
     "vite": "latest",
