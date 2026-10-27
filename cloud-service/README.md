@@ -2,7 +2,7 @@
 
 ## 当前云端进度（2026-10-27）
 
-`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；云函数尚未部署。用户确认首期先做邮箱 + 微信登录，短信延期：当前个人认证账号没有可用大陆企业主体，不能办理腾讯云国内短信个人自用资质。CloudBase 邮箱代发、微信开放平台网站应用、client_id 映射、服务端 Secrets、HTTPS CORS 和正式函数运行配置均待完成。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态是当时记录，不覆盖本节当前状态。
+`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；云函数尚未部署。用户确认首期先做邮箱 + 微信登录，短信延期：当前个人认证账号没有可用大陆企业主体，不能办理腾讯云国内短信个人自用资质。CloudBase 邮箱代发、微信开放平台网站应用、client_id 映射、服务端 Secrets、HTTPS CORS 和正式函数运行配置均待完成。桌面端当前仍使用 mock auth，CloudBase SDK 登录及微信回调/账号绑定尚未接线。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态是当时记录，不覆盖本节当前状态。
 
 FastAPI 服务的目录所有权属于云端 Agent 开发。共享契约位于仓库根目录 `contracts/`，开发和生产部署使用同一组 v1 schema。
 
