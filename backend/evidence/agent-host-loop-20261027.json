@@ -19,15 +19,22 @@
     "localAgentAdapter": "passed: 10 checks",
     "nativeAdapter": "passed: 18 checks against synthetic Rust CLI fixture",
     "localFileActionContract": "passed: IPC contract verified",
-    "conversationSafety": "passed: old unresolved turn retained and not replayed; new conversation uses separate session; no provider call made",
+    "conversationSafety": "passed: prior uncertain WebView turn was not replayed; runtime verification used a new isolated session and exactly one authorized local provider request",
     "trayProgress": "passed: rate, ETA, unknown-speed, and idle states covered by host tests",
     "sidecarManifest": "1187 files SHA-256 and sizes verified before copying staged package into isolated QA tree",
-    "visualUi": "login local-mode CTA, workspace, and Agent page inspected; no text overflow or clipping observed"
+    "visualUi": "login local-mode CTA, workspace, and Agent page inspected; no text overflow or clipping observed",
+    "packagedWebViewToTauriToSidecarToSQLiteToOllama": {
+      "status": "passed",
+      "keychain": "after user filled the macOS login keychain and restarted the isolated app, local status returned ready",
+      "model": "qwen2.5:7b via local Ollama",
+      "query": "请只用本机运行信息回答：当前使用的模型是什么？是否启用云端回退？",
+      "ledger": "one completed local_agent_steps record; modelRequests=1; localToolRequests=0",
+      "ui": "final answer appeared in Agent conversation; answer did not itself know the configured model/fallback policy, which was independently shown by local status UI",
+      "sideEffects": "filesChanged=false; no files opened, modified, moved, uploaded, or deleted; no cloud fallback"
+    }
   },
   "notVerified": {
-    "packagedWebViewToTauriToSidecarToSQLiteToOllama": "blocked: Agent status failed before sidecar startup with macOS Keychain timeout; UI reports system credential store did not return. No keychain prompt appeared on screen after one isolated app restart; no model request was sent.",
-    "sidecarOllamaRoundTrip": "not run; no sidecar process started by this QA bundle",
-    "uncertainPriorWebViewTurn": "not replayed; prior ledger outcome remains untouched",
+    "uncertainPriorWebViewTurn": "not replayed; this verification used a new isolated session and exactly one model request",
     "cloudTasks": "paused by user; no CloudBase or cloud deployment actions performed"
   }
 }
