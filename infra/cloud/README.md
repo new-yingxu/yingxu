@@ -7,8 +7,9 @@
 - 服务源码：`../../cloud-service/`
 - `yingxu-dev` 体验环境的 PostgreSQL schema v11–v16 已于 2026-10-27 逐项应用并读回验证；当前服务启动要求 schema v16。
 - 当前目标改为 HTTP 云函数：官方支持 FastAPI、Python 3.11 与 WebSocket。体验版的云托管 CPU/内存需另行开启超限按量，因此本项目暂不创建云托管服务。
-- 用户确认认证首期采用邮箱 + 微信，手机号短信延期。腾讯云短信产品已开通，但账号为个人认证且没有可用大陆企业主体；腾讯云不允许个人认证账号创建个人自用短信资质，因此短信签名/模板暂不可办。不得借用未授权企业材料或绕过资质规定。
-- CloudBase 邮箱验证和微信开放平台渠道尚未配置；邮箱可先评估 CloudBase 内置邮件代发，微信需先有网站应用 AppID/AppSecret 与回调域。服务端 Secrets、可信 session issuer/audience/JWKS、client_id 映射和 HTTPS CORS 仍未设置，云函数未部署。
+- 用户最新决定暂缓微信扫码，首期使用短信验证码、邮箱验证码（代发）和用户名密码；截图显示这三种方式在 yingxu-dev 控制台均已启用，邮箱显示“代发”。开关状态不代表短信已可投递。
+- CloudBase 短信登录还需配置短信服务商及审核通过的签名/模板。用户账号为个人认证且无可用大陆企业主体，腾讯云国内短信签名暂不可办，真实短信送达未验证。不得借用未授权企业材料或绕过资质规定。
+- 用户名密码新账号需先通过邮箱或短信验证码注册；邮箱验证码注册可同时设置用户名和密码。桌面 UI 当前仍用 mock auth，真实 SDK 和短会话交换未接线。服务端 Secrets、可信 session issuer/audience/JWKS、client_id 映射和 HTTPS CORS 仍未设置，云函数未部署。
 - 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。不得用开发 token 或 SQLite 作为生产身份/数据层。
 - 新候选 ZIP 和详细证据见 [`cloudbase-v16-migration-20261027.md`](../../cloud-service/evidence/cloudbase-v16-migration-20261027.md)。未上传部署，未清理合成测试账号，未调用真实短信、微信、邮箱或云模型。
 
@@ -43,7 +44,9 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 - [CloudBase 云函数 CLI 部署](https://docs.cloudbase.net/cli-v1/functions/deploy)
 - [CloudBase PostgreSQL 连接](https://docs.cloudbase.net/database/postgresql/connecting-to-postgresql)
 - [CloudBase 邮箱验证码登录](https://docs.cloudbase.net/authentication-v2/method/email-login)
-- [CloudBase 微信授权登录](https://docs.cloudbase.net/authentication-v2/method/wechat-login)
+- [CloudBase 短信验证码登录](https://docs.cloudbase.net/authentication-v2/method/sms-login)
+- [CloudBase 用户名密码登录](https://docs.cloudbase.net/authentication-v2/method/username-login)
+- [CloudBase 用户注册](https://docs.cloudbase.net/authentication-v2/method/signup)
 
 
 ## 本地续跑：路径脱敏后的幂等重试
