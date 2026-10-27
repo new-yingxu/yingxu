@@ -2,7 +2,7 @@
 
 ## 当前云端进度（2026-10-27）
 
-`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；云函数尚未部署。当前首期登录只使用邮箱验证码与用户名/密码；新用户先通过邮箱验证码注册。短信与微信均不纳入当前版本，即使短信开关此前显示启用也应关闭。桌面登录/注册 UI 已在 `workbuddy/dev` 提交 `02fc058` 并推送，CloudBase SDK 登录和短会话交换已接线；云端分支尚未包含该 UI 提交。服务端 Secrets、client_id 映射、HTTPS/Tauri CORS 和函数部署均待完成。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态不覆盖本节当前状态。
+`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；云函数尚未部署。当前首期登录只使用邮箱验证码与用户名/密码；新用户先通过邮箱验证码注册。短信与微信均不纳入当前版本，应关闭。桌面 CloudBase SDK 登录和短会话接线已在独立 `workbuddy/dev` 分支提交 `4e6c04d`；该 UI 仍未并入本 Codex 云端分支，本分支中的旧预览页仍是演示模式。服务端 Secrets、client_id 映射、HTTPS/Tauri CORS 和函数部署均待完成。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态不覆盖本节当前状态。
 
 FastAPI 服务的目录所有权属于云端 Agent 开发。共享契约位于仓库根目录 `contracts/`，开发和生产部署使用同一组 v1 schema。
 

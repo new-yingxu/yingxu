@@ -7,7 +7,7 @@
 - 服务源码：`../../cloud-service/`
 - `yingxu-dev` 体验环境的 PostgreSQL schema v11–v16 已于 2026-10-27 逐项应用并读回验证；当前服务启动要求 schema v16。
 - 当前目标改为 HTTP 云函数：官方支持 FastAPI、Python 3.11 与 WebSocket。体验版的云托管 CPU/内存需另行开启超限按量，因此本项目暂不创建云托管服务。
-- 当前登录决策：邮箱验证码与用户名/密码；用户名/密码账号先通过邮箱验证码注册。短信签名、模板和投递配置仍待用户完成，不能作为已可用登录方式；微信扫码暂停。此云端分支尚未包含桌面 UI 的 CloudBase SDK 登录和短会话交换接线。服务端 Secrets、可信 session issuer/audience、client_id 映射和 HTTPS CORS 仍未设置，云函数未部署。
+- 当前登录决策：只使用邮箱验证码与用户名/密码；用户名/密码账号先通过邮箱验证码注册。短信与微信登录均关闭且不属于首期范围。桌面 UI 的 CloudBase SDK 登录/短会话接线目前在 `workbuddy/dev`，尚未合并进此 Codex 云端分支。服务端 Secrets、可信 session issuer/audience、client_id 映射和 HTTPS/Tauri CORS 仍未设置，云函数未部署。
 - 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。不得用开发 token 或 SQLite 作为生产身份/数据层。
 - 新候选 ZIP 和详细证据见 [`cloudbase-v16-migration-20261027.md`](../../cloud-service/evidence/cloudbase-v16-migration-20261027.md)。未上传部署，未清理合成测试账号，未调用真实短信、微信、邮箱或云模型。
 
