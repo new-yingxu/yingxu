@@ -5,18 +5,20 @@
 ## 一、登录方式
 
 1. 在 CloudBase 控制台切换到 `yingxu-dev`。
-2. 打开「身份认证」中的登录方式设置。
+2. 打开左侧「身份认证」→「登录方式」。
 3. 保持邮箱验证码和用户名/密码已启用；新用户注册仍先通过邮箱验证码验证，再设置用户名和密码。
 4. 按用户最新决定关闭短信登录，微信扫码保持关闭。
 
-## 二、安全来源（桌面 WebView）
+## 二、安全来源（桌面 WebView，控制台入口待核实）
 
-打开「环境管理 → 安全来源」。CloudBase 官方 Web SDK 要求将来源域名加入安全来源。Tauri 打包版按平台使用不同来源，精确允许：
+CloudBase 官方文档说明，Web SDK 来源需要在环境安全来源中白名单登记；但用户 2026-10-27 的当前控制台截图显示「环境管理 → 安全管控」，页面只有云函数限额、云托管限额、OPA 策略鉴权，左侧没有“安全来源”菜单。不要在该限额页面修改任何内容；先确认当前控制台的实际入口。
+
+需要配置时，Tauri 打包版按平台使用不同来源，精确允许：
 
 - macOS：`localhost`（页面来源 `tauri://localhost`）
 - Windows：`tauri.localhost`（页面来源 `http://tauri.localhost`）
 
-`localhost` 通常已在默认安全来源内；核对即可，不要添加 `*`。只在实际缺少时补 `tauri.localhost`。本地 Vite 开发的 `127.0.0.1:5173` 后续需要单独用于开发验收时再添加，不作为生产域名。桌面端 API CORS 同时要求把实际 Tauri 来源原样放入函数的 `CORS_ORIGINS`。
+官方文档称 `localhost` 默认安全来源；找到入口后再核对。不要添加 `*`。只在实际缺少时补 `tauri.localhost`。本地 Vite 开发的 `127.0.0.1:5173` 后续需要单独用于开发验收时再添加，不作为生产域名。桌面端 API CORS 同时要求把实际 Tauri 来源原样放入函数的 `CORS_ORIGINS`。
 
 ## 三、云函数环境变量与 Secrets
 
@@ -58,6 +60,6 @@
 - `yingxu-dev` 环境 ID 与服务端 API Key。
 - 正式 client ID 到 `desktop`/`mobile` 的映射。
 - HTTPS issuer、audience、会话签名私钥和 key ID。
-- 桌面/移动端 HTTPS CORS origins。
+- 桌面端的精确 Tauri CORS origins；移动端来源留待朋友交付真实 origin 后再添加。
 
 所有秘密由用户留在控制台；助手不需要接收或读取其值。
