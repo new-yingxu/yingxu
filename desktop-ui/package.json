@@ -9,6 +9,7 @@
     "preview": "vite preview --host 127.0.0.1"
   },
   "dependencies": {
+    "@tauri-apps/api": "2.12.3",
     "@vitejs/plugin-vue": "latest",
     "vite": "latest",
     "vue": "latest"

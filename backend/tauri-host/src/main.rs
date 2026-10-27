@@ -17,6 +17,44 @@ use yingxu_core::{
     CoreError, Engine,
     api::{PROTOCOL_VERSION, Reply, Request},
 };
+use zeroize::Zeroizing;
+
+mod cloud_auth;
+
+#[tauri::command]
+async fn cloudbase_password_sign_in(
+    window: tauri::WebviewWindow,
+    username: String,
+    password: String,
+) -> Result<cloud_auth::AuthIdentity, String> {
+    let password = Zeroizing::new(password);
+    if window.label() != "main" {
+        return Err("PERMISSION_DENIED".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = cloud_auth::CloudBaseAuthClient::from_embedded_config()
+            .map_err(|error| error.to_string())?;
+        client
+            .password_sign_in(username.trim(), &password)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| cloud_auth::AuthError::ServiceUnavailable.to_string())?
+}
+
+#[tauri::command]
+async fn cloudbase_sign_out(window: tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("PERMISSION_DENIED".into());
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        let client = cloud_auth::CloudBaseAuthClient::from_embedded_config()
+            .map_err(|error| error.to_string())?;
+        client.sign_out().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| cloud_auth::AuthError::ServiceUnavailable.to_string())?
+}
 
 struct HostState {
     engine: Engine,
@@ -240,7 +278,12 @@ fn request_quit(app: tauri::AppHandle) {
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![select_directory, backend_request])
+        .invoke_handler(tauri::generate_handler![
+            select_directory,
+            backend_request,
+            cloudbase_password_sign_in,
+            cloudbase_sign_out
+        ])
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
                 .on_navigation(|_, url| {
