@@ -2,7 +2,7 @@
 
 ## 当前云端进度（2026-10-27）
 
-`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；云函数尚未部署。当前首期登录只使用邮箱验证码与用户名/密码；新用户先通过邮箱验证码注册。短信与微信均不纳入当前版本，应关闭。桌面 CloudBase SDK 登录和短会话接线已在独立 `workbuddy/dev` 分支提交 `4e6c04d`；该 UI 仍未并入本 Codex 云端分支，本分支中的旧预览页仍是演示模式。服务端 Secrets、client_id 映射、HTTPS/Tauri CORS 和函数部署均待完成。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态不覆盖本节当前状态。
+`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；云函数尚未部署。当前首期登录只使用邮箱验证码与用户名/密码；新用户先通过邮箱验证码注册。短信与微信均不纳入当前版本，应关闭。Codex 云端分支已接入 Tauri 原生 CloudBase access-token exchange、影序短会话、受限原生 HTTPS API、设备/同步偏好、备份记录 outbox 与只读云端 Agent UI。体验环境 `/v1` HTTP Gateway 路由已关联现存旧版函数并启用路径透传；一次无凭据请求返回旧函数 JSON 404，只证明网关转发，不证明当前 API 部署或身份就绪。服务端 Secrets、可信身份与 client_id 映射、当前函数源码部署、真实登录/同步验收均待完成。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态不覆盖本节当前状态。
 
 FastAPI 服务的目录所有权属于云端 Agent 开发。共享契约位于仓库根目录 `contracts/`，开发和生产部署使用同一组 v1 schema。
 
@@ -21,7 +21,7 @@ cp .env.example .env
 
 ## 生产配置
 
-生产可以用 CloudBase 官方 PostgreSQL REST：不设 `DATABASE_URL`，将 `CLOUDBASE_ENV_ID` 和服务端 Secret `CLOUDBASE_APIKEY` 注入函数环境。还需 `AUTH_MODE=cloudbase`、可信 `JWT_ISSUER`/`JWT_AUDIENCE`、客户端映射 `CLOUDBASE_CLIENT_ORIGINS`、会话签名 Secrets (`SESSION_PRIVATE_KEY`/`SESSION_KEY_ID`) 和明确的 `CORS_ORIGINS`。浏览器网站来源只接受明确的 HTTPS 域名；Tauri 桌面 API 由 Rust 原生 HTTPS 客户端调用，不依赖 WebView CORS，也不需要把 `tauri://localhost` 或 `http://tauri.localhost` 加入安全来源。CloudBase access token 由后端经官方 user/me 与 token/introspect 双校验，再换发影序短会话。缺少身份配置时业务失败关闭。
+生产可以用 CloudBase 官方 PostgreSQL REST：不设 `DATABASE_URL`，将 `CLOUDBASE_ENV_ID` 和服务端 Secret `CLOUDBASE_APIKEY` 注入函数环境。还需 `AUTH_MODE=cloudbase`、可信 `JWT_ISSUER`/`JWT_AUDIENCE`、客户端映射 `CLOUDBASE_CLIENT_ORIGINS`、会话签名 Secrets (`SESSION_PRIVATE_KEY`/`SESSION_KEY_ID`) 和明确的浏览器 HTTPS `CORS_ORIGINS`。Tauri 桌面 API 由 Rust 原生 HTTPS 客户端调用，不依赖 WebView CORS，也不需要把 `tauri://localhost` 或 `http://tauri.localhost` 加入安全来源。CloudBase access token 由后端经官方 user/me 与 token/introspect 双校验，再换发影序短会话。缺少身份配置时业务失败关闭。
 
 生产不自动建表。`yingxu-dev` 的 PostgreSQL v1–v16 已于 2026-10-27 应用并验证；函数候选仍未部署。此前 `0.2.0-store-preview` 的健康状态仅是历史快照，不代表当前函数版本或正式认证已就绪。
 

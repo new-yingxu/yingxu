@@ -6,8 +6,9 @@
 
 - 服务源码：`../../cloud-service/`
 - `yingxu-dev` 体验环境的 PostgreSQL schema v11–v16 已于 2026-10-27 逐项应用并读回验证；当前服务启动要求 schema v16。
+- 2026-10-28 在 CloudBase HTTP 网关新增并读回 `/v1` → `yingxu-agent-api` 路由，已开启路径透传，网关 CORS 与网关级鉴权关闭。桌面使用 Tauri 原生 HTTPS；服务自身承担身份校验。无凭据 `GET /v1/agent/model` 返回 JSON 404，确认请求到达当前函数，但函数仍是旧预发布版本，不能作为新 API 验收。
 - 当前目标改为 HTTP 云函数：官方支持 FastAPI、Python 3.11 与 WebSocket。体验版的云托管 CPU/内存需另行开启超限按量，因此本项目暂不创建云托管服务。
-- 当前登录决策：只使用邮箱验证码与用户名/密码；用户名/密码账号先通过邮箱验证码注册。短信与微信登录均关闭且不属于首期范围。桌面 UI 的 CloudBase SDK 登录/短会话接线目前在 `workbuddy/dev`，尚未合并进此 Codex 云端分支。服务端 Secrets、可信 session issuer/audience、client_id 映射和 HTTPS/Tauri CORS 仍未设置，云函数未部署。
+- 当前登录决策：只使用邮箱验证码与用户名/密码；用户名/密码账号先通过邮箱验证码注册。短信与微信登录均关闭且不属于首期范围。Codex 云端分支已接入 Tauri 原生 CloudBase 身份交换和影序短会话。服务端 Secrets、可信 session issuer/audience、client_id 映射仍未设置，云函数未部署。
 - 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。不得用开发 token 或 SQLite 作为生产身份/数据层。
 - 新候选 ZIP 和详细证据见 [`cloudbase-v16-migration-20261027.md`](../../cloud-service/evidence/cloudbase-v16-migration-20261027.md)。未上传部署，未清理合成测试账号，未调用真实短信、微信、邮箱或云模型。
 
@@ -28,7 +29,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 3. 认证首期为邮箱验证码和用户名/密码；微信扫码暂停，短信待服务商、审核签名和模板配置。新用户先通过邮箱验证码注册，再设置用户名/密码。桌面 SDK 接入时按 CloudBase Authentication v2 官方流程实现，并将 CloudBase access token 交给服务端 `/v1/auth/session/exchange` 换发影序短会话。
 4. 配置正式 CloudBase 身份通道后，再生成服务端 session 签名密钥并以 Secrets 保存：`CLOUDBASE_CLIENT_ORIGINS`、`SESSION_PRIVATE_KEY`、`SESSION_KEY_ID`、`JWT_ISSUER`、`JWT_AUDIENCE`、`CLOUDBASE_ENV_ID`、`CLOUDBASE_APIKEY` 和 HTTPS `CORS_ORIGINS`。凭据不得进入仓库、客户端或聊天。
 5. 使用 `python3 infra/cloud/prepare_function_context.py` 生成 Linux/Python 3.11 函数上下文，并校验源文件、锁定依赖和候选包哈希。
-6. 只有身份渠道和 Secrets 完成后，才在体验环境部署已验证的 schema16 候选。部署后记录函数版本/路径和访问策略；验证 `/healthz`、`/readyz`、账号交换、PostgreSQL 读写、WebSocket 与回滚。
+6. 已准备 `/v1` 网关路径并配置路径透传；桌面构建的 `YINGXU_CLOUD_API_ORIGIN` 使用默认 HTTPS HTTP-Gateway 根域名，不附加路径。只有身份配置和 Secrets 完成后，才在体验环境部署已验证的 schema16 候选。部署后记录函数版本/路径和访问策略；验证 `/healthz`、`/readyz`、账号交换、PostgreSQL 读写、WebSocket 与回滚。
 
 用户逐项配置路径与非敏感待办见 [`console-configuration-checklist.md`](console-configuration-checklist.md)。
 
