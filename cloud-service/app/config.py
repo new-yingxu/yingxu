@@ -2,7 +2,9 @@ from dataclasses import dataclass, field
 import os
 
 DEFAULT_APP_VERSION = "0.9.0-local-sync-preview"
-REQUIRED_SCHEMA_VERSION = 14
+# The current source uses the local-agent-step and atomic-action migrations too.
+# Refuse readiness on v14/v15 so the service cannot run against a partial schema.
+REQUIRED_SCHEMA_VERSION = 16
 
 
 @dataclass(frozen=True)

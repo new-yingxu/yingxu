@@ -1,5 +1,9 @@
 # 影序云端服务
 
+## 当前云端进度（2026-10-27）
+
+`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；正式配置、渠道凭据和云函数部署尚未完成。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态是当时记录，不覆盖本节当前状态。
+
 FastAPI 服务的目录所有权属于云端 Agent 开发。共享契约位于仓库根目录 `contracts/`，开发和生产部署使用同一组 v1 schema。
 
 ## 启动

@@ -5,10 +5,11 @@
 ## 当前状态
 
 - 服务源码：`../../cloud-service/`
-- 实际环境已由 CloudBase CLI 读回：`yingxu-dev-d8gowpye17ee27a61`，地域 `ap-shanghai`，体验版；共享 PostgreSQL 实例已创建。云函数和云托管服务当前均为空。
+- `yingxu-dev` 体验环境的 PostgreSQL schema v11–v16 已于 2026-10-27 逐项应用并读回验证；当前服务启动要求 schema v16。
 - 当前目标改为 HTTP 云函数：官方支持 FastAPI、Python 3.11 与 WebSocket。体验版的云托管 CPU/内存需另行开启超限按量，因此本项目暂不创建云托管服务。
-- CloudBase CLI 已通过设备码授权；部署前仍需配置 PostgreSQL 连接和正式 JWT 身份来源。不得使用开发 token 或 SQLite 作为生产数据层。
-- 当前账期配额为 3000 资源点，CLI 读回时用量/扣量均为 0；超限按量未开启。部署后的调用会消耗额度，须持续监控。
+- 云函数仍未部署。认证渠道、服务端 Secrets、可信 issuer/audience/JWKS、客户端来源和 HTTPS CORS 尚未配置。SMS 控制台等待账号持有人审阅并接受服务条款；不得用开发 token 或 SQLite 作为生产身份/数据层。
+- 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。
+- 新候选 ZIP 和详细证据见 [`cloudbase-v16-migration-20261027.md`](../../cloud-service/evidence/cloudbase-v16-migration-20261027.md)。未上传部署，未清理合成测试账号，未调用真实短信、微信、邮箱或云模型。
 
 ## 本地启动
 
@@ -31,9 +32,9 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 
 ## 当前本地部署候选（不代表已部署）
 
-0.9.0 云函数上下文与当前源码/依赖锁/HTTP bootstrap 匹配，schema 要求为14。ZIP `function-packages/0.9.0-local-sync-preview-d1256bcf1307.zip`，34,273,203 bytes，SHA-256 `db18553bb2297ce1fe07755f4d5d6cdc5395a28d9e1a3968533d02d0c6d22753`；2738个文件按 manifest 哈希逐项回读通过，合成非秘密配置的凭据检查通过。证据：`cloud-service/evidence/local-function-package-0.9.0-local-sync-preview-20261026.json`。当前线上仍 schema10/app0.2.0；未执行 CloudBase 请求、未上传 ZIP、未迁移 schema14、未部署。网络恢复后仍须先精确清理 `pending-cloud-fixture-cleanup-20261026.json/.sql` 中四个合成 owner 并回读无残留，再逐迁移验证；不能直接把此候选部署上去。
+旧候选 0.9.0/schema14 的描述为历史记录，不再作为当前部署候选。当前 schema16 候选的包哈希与验证边界见上面的证据文件。待认证和服务端密钥完成后，再从已验证上下文部署，切勿将密钥写入代码、仓库或聊天。
 
-当前已部署0.2.0-store-preview：health200，database=ready，authentication=not_configured，整体ready503。用户身份和CORS未配置，业务请求继续失败关闭。前一0.1.1保存在函数数字版本2，可回退。部署时使用项目外0600私有配置文件和 --config-file；不要把含Secret的cloudbaserc放入上传目录或输出日志。
+早期部署证据曾记录 0.2.0-store-preview 的 health/database 正常但 authentication 未配置；本轮未重新查询现存函数版本，故不把该旧记录视为当前运行状态。下一次部署前应在控制台读回当前版本和访问策略。使用项目外的私有配置文件注入 Secret；不要把含 Secret 的 cloudbaserc 放入上传目录或输出日志。
 
 ## 官方文档
 
