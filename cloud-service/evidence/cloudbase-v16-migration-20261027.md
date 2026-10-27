@@ -23,3 +23,11 @@ Environment: `yingxu-dev` experience environment
 - Current login decision (updated 2026-10-27): email verification code and username/password; new accounts register through email verification before setting username/password. SMS signature/template/provider setup remains pending, and WeChat login is paused. Do not enable or advertise SMS as usable until delivery has been configured and verified by the account owner.
 - CloudBase CLI is not installed in this environment. Its console authorization asks for broad CloudBase resource access, so no authorization was granted. The SQL editor was used only for the specifically authorized v11–v16 migrations.
 - Do not deploy until authentication and service secrets are configured and validated. No function deployment or production login/model call was performed.
+
+## 2026-10-28 refreshed candidate and desktop origin decision
+
+- Rechecked the previously listed ZIP against the current `cloud-service/app` and `contracts`; it no longer matched the current source, so it must not be deployed.
+- Rebuilt the ignored local Linux/Python 3.11 function context from the current source and lock, then packaged it with an empty synthetic deployment config for credential scanning. Readback reports `sourceMatched=true`, `credentialsChecked=true`, 2,738 manifest files, 60 Linux dependencies, schema version 16, and `deployed=false`.
+- Current candidate: `infra/cloud/function-packages/0.9.0-local-sync-preview-03c5fe6fc059.zip`; SHA-256 `e4099e10395faff6de02b6a8e42616f605ee2103a77eb9019d34be6a4a9bfedf`; size 34,273,635 bytes; 2,739 archive entries. No live function credentials were inspected or embedded.
+- The stage-2 desktop-origin route uses native Rust HTTPS for both identity and app API, so no CloudBase Web security-source change or plan upgrade is required. The Windows and macOS app API origin is the same HTTP Gateway root; CloudBase Authentication has a separate official HTTP API origin. See `infra/cloud/console-configuration-checklist.md`.
+- The live function remains the older `0.2.0-store-preview` deployment with `APP_ENV=production` and `AUTH_MODE=jwt`; server API Key injection is enabled and values remain masked. New CloudBase session configuration is not yet set. The candidate is not deployed.
