@@ -35,7 +35,7 @@ def setup(tmp_path):
 CONFIG={'configurable':{'thread_id':'server-thread'}}
 
 
-def test_interrupt_new_saver_resume(setup):
+def _test_interrupt_new_saver_resume(setup):
     saver,_=setup
     class State(TypedDict): value:int
     def approval(state): return {'value':state['value']+interrupt('approve')}
@@ -49,7 +49,7 @@ def test_interrupt_new_saver_resume(setup):
     assert len(list(saver().list(CONFIG)))>=3
 
 
-def test_failure_pending_write_recovery(setup):
+def _test_failure_pending_write_recovery(setup):
     saver,_=setup
     calls=[]
     class State(TypedDict,total=False): good:int; bad:int
@@ -69,7 +69,7 @@ def test_failure_pending_write_recovery(setup):
     assert calls.count('good')==1
 
 
-def test_isolation_preferences_deletion_revocation(setup):
+def _test_isolation_preferences_deletion_revocation(setup):
     saver,sessions=setup
     cp=empty_checkpoint(); config=saver().put(CONFIG,cp,{'source':'input','step':-1,'parents':{}},{})
     assert saver('other').get_tuple(CONFIG) is None
@@ -87,7 +87,7 @@ def test_isolation_preferences_deletion_revocation(setup):
     with unittest.TestCase().assertRaises(DeviceUnavailable):saver().get_tuple(CONFIG)
 
 
-def test_negative_indexes_and_no_credentials(setup):
+def _test_negative_indexes_and_no_credentials(setup):
     saver,sessions=setup
     cp=empty_checkpoint(); config=saver().put(CONFIG,cp,{},{} )
     saver().put_writes(config,[('__error__','first'),('value',1)],'task')
@@ -103,7 +103,7 @@ def test_negative_indexes_and_no_credentials(setup):
     with sessions() as db: assert not db.scalars(select(GraphPendingWrite)).all()
 
 
-def test_midrun_optout(setup):
+def _test_midrun_optout(setup):
     saver,sessions=setup
     class State(TypedDict): value:int
     def optout(state):
@@ -117,7 +117,7 @@ def test_midrun_optout(setup):
         assert all('optout' not in str(row.payload) for row in stored)
 
 
-def test_wrapper_resume_and_delete(setup):
+def _test_wrapper_resume_and_delete(setup):
     from app.agent_graph import run_turn_graph
     saver,sessions=setup
     calls=[]
@@ -141,7 +141,7 @@ def test_wrapper_resume_and_delete(setup):
     with unittest.TestCase().assertRaises(SessionDeleted):saver().get_tuple(CONFIG)
 
 
-def test_wrapper_failed_resume(setup):
+def _test_wrapper_failed_resume(setup):
     from app.agent_graph import run_turn_graph
     saver,_=setup
     calls=[]
@@ -155,10 +155,10 @@ def test_wrapper_failed_resume(setup):
     assert result['persisted'] and calls.count('retrieve')==1
 
 
-class GraphCheckpointTests(unittest.TestCase):
-    def test_wrapper_resume_and_delete(self): test_wrapper_resume_and_delete(self.context)
-    def test_wrapper_failed_resume(self): test_wrapper_failed_resume(self.context)
-    def test_midrun_optout(self): test_midrun_optout(self.context)
+class TestGraphCheckpointTests(unittest.TestCase):
+    def test_wrapper_resume_and_delete(self): _test_wrapper_resume_and_delete(self.context)
+    def test_wrapper_failed_resume(self): _test_wrapper_failed_resume(self.context)
+    def test_midrun_optout(self): _test_midrun_optout(self.context)
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.fixture=setup(Path(self.temp.name))
@@ -167,9 +167,9 @@ class GraphCheckpointTests(unittest.TestCase):
         try: next(self.fixture)
         except StopIteration: pass
         self.temp.cleanup()
-    def test_interrupt_new_saver_resume(self): test_interrupt_new_saver_resume(self.context)
-    def test_failure_pending_write_recovery(self): test_failure_pending_write_recovery(self.context)
-    def test_isolation_preferences_deletion_revocation(self): test_isolation_preferences_deletion_revocation(self.context)
-    def test_negative_indexes_and_no_credentials(self): test_negative_indexes_and_no_credentials(self.context)
+    def test_interrupt_new_saver_resume(self): _test_interrupt_new_saver_resume(self.context)
+    def test_failure_pending_write_recovery(self): _test_failure_pending_write_recovery(self.context)
+    def test_isolation_preferences_deletion_revocation(self): _test_isolation_preferences_deletion_revocation(self.context)
+    def test_negative_indexes_and_no_credentials(self): _test_negative_indexes_and_no_credentials(self.context)
 
 if __name__=="__main__": unittest.main()
