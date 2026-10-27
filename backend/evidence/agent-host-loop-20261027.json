@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-27",
+  "branch": "codex/local-agent-ui-closure",
+  "scope": "isolated synthetic fixture only; no user media or CloudBase access",
+  "checks": {
+    "desktopUiProductionBuild": "passed; Vue typecheck and Vite, 44 modules",
+    "localAgentAndNativeAdapter": "passed; 28 checks",
+    "coreRustTests": "passed; 64 tests across unit and integration suites",
+    "tauriHostTests": "passed; 7 tests",
+    "hostToSidecarToSQLiteToOllama": "passed; opt-in test packaged_local_agent_real_model_tool_round_trip_from_host, 1 test, synthetic IMG_2048.jpg, temporary SQLite, qwen2.5:7b"
+  },
+  "notVerified": {
+    "packagedWebViewToTauriToSidecarToSQLiteToOllama": "blocked; prior packaged app status call hung in SecKeychainFindGenericPassword before sidecar startup; keychain unlock was skipped as instructed",
+    "uncertainPriorWebViewTurn": "not replayed",
+    "cloudBaseDeployment": "not attempted; migration v1-v16 source is now present and locally validated, but CloudBase CLI refresh DNS failure and missing verified deployment identity block cloud writes"
+  }
+}

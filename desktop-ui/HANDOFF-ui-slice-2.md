@@ -170,4 +170,17 @@ native-adapter 本轮新增断言：首页 `limit=2,offset=0` → `items 2 / tot
 - 前端把续交 IPC 异常统一包装为 `LOCAL_AGENT_CONTINUATION_UNCONFIRMED`，保留经过格式校验的诊断码，不回显原始 IPC 错误，并提示保留轮次/禁止重发；model failure 显示器改为按安全错误码字段识别，避免跨模块 Error 实例导致错误退回 `MODEL_OUTCOME_UNCERTAIN`。
 - 验证：Vue/TypeScript + Vite build 通过；local-agent 10 项、native adapter 18 项、R6 14 项通过。新增 macOS arm64 隔离 DMG `影序本机验收 20261027_0.2.0-draft.4-local-qa_aarch64.dmg`，SHA-256 `ccb3f9fd770ff183836e374ce40f3af75509649eb2761925170fe345af854552`；DMG CRC 与 ad-hoc code signature 校验通过，未做公证。
 - 阻塞：新包启动后 `agent_local_status` 卡在系统钥匙串读取；采样栈停于 `SecKeychainFindGenericPassword`，sidecar 未启动，UI 一直显示“正在检查”，所以新包的 Agent 往返和新错误提示尚未实机验收。详见 `evidence/agent-bridge-followup-20261027.json`。
-- 下一步：请用户在 Mac 本机解锁登录钥匙串，或处理 macOS 自己显示的影序钥匙串访问提示；不在聊天中提供密码或私钥。恢复后重开隔离包，先核验 Agent 状态，再用新的合成查询做 UI 闭环；不要续发已过期的旧轮次。
+- 用户指示遇到钥匙串解锁要求时跳过并继续，因此本轮没有再次请求解锁，也没有重复启动挂起的 `agent_local_status` 查询。
+
+## Codex 续跑：本地 Agent 宿主回路与 CloudBase 状态（2026-10-27）
+
+- 在全新临时目录和 SQLite 中，以虚构文件 `IMG_2048.jpg` 显式运行 `packaged_local_agent_real_model_tool_round_trip_from_host`，真实本机 `qwen2.5:7b` 完成工具请求；Tauri 宿主启动 sidecar，Rust 从隔离 SQLite 检索合成索引，再把结果交回模型并验证幂等重放，1/1 通过。证据：`backend/evidence/agent-host-loop-20261027.json`。
+- 同轮回归：UI build 通过（44 modules），local Agent + native adapter 28 项通过，Rust core 64 项通过，Tauri 宿主 7 项通过。当前确认的是宿主到 sidecar 的闭环，**不等于**打包 WebView UI 闭环；后者仍被钥匙串挂起阻断。
+- CloudBase 控制台只读可见函数 `yingxu-agent-api` 正常，PostgreSQL 迁移版本此前显示为 v10；从 `codex/cloud-agent-store` 找回 v4–v16 权威迁移及云服务实现，并在当前 Codex 分支隔离验证。CLI 刷新域名解析失败，本轮没有写云端或部署。状态证据见 `cloud-service/evidence/cloudbase-2026-10-27.md`。
+- 下一步：不要重放先前结果不确定的 UI 轮次；真实打包 UI 闭环仍需在 Tauri App 观察新增超时提示。云端 v4–v16 源码已同步，线上先前只读状态为 v10；本地 readiness 要求 v16，CLI 登录与身份/secret 仍未准备，未迁移/未部署。
+
+## Codex 续跑：状态查询挂起保护（2026-10-27）
+
+- `ModelConsent` 的本机状态查询增加 25 秒上限。超时后显示本机 Agent 检查超时和“模型请求尚未发送”提示，并禁用继续刷新，避免重复调用卡住的 macOS Keychain；不会退回云端。
+- 对永不返回的 mock status 做了定向回归，确认只发起一次读取并以 `LOCAL_AGENT_STATUS_TIMEOUT` 结束；Vue/TypeScript + Vite 构建通过（44 modules），本机 Agent 测试通过，native adapter 18 项通过。证据：`evidence/agent-status-timeout-20261027.json`。
+- 未重启打包 App、未重复触发真实 Keychain；真实 WebView 超时文案仍需在 Tauri App 上观察。此 UI 保护不能取消已经挂起的 Rust `spawn_blocking`，但每个 App 会话不再自动或手动重复触发该读取。

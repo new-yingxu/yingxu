@@ -123,6 +123,22 @@ export interface LocalAgentStatusView {
   availability: LocalAgentAvailability | 'unknown'
 }
 
+/** A hanging native status IPC must not leave the Agent panel loading forever. */
+export function withLocalAgentStatusTimeout<T>(read: () => Promise<T>, timeoutMs = 25_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new CloudError(
+      'LOCAL_AGENT_STATUS_TIMEOUT',
+      '本机 Agent 状态查询超时，尚未发起模型调用。为避免重复访问系统凭据库，本次已停止自动检查。',
+      0,
+      false,
+    )), timeoutMs)
+  })
+  return Promise.race([Promise.resolve().then(read), timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+  })
+}
+
 /** Runtime health is reported by status(); this notice only covers a missing native adapter. */
 export function shouldShowLocalAgentAdapterNotice(mode: 'native' | 'mock', hasModelAdapter: boolean): boolean {
   return mode === 'native' && !hasModelAdapter

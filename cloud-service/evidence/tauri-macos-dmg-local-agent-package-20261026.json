@@ -1,0 +1,93 @@
+{
+  "status": "built_and_verified",
+  "verifiedAt": "2026-10-26",
+  "platform": "macOS arm64",
+  "projectBranch": "codex/yingxu-desktop-agent",
+  "sourceCommit": "7ab8048",
+  "build": {
+    "command": "SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk cargo tauri build --bundles dmg",
+    "frontendCommands": [
+      "pnpm install --frozen-lockfile",
+      "pnpm build"
+    ],
+    "frontendBuild": "passed",
+    "releaseBuild": "passed",
+    "sdkNote": "Default MacOSX27.0.sdk failed early because the installed linker does not recognize arm64e.x1; build succeeded with the installed MacOSX15.4.sdk override. No global SDK selection was changed."
+  },
+  "artifact": {
+    "path": "/Users/nanyu/Documents/AI工具/02_Codex数据_0907/worktrees/yingxu-codex/new-影序agent开发/backend/tauri-host/target/release/bundle/dmg/影序桌面开发版_0.2.0-draft.1_aarch64.dmg",
+    "bytes": 50529475,
+    "sha256": "77152b0039ba94e43b53a812d5b5bf6c3ca41f8b44e13127cabacc2996947ba7",
+    "dmgChecksum": "CRC32 passed when mounted read-only"
+  },
+  "integratedUiBuild": {
+    "temporarySourceOverlay": [
+      "f947103 (local-agent UI and confirmation flow)",
+      "cb507f71a58be18758bf3877cf807be957d7165c (local Agent availability status)"
+    ],
+    "newerUiCommitNotInThisDmg": "0c26e54 (Ollama first-run onboarding; requires a subsequent DMG build)",
+    "overlayMergedIntoHostBranch": false,
+    "frontendBuild": "passed (pnpm --dir desktop-ui build)",
+    "hostCommit": "7ab8048",
+    "dmg": {
+      "path": "/Users/nanyu/Documents/AI工具/02_Codex数据_0907/worktrees/yingxu-cloud-agent/new-影序agent开发/backend/tauri-host/target/release/bundle/dmg/影序桌面开发版_0.2.0-draft.2-local-agent-ui.dmg",
+      "bytes": 50538324,
+      "sha256": "4e14db53325f0c9f5838b4f86a3e063eb81d15cbaf30dc7eaa95f13a13ba6bea",
+      "readOnlyMountCrc32": "passed",
+      "appSignature": "ad hoc codesign verification passed",
+      "embeddedSidecarManifestSha256": "ec895be625c7aa164e5640ca27ee2dcedaeb5fc8c3208083f88067aebc2d4db1",
+      "embeddedSidecarFilesVerified": 1187,
+      "credentialScan": {
+        "status": "passed",
+        "filesScanned": 1192,
+        "findings": 0,
+        "limitation": "Checks common credential signatures and selected named variables; not an exhaustive proof that no secret exists."
+      }
+    }
+  },
+  "isolatedPackagedUiLaunchAttempt": {
+    "hostEvidenceCommit": "71a7aee",
+    "artifact": "影序本地闭环测试版_0.2.0-localtest.1_aarch64.dmg",
+    "launchSource": "Finder-mounted isolated QA DMG",
+    "applicationLaunch": "passed; Tauri WebView rendered login page",
+    "agentUiEndToEnd": "blocked before Agent page because production UI hides local workspace entry and real login is not configured",
+    "sidecarAndSqliteUiRoundTrip": "not verified",
+    "cleanup": "isolated QA app exited, DMG unmounted, temporary UI/config overlay restored, host worktree clean",
+    "cloudRequests": false,
+    "userMediaAccessed": false
+  },
+  "bundledSidecar": {
+    "pathInApp": "Contents/Resources/agent-sidecar/yingxu-local-agent",
+    "manifestSha256": "ec895be625c7aa164e5640ca27ee2dcedaeb5fc8c3208083f88067aebc2d4db1",
+    "filesVerified": 1187,
+    "integrity": "passed"
+  },
+  "applicationSignature": {
+    "verification": "passed",
+    "identity": "ad hoc",
+    "notarized": false,
+    "teamIdentifier": null
+  },
+  "secretScan": {
+    "status": "passed",
+    "filesScanned": 1192,
+    "findings": 0,
+    "rules": [
+      "private_key_pem",
+      "aws_access_key_id",
+      "openai_api_key",
+      "github_token",
+      "slack_token",
+      "google_api_key",
+      "named_secret_assignment",
+      "bearer_credential"
+    ],
+    "limitation": "Checks common credential signatures and selected named variables; not an exhaustive proof that no secret exists."
+  },
+  "not_verified": [
+    "Completing WebView-to-host-to-sidecar-to-real-index E2E from the packaged Agent UI; isolated package launch reached login, but the production login gate blocked entry and the sidecar UI round-trip was not exercised",
+    "Windows x64 installer build and runtime",
+    "Developer ID signing and Apple notarization",
+    "Ollama installation/model download and hardware suitability onboarding"
+  ]
+}

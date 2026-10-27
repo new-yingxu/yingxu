@@ -1,0 +1,15 @@
+{
+  "buildId": "dd0498f03d897c89431d67eb4ead6ff225340be97457917857274d13075ec4a3",
+  "appVersion": "0.5.0-checkpoint-preview",
+  "schemaVersion": 11,
+  "filesVerified": 2728,
+  "packagesVerified": 60,
+  "sourceMatched": true,
+  "credentialsChecked": true,
+  "deployed": false,
+  "package": "/Users/nanyu/Documents/AI\u5de5\u5177/02_Codex\u6570\u636e_0907/worktrees/yingxu-cloud-agent/new-\u5f71\u5e8fagent\u5f00\u53d1/infra/cloud/function-packages/0.5.0-checkpoint-preview-dd0498f03d89.zip",
+  "sha256": "90786c2fbfdbfcbc6a4e8350ff287ac9588b0f250a60ee2a55a2b43075802fe2",
+  "bytes": 34239390,
+  "archiveFiles": 2729,
+  "archiveReadback": true
+}

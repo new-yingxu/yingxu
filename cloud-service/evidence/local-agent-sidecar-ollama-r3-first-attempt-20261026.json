@@ -1,0 +1,7 @@
+{
+  "status": "not_passed",
+  "stage": "packaged sidecar real Ollama first turn",
+  "observation": "model returned a direct answer without issuing a typed tool request",
+  "classification": "model prompt behavior; health and authenticated local-status passed before this assertion",
+  "retry": "one bounded rerun with the already-proven local tool-call prompt"
+}

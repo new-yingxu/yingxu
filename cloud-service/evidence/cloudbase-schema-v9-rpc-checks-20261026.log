@@ -1,0 +1,17 @@
+{
+  "data": {
+    "RequestId": "c707323d-1aac-4fe3-b1bb-b6547609a104",
+    "Columns": [
+      "result",
+      "remaining_synthetic_devices",
+      "latest_version",
+      "anon_agent_turns_access",
+      "client_rpc_access"
+    ],
+    "Rows": [
+      "[\"schema-v6-v9-rpc-checks-passed-and-rolled-back\",\"0\",\"9\",\"false\",\"false\"]"
+    ],
+    "AffectedRows": 0,
+    "ExecutionTimeMs": 11
+  }
+}

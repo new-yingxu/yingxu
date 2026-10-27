@@ -1,0 +1,5 @@
+BEGIN;
+ALTER TABLE public.agent_actions ADD COLUMN IF NOT EXISTS result_code VARCHAR(100);
+ALTER TABLE public.agent_actions ADD COLUMN IF NOT EXISTS state_updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+INSERT INTO schema_migrations(version, applied_at) VALUES (4,CURRENT_TIMESTAMP) ON CONFLICT(version) DO NOTHING;
+COMMIT;

@@ -1,0 +1,81 @@
+The files belonging to this database system will be owned by user "nanyu".
+This user must also own the server process.
+
+The database cluster will be initialized with locale "C".
+The default text search configuration will be set to "english".
+
+Data page checksums are disabled.
+
+creating directory /tmp/yingxu-pg-h05pn_0_/data ... ok
+creating subdirectories ... ok
+selecting dynamic shared memory implementation ... posix
+selecting default "max_connections" ... 100
+selecting default "shared_buffers" ... 128MB
+selecting default time zone ... Asia/Shanghai
+creating configuration files ... ok
+running bootstrap script ... ok
+performing post-bootstrap initialization ... ok
+syncing data to disk ... ok
+
+Success. You can now start the database server using:
+
+    '/opt/homebrew/opt/postgresql@17/bin/pg_ctl' -D /tmp/yingxu-pg-h05pn_0_/data -l logfile start
+
+waiting for server to start.... done
+server started
+test_removed_key_is_rejected_after_bounded_key_set_cache (test_jwt_identity.JWTIdentity.test_removed_key_is_rejected_after_bounded_key_set_cache) ... ok
+test_signed_claims_and_invalid_identity (test_jwt_identity.JWTIdentity.test_signed_claims_and_invalid_identity) ... ok
+test_credential_owner_isolation_and_no_secret_repr (test_model_provider.ModelProvider.test_credential_owner_isolation_and_no_secret_repr) ... ok
+test_redirect_cannot_forward_key (test_model_provider.ModelProvider.test_redirect_cannot_forward_key) ... /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tempfile.py:484: ResourceWarning: Implicitly cleaning up <HTTPError 302: 'model redirect refused'>
+  _warnings.warn(self.warn_message, ResourceWarning)
+ok
+test_rejects_tool_calls_and_invalid_answers (test_model_provider.ModelProvider.test_rejects_tool_calls_and_invalid_answers) ... ok
+test_transport_minimizes_context_and_reports_real_usage (test_model_provider.ModelProvider.test_transport_minimizes_context_and_reports_real_usage) ... ok
+test_action_compare_and_swap (test_postgresql_contract.PostgreSQLContract.test_action_compare_and_swap) ... ok
+test_agent_turn_history_idempotency_and_opt_out (test_postgresql_contract.PostgreSQLContract.test_agent_turn_history_idempotency_and_opt_out) ... ok
+test_atomic_batch_rollback_replay_and_policy (test_postgresql_contract.PostgreSQLContract.test_atomic_batch_rollback_replay_and_policy) ... ok
+test_direct_sql_and_rpc_share_request_fingerprint (test_postgresql_contract.PostgreSQLContract.test_direct_sql_and_rpc_share_request_fingerprint) ... ok
+test_owner_filters_and_idempotency (test_postgresql_contract.PostgreSQLContract.test_owner_filters_and_idempotency) ... ok
+test_owner_lock_orders_publication_across_real_transactions (test_postgresql_contract.PostgreSQLContract.test_owner_lock_orders_publication_across_real_transactions) ... ok
+test_path_redaction_preserves_original_request_identity (test_postgresql_contract.PostgreSQLContract.test_path_redaction_preserves_original_request_identity) ... ok
+test_path_redaction_publishes_owner_scoped_invalidation (test_postgresql_contract.PostgreSQLContract.test_path_redaction_publishes_owner_scoped_invalidation) ... ok
+test_preferences_scrub_only_owner (test_postgresql_contract.PostgreSQLContract.test_preferences_scrub_only_owner) ... ok
+test_revoked_device_cannot_be_touched_or_reenabled (test_postgresql_contract.PostgreSQLContract.test_revoked_device_cannot_be_touched_or_reenabled) ... ok
+test_session_deletion_prevents_replay_resurrection (test_postgresql_contract.PostgreSQLContract.test_session_deletion_prevents_replay_resurrection) ... ok
+test_action_compare_and_swap (test_postgresql_contract.PostgreSQLRPCContract.test_action_compare_and_swap) ... ok
+test_agent_turn_history_idempotency_and_opt_out (test_postgresql_contract.PostgreSQLRPCContract.test_agent_turn_history_idempotency_and_opt_out) ... ok
+test_atomic_batch_rollback_replay_and_policy (test_postgresql_contract.PostgreSQLRPCContract.test_atomic_batch_rollback_replay_and_policy) ... ok
+test_direct_sql_and_rpc_share_request_fingerprint (test_postgresql_contract.PostgreSQLRPCContract.test_direct_sql_and_rpc_share_request_fingerprint) ... ok
+test_owner_filters_and_idempotency (test_postgresql_contract.PostgreSQLRPCContract.test_owner_filters_and_idempotency) ... ok
+test_owner_lock_orders_publication_across_real_transactions (test_postgresql_contract.PostgreSQLRPCContract.test_owner_lock_orders_publication_across_real_transactions) ... ok
+test_path_redaction_preserves_original_request_identity (test_postgresql_contract.PostgreSQLRPCContract.test_path_redaction_preserves_original_request_identity) ... ok
+test_path_redaction_publishes_owner_scoped_invalidation (test_postgresql_contract.PostgreSQLRPCContract.test_path_redaction_publishes_owner_scoped_invalidation) ... ok
+test_preferences_scrub_only_owner (test_postgresql_contract.PostgreSQLRPCContract.test_preferences_scrub_only_owner) ... ok
+test_revoked_device_cannot_be_touched_or_reenabled (test_postgresql_contract.PostgreSQLRPCContract.test_revoked_device_cannot_be_touched_or_reenabled) ... ok
+test_session_deletion_prevents_replay_resurrection (test_postgresql_contract.PostgreSQLRPCContract.test_session_deletion_prevents_replay_resurrection) ... ok
+test_production_missing_configuration_stays_closed (test_service_flow.ServiceFlow.test_production_missing_configuration_stays_closed) ... ok
+test_sync_proposal_isolation_and_websocket_after_store_refactor (test_service_flow.ServiceFlow.test_sync_proposal_isolation_and_websocket_after_store_refactor) ... ok
+test_action_compare_and_swap (test_store_contract.CloudBaseContract.test_action_compare_and_swap) ... skipped 'CloudBase integration is opt-in'
+test_agent_turn_history_idempotency_and_opt_out (test_store_contract.CloudBaseContract.test_agent_turn_history_idempotency_and_opt_out) ... skipped 'CloudBase integration is opt-in'
+test_atomic_batch_rollback_replay_and_policy (test_store_contract.CloudBaseContract.test_atomic_batch_rollback_replay_and_policy) ... skipped 'CloudBase integration is opt-in'
+test_owner_filters_and_idempotency (test_store_contract.CloudBaseContract.test_owner_filters_and_idempotency) ... skipped 'CloudBase integration is opt-in'
+test_path_redaction_preserves_original_request_identity (test_store_contract.CloudBaseContract.test_path_redaction_preserves_original_request_identity) ... skipped 'CloudBase integration is opt-in'
+test_path_redaction_publishes_owner_scoped_invalidation (test_store_contract.CloudBaseContract.test_path_redaction_publishes_owner_scoped_invalidation) ... skipped 'CloudBase integration is opt-in'
+test_preferences_scrub_only_owner (test_store_contract.CloudBaseContract.test_preferences_scrub_only_owner) ... skipped 'CloudBase integration is opt-in'
+test_revoked_device_cannot_be_touched_or_reenabled (test_store_contract.CloudBaseContract.test_revoked_device_cannot_be_touched_or_reenabled) ... skipped 'CloudBase integration is opt-in'
+test_session_deletion_prevents_replay_resurrection (test_store_contract.CloudBaseContract.test_session_deletion_prevents_replay_resurrection) ... skipped 'CloudBase integration is opt-in'
+test_action_compare_and_swap (test_store_contract.SQLiteContract.test_action_compare_and_swap) ... ok
+test_agent_turn_history_idempotency_and_opt_out (test_store_contract.SQLiteContract.test_agent_turn_history_idempotency_and_opt_out) ... ok
+test_atomic_batch_rollback_replay_and_policy (test_store_contract.SQLiteContract.test_atomic_batch_rollback_replay_and_policy) ... ok
+test_owner_filters_and_idempotency (test_store_contract.SQLiteContract.test_owner_filters_and_idempotency) ... ok
+test_path_redaction_preserves_original_request_identity (test_store_contract.SQLiteContract.test_path_redaction_preserves_original_request_identity) ... ok
+test_path_redaction_publishes_owner_scoped_invalidation (test_store_contract.SQLiteContract.test_path_redaction_publishes_owner_scoped_invalidation) ... ok
+test_preferences_scrub_only_owner (test_store_contract.SQLiteContract.test_preferences_scrub_only_owner) ... ok
+test_revoked_device_cannot_be_touched_or_reenabled (test_store_contract.SQLiteContract.test_revoked_device_cannot_be_touched_or_reenabled) ... ok
+test_session_deletion_prevents_replay_resurrection (test_store_contract.SQLiteContract.test_session_deletion_prevents_replay_resurrection) ... ok
+test_uncommitted_earlier_event_blocks_later_publication (test_store_contract.SQLiteContract.test_uncommitted_earlier_event_blocks_later_publication) ... ok
+
+----------------------------------------------------------------------
+Ran 49 tests in 1.182s
+
+OK (skipped=9)

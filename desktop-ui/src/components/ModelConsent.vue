@@ -2,12 +2,15 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import type { AgentReply, ModelService, ModelStatus } from '../api/contracts'
 import { createModelConsent, modelFailure, type ModelPlan } from '../api/model-consent'
-import { localAgentStatusView } from '../api/local-agent'
+import { localAgentStatusView, withLocalAgentStatusTimeout } from '../api/local-agent'
 const props=defineProps<{ service?: ModelService; query: string }>()
 const emit=defineEmits<{ reply: [value: { query: string; reply: AgentReply }] }>()
 const controller=props.service ? createModelConsent(props.service) : null
 const status=ref<ModelStatus|null>(null), busy=ref(false), plan=ref<ModelPlan|null>(null)
-const statusView=computed(()=>localAgentStatusView(status.value,!!controller))
+const statusTimedOut=ref(false)
+const statusView=computed(()=>statusTimedOut.value
+ ? { label:'本机 Agent 检查超时', detail:'macOS 系统凭据库没有返回。模型请求尚未发送；为避免重复访问，本次不再自动重试。处理系统提示后重启应用再检查。', ready:false, availability:'sidecar_unavailable' as const }
+ : localAgentStatusView(status.value,!!controller))
 const failure=ref<ReturnType<typeof modelFailure>|null>(null)
 const recoveryRequired=ref(false)
 const recoveryAvailable=ref(false), recoveryReview=ref<ModelPlan|null>(null)
@@ -16,10 +19,16 @@ const recoveryDialog=ref<HTMLElement|null>(null), recoveryCancel=ref<HTMLButtonE
 const sessionId=crypto.randomUUID()
 let mounted=true
 async function refresh() {
-  if (!controller || busy.value) return
+  if (!controller || busy.value || statusTimedOut.value) return
   busy.value=true;failure.value=null
   status.value=null
-  try { status.value=await controller.status() } catch(error) { if(mounted)failure.value=modelFailure(error,false) } finally { if(mounted)busy.value=false }
+  try { status.value=await withLocalAgentStatusTimeout(()=>controller.status()) }
+  catch(error) {
+    if(mounted){
+      if(error&&typeof error==='object'&&'code'in error&&error.code==='LOCAL_AGENT_STATUS_TIMEOUT')statusTimedOut.value=true
+      failure.value=modelFailure(error,false)
+    }
+  } finally { if(mounted)busy.value=false }
 }
 async function prepare(query=props.query) {
   if(!controller||busy.value||plan.value||recoveryReview.value)return
@@ -73,7 +82,7 @@ defineExpose({submit})
 </script>
 <template>
  <section class="model-consent-panel" aria-label="模型服务状态">
-  <div class="model-status-row"><strong>本机 Agent</strong><span :data-availability="statusView.availability" :class="{ 'status-ready': statusView.ready, 'status-unavailable': !statusView.ready }">{{ statusView.label }}</span><button class="text-button" :disabled="!controller||busy" @click="refresh">刷新状态</button></div>
+  <div class="model-status-row"><strong>本机 Agent</strong><span :data-availability="statusView.availability" :class="{ 'status-ready': statusView.ready, 'status-unavailable': !statusView.ready }">{{ statusView.label }}</span><button class="text-button" :disabled="!controller||busy||statusTimedOut" @click="refresh">刷新状态</button></div>
   <p>{{ statusView.detail }}</p>
   <p v-if="statusView.ready">Agent 与 LangGraph 编排运行在本机，Ollama 只通过本机 sidecar 调用。本轮最多 3 次模型请求、10 条脱敏摘要；不连接 CloudBase 模型接口，也不会静默切换云端。</p>
   <button ref="review" class="secondary-button compact" :disabled="!controller||!statusView.ready||busy||recoveryRequired||!query.trim()" @click="prepare()">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '新建模型轮次并查看发送内容' }}</button>

@@ -1,0 +1,39 @@
+{
+  "mode": "actual local Ollama; synthetic fixture; development authentication",
+  "elapsedSeconds": 4.65,
+  "response": {
+    "answer": "根据您提供的信息，“Ollama隔离备份”的任务正在运行中，最后一次发生在2026年10月26日3点59分29秒（UTC时间）。但是，由于信息可能不完整，我无法提供更详细的内容或执行任何操作。",
+    "matches": [
+      {
+        "kind": "job",
+        "deviceId": "local-dev-device",
+        "sequence": 1,
+        "jobId": "ollama-job",
+        "name": "Ollama隔离备份",
+        "state": "running",
+        "occurredAt": "2026-10-26T03:59:29.467909+00:00",
+        "source": "synced_job_snapshot"
+      }
+    ],
+    "model": "qwen2.5:7b",
+    "dataSource": "owner_scoped_sync_events",
+    "searchWindow": {
+      "eventLimit": 200,
+      "complete": false
+    },
+    "provider": "ollama",
+    "usage": {
+      "prompt_tokens": 142,
+      "completion_tokens": 61,
+      "total_tokens": 203
+    },
+    "executionAuthorized": false,
+    "sessionId": "grounding",
+    "turnId": "one",
+    "persisted": true,
+    "duplicate": false,
+    "orchestrator": "langgraph"
+  },
+  "cloudbaseCalled": false,
+  "mediaFilesSent": 0
+}

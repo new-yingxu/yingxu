@@ -1,6 +1,11 @@
 from dataclasses import dataclass, field
 import os
 
+DEFAULT_APP_VERSION = "0.9.0-local-sync-preview"
+# The current source uses the local-agent-step and atomic-action migrations too.
+# Refuse readiness on v14/v15 so the service cannot run against a partial schema.
+REQUIRED_SCHEMA_VERSION = 16
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -15,6 +20,13 @@ class Settings:
     app_version: str
     cloudbase_env_id: str | None = None
     cloudbase_api_key: str | None = field(default=None, repr=False)
+
+    model_owner_credentials: str | None = field(default=None, repr=False)
+
+    cloudbase_client_origins: str | None = None
+    session_private_key: str | None = field(default=None, repr=False)
+    session_key_id: str | None = None
+    session_verification_jwks: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -31,9 +43,14 @@ class Settings:
             jwt_audience=os.getenv("JWT_AUDIENCE"),
             jwt_jwks_url=os.getenv("JWT_JWKS_URL"),
             cors_origins=origins,
-            app_version=os.getenv("APP_VERSION", "0.1.0-dev"),
+            app_version=os.getenv("APP_VERSION", DEFAULT_APP_VERSION),
             cloudbase_env_id=os.getenv("CLOUDBASE_ENV_ID"),
             cloudbase_api_key=os.getenv("CLOUDBASE_APIKEY"),
+            model_owner_credentials=os.getenv("MODEL_OWNER_CREDENTIALS"),
+            cloudbase_client_origins=os.getenv("CLOUDBASE_CLIENT_ORIGINS"),
+            session_private_key=os.getenv("SESSION_PRIVATE_KEY"),
+            session_key_id=os.getenv("SESSION_KEY_ID"),
+            session_verification_jwks=os.getenv("SESSION_VERIFICATION_JWKS"),
         )
         return settings
 
@@ -49,8 +66,25 @@ class Settings:
             errors.append("dev auth requires APP_ENV=development and an explicit DEV_AUTH_TOKEN")
         if self.auth_mode == "jwt" and not all((self.jwt_issuer, self.jwt_audience, self.jwt_jwks_url)):
             errors.append("jwt auth requires JWT_ISSUER, JWT_AUDIENCE, and JWT_JWKS_URL")
-        if self.auth_mode not in {"disabled", "dev", "jwt"}:
-            errors.append("AUTH_MODE must be disabled, dev, or jwt")
+        if self.auth_mode == "cloudbase":
+            if not self.cloudbase_env_id:
+                errors.append("cloudbase auth requires CLOUDBASE_ENV_ID")
+            try:
+                import json
+                clients=json.loads(self.cloudbase_client_origins or '{}')
+                if not isinstance(clients,dict) or not clients or any(not isinstance(k,str) or not 1<=len(k)<=500 or v not in {'desktop','mobile'} for k,v in clients.items()):
+                    raise ValueError()
+            except (ValueError,TypeError):
+                errors.append("cloudbase auth requires a valid CLOUDBASE_CLIENT_ORIGINS map")
+            try:
+                from .session_tokens import validate_signing_configuration
+                validate_signing_configuration(self.session_private_key,self.session_key_id,self.jwt_issuer,self.jwt_audience,verification_jwks=json.loads(self.session_verification_jwks) if self.session_verification_jwks else None)
+            except (ValueError,TypeError):
+                errors.append("cloudbase auth requires valid session signing configuration")
+            if self.app_env == 'production' and (not self.jwt_issuer or not self.jwt_issuer.startswith('https://')):
+                errors.append("production session issuer must use HTTPS")
+        if self.auth_mode not in {"disabled", "dev", "jwt", "cloudbase"}:
+            errors.append("AUTH_MODE must be disabled, dev, jwt, or cloudbase")
         if self.app_env == "production" and self.auth_mode == "dev":
             errors.append("development auth is forbidden in production")
         if self.app_env == "production" and not self.cors_origins:

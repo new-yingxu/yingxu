@@ -6,7 +6,7 @@ const moduleDir = process.env.YINGXU_UI_TEST_MODULE_DIR;
 const localAgentPath = moduleDir ? pathToFileURL(resolve(moduleDir, "local-agent.js")).href : "../evidence/local-agent-module/local-agent.js";
 const tauriPath = moduleDir ? pathToFileURL(resolve(moduleDir, "tauri.js")).href : "../evidence/adapter-module/tauri.js";
 const modelConsentPath = moduleDir ? pathToFileURL(resolve(moduleDir, "model-consent.js")).href : "../evidence/model-consent-module/model-consent.js";
-const { createLocalAgentService, localAgentStatusView, shouldShowLocalAgentAdapterNotice } = await import(localAgentPath);
+const { createLocalAgentService, localAgentStatusView, shouldShowLocalAgentAdapterNotice, withLocalAgentStatusTimeout } = await import(localAgentPath);
 const { createTauriApi } = await import(tauriPath);
 const { modelFailure } = await import(modelConsentPath);
 
@@ -42,6 +42,15 @@ const completed = (sessionId, turnId, answer = "已找到素材") => ({
     filesChanged: false,
   },
 });
+
+{
+  let reads = 0;
+  await assert.rejects(
+    withLocalAgentStatusTimeout(() => { reads += 1; return new Promise(() => {}); }, 5),
+    { code: "LOCAL_AGENT_STATUS_TIMEOUT", automaticRetryAllowed: false },
+  );
+  assert.equal(reads, 1, "a timed-out keychain status check must not be repeated");
+}
 
 {
   const states = [

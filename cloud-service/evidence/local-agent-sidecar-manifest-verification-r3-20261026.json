@@ -1,0 +1,37 @@
+{
+  "status": "passed",
+  "verifiedAt": "2026-10-26",
+  "bundle": "/tmp/yingxu-sidecar-macos-arm64-20261026-r3/yingxu-local-agent",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "manifestFiles": 1187,
+  "manifestSha256": "ec895be625c7aa164e5640ca27ee2dcedaeb5fc8c3208083f88067aebc2d4db1",
+  "checks": [
+    "manifest identity and schema",
+    "duplicate JSON key rejection",
+    "manifest symlink escape rejection",
+    "safe relative paths and unique file entries",
+    "entrypoint exists in the manifest",
+    "manifest file set matches bundle contents",
+    "every bundled file size and SHA-256 matches",
+    "no file resolves outside the bundle root",
+    "packaged sidecar health and authenticated local status",
+    "local Ollama model-tools-model loop with two provider requests",
+    "duplicate continuation does not add provider requests",
+    "authenticated graceful shutdown exits zero",
+    "11 build-stage-manifest unit tests passed",
+    "staged full 94,555,663-byte r3 one-folder into a temporary Tauri resource layout and reverified all 1,187 files"
+  ],
+  "ollama": {
+    "status": "passed",
+    "providerRequests": 2,
+    "toolResult": "synthetic search_media fixture; no filesystem operation",
+    "cloudFallback": false
+  },
+  "limitations": [
+    "This verifies the existing macOS arm64 sidecar folder, not a Tauri installer.",
+    "The sidecar is unsigned and not notarized.",
+    "Static secret scanning of the final desktop installer has not run.",
+    "Real media database tools, Windows build/runtime, and user-facing installation remain unverified."
+  ]
+}
