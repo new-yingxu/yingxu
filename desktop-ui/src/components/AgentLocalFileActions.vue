@@ -34,6 +34,12 @@ const statusLabel: Record<LocalFileActionReceipt['status'], string> = {
   succeeded: '已完成', partial: '部分完成，请核对来源与目标', completed_unindexed: '文件已改名，资料库索引待重新扫描',
   failed: '执行失败', declined: '已取消', expired: '预览已过期', cancelled: '已取消',
 }
+const quarantineStateLabel: Record<string, string> = {
+  isolated: '待处理', cleanup_pending: '等待清理确认', cleanup_cancelled: '已取消清理，副本保留',
+  cleanup_failed: '清理失败，副本保留', trash_pending: '正在移入系统废纸篓', trashed: '已移入系统废纸篓',
+  trash_uncertain: '废纸篓状态待核对', restored: '已从系统废纸篓放回',
+}
+function quarantineLabel(state: string) { return quarantineStateLabel[state] ?? state }
 
 async function refreshQuarantine() {
   try { quarantine.value = await props.service.listQuarantine() }
@@ -127,8 +133,14 @@ onUnmounted(() => { if (expiryTicker) clearInterval(expiryTicker) })
     <div v-if="quarantine.length" class="quarantine-list">
       <h4>待处理废片（原始素材仍保留）</h4>
       <article v-for="item in quarantine" :key="item.id" class="local-action-file">
-        <div><b>{{ item.name }}</b><small>{{ item.state }} · {{ item.bytes.toLocaleString() }} bytes · SHA-256 {{ item.sha256 }}</small></div>
-        <button class="text-button" :disabled="busy || !!preview || item.state === 'trashed'" @click="prepareCleanup(item)">预览清理副本</button>
+        <div>
+          <b>{{ item.name }}</b>
+          <small>{{ quarantineLabel(item.state) }} · {{ item.bytes.toLocaleString() }} bytes · SHA-256 {{ item.sha256 }}</small>
+          <p v-if="item.restoreViaSystemTrash || item.state === 'trashed' || item.state === 'trash_uncertain'" class="restore-boundary" role="status">
+            如需恢复隔离副本，请在 Finder 废纸篓或 Windows 回收站中使用“放回/还原”；之后刷新隔离列表，影序会校验 SHA-256 并更新状态。原始素材始终保留。
+          </p>
+        </div>
+        <button class="text-button" :disabled="busy || !!preview || !['isolated', 'cleanup_cancelled', 'cleanup_failed'].includes(item.state)" @click="prepareCleanup(item)">预览清理副本</button>
       </article>
     </div>
 
@@ -154,6 +166,9 @@ onUnmounted(() => { if (expiryTicker) clearInterval(expiryTicker) })
       <p v-if="receipt.targetPath">目标：{{ receipt.targetPath }}（{{ receipt.destinationCreated ? '已创建' : '未创建' }}）</p>
       <p v-if="receipt.sha256">SHA-256：{{ receipt.sha256 }}</p>
       <p v-if="receipt.error" class="error-text">{{ receipt.error.code }}：{{ receipt.error.message }}</p>
+      <p v-if="receipt.tool === 'cleanup_quarantine' && receipt.status === 'succeeded'" class="restore-boundary">
+        原始素材未动。这份隔离副本仍可通过系统废纸篓恢复；放回后刷新隔离列表即可重新校验并更新状态。
+      </p>
       <p>云端执行授权：否</p>
     </section>
     <p v-if="notice" class="notice-text" role="status">{{ notice }}</p>
@@ -164,6 +179,6 @@ onUnmounted(() => { if (expiryTicker) clearInterval(expiryTicker) })
 <style scoped>
 .local-file-actions{display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:14px;background:var(--card)}
 .local-file-actions header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.local-file-actions h3,.local-file-actions h4{margin:0 0 6px}.local-file-actions header p,.empty-note{margin:0;color:var(--muted);font-size:12px;line-height:1.6}
-.local-action-files,.quarantine-list{display:grid;gap:8px}.quarantine-list{border-top:1px solid var(--line);padding-top:12px}.local-action-file{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;min-width:0}.local-action-file>div:first-child{display:grid;gap:4px;min-width:0}.local-action-file b,.local-action-file small{overflow-wrap:anywhere}.local-action-file small{color:var(--muted);font-size:11px}.local-action-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.local-action-controls input{width:min(220px,100%);min-width:100px}.action-preview,.action-receipt{padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface,#f8f8f5)}.action-preview h4,.action-receipt h4{margin:0 0 10px}.action-preview dl{display:grid;grid-template-columns:100px minmax(0,1fr);gap:8px 12px;margin:0}.action-preview dt{font-weight:700}.action-preview dd{margin:0;overflow-wrap:anywhere}.action-preview p,.action-receipt p{margin:10px 0 0;line-height:1.55;overflow-wrap:anywhere}.action-buttons{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}.error-text{color:var(--red,#a53b32)}.notice-text{color:var(--green,#2b7b4f)}
+.local-action-files,.quarantine-list{display:grid;gap:8px}.quarantine-list{border-top:1px solid var(--line);padding-top:12px}.local-action-file{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;min-width:0}.local-action-file>div:first-child{display:grid;gap:4px;min-width:0}.local-action-file b,.local-action-file small{overflow-wrap:anywhere}.local-action-file small{color:var(--muted);font-size:11px}.restore-boundary{margin:4px 0 0;color:var(--muted);font-size:11px;line-height:1.55;overflow-wrap:anywhere}.local-action-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.local-action-controls input{width:min(220px,100%);min-width:100px}.action-preview,.action-receipt{padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface,#f8f8f5)}.action-preview h4,.action-receipt h4{margin:0 0 10px}.action-preview dl{display:grid;grid-template-columns:100px minmax(0,1fr);gap:8px 12px;margin:0}.action-preview dt{font-weight:700}.action-preview dd{margin:0;overflow-wrap:anywhere}.action-preview p,.action-receipt p{margin:10px 0 0;line-height:1.55;overflow-wrap:anywhere}.action-buttons{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}.error-text{color:var(--red,#a53b32)}.notice-text{color:var(--green,#2b7b4f)}
 @media(max-width:700px){.local-file-actions header,.local-action-file{align-items:stretch;flex-direction:column}.local-action-controls{justify-content:flex-start}.action-preview dl{grid-template-columns:1fr;gap:4px}.action-preview dd{margin:0 0 8px}.action-buttons{flex-wrap:wrap}}
 </style>

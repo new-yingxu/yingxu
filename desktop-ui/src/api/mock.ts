@@ -71,7 +71,7 @@ export function createMockApi(): DesktopApi {
         }
         if (accepted && preview.tool === 'cleanup_quarantine') {
           const item = demoQuarantine.find((entry) => entry.name === preview.objectName)
-          if (item) item.state = 'trashed'
+          if (item) { item.state = 'trashed'; item.restoreViaSystemTrash = true }
         }
         return receipt
       },
@@ -79,7 +79,7 @@ export function createMockApi(): DesktopApi {
         await delay(80)
         const media = fileData.find((item) => item.id === mediaId)
         if (!media || media.qualityState !== 'review') throw new Error('只有待复核演示素材可以复制到隔离目录')
-        const item: QuarantineItem = { id: `demo-quarantine-${++actionSequence}`, mediaId, name: media.name, bytes: 0, sha256: '演示摘要 · 非真实文件哈希', state: 'isolated', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), restoreViaSystemTrash: true, originalPreserved: true }
+        const item: QuarantineItem = { id: `demo-quarantine-${++actionSequence}`, mediaId, name: media.name, bytes: 0, sha256: '演示摘要 · 非真实文件哈希', state: 'isolated', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), restoreViaSystemTrash: false, originalPreserved: true }
         demoQuarantine.unshift(item)
         return { id: item.id, name: item.name, state: item.state, originalPreserved: true }
       },
