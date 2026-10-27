@@ -54,6 +54,7 @@
   },
   "notVerified": {
     "uncertainPriorWebViewTurn": "not replayed; this verification used a new isolated session and exactly one model request",
-    "cloudTasks": "paused by user; no CloudBase or cloud deployment actions performed"
+    "cloudTasks": "paused by user; no CloudBase or cloud deployment actions performed",
+    "quarantineToSystemTrashRuntime": "not exercised in this UI session; real Finder/system Trash restore remains pending. No additional model request or real-media access was used to create a cleanup candidate; core/UI contract tests use synthetic fixtures."
   }
 }
