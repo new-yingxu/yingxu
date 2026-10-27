@@ -3,7 +3,7 @@ export type TaskState = 'queued' | 'running' | 'paused' | 'success' | 'partial' 
 export type MediaKind = 'photo' | 'video' | 'other'
 
 export interface UserSession { userId: string; displayName: string; email: string; deviceId: string; expiresAt: string }
-export interface Device { id: string; name: string; platform: 'macOS' | 'Windows' | 'Android' | 'iOS'; online: boolean; lastSeen: string; current?: boolean }
+export interface Device { id: string; name: string; platform: 'macOS' | 'Windows' | 'Android' | 'iOS' | '桌面端' | '移动端'; online: boolean; lastSeen: string; current?: boolean; revoked?: boolean }
 export interface TaskDestination { id: string; name: string; state: TaskState; progress: number; error?: string }
 export interface MediaFile { id: string; name: string; path: string; kind: MediaKind; size: string; capturedAt: string; device: string; location: string; quality: string; qualityState: 'good' | 'review' | 'unanalyzed'; selected?: boolean }
 export interface ArchiveTask { id: string; name: string; state: TaskState; createdAt: string; files: number; size: string; progress: number; speed: string; phase: string; source: string; destinations: TaskDestination[]; error?: string }

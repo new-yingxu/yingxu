@@ -95,6 +95,9 @@ arg!(Events {
     after_sequence: i64,
     limit: u32
 });
+arg!(EventsAck {
+    through_sequence: i64
+});
 
 impl Engine {
     pub fn dispatch(&self, request: Request) -> Reply {
@@ -312,6 +315,17 @@ impl Engine {
                     result.push(json!({"schemaVersion":1,"eventId":id,"deviceId":device,"sequence":seq,"eventType":event,"occurredAt":at,"payload":payload}));
                 }
                 value(result)
+            }
+            "sync.ack" => {
+                let a: EventsAck = decode(p)?;
+                if a.through_sequence < 1 {
+                    return Err(CoreError::new("INVALID_CURSOR", "同步确认游标必须为正数"));
+                }
+                let changed = self.store.connect()?.execute(
+                    "UPDATE outbox_events SET sent=1 WHERE sent=0 AND sequence<=?1",
+                    [a.through_sequence],
+                )?;
+                value(json!({"acknowledged":changed,"throughSequence":a.through_sequence}))
             }
             "workbench.snapshot" => {
                 let c = self.store.connect()?;

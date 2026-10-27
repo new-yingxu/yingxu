@@ -306,6 +306,15 @@ impl CloudBaseAuthClient {
         })
     }
 
+    /// Return only a short-lived copy for the native Rust host to exchange with
+    /// the Yingxu API. The value is never sent to the WebView.
+    pub fn access_token_for_native_exchange(&self) -> Result<Option<Zeroizing<String>>, AuthError> {
+        Ok(self
+            .token_store
+            .load()?
+            .map(|tokens| Zeroizing::new(tokens.access_token.clone())))
+    }
+
     pub fn email_code_sign_in(
         &self,
         email: &str,

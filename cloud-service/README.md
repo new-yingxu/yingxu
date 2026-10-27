@@ -21,7 +21,7 @@ cp .env.example .env
 
 ## 生产配置
 
-生产可以用 CloudBase 官方 PostgreSQL REST：不设 `DATABASE_URL`，将 `CLOUDBASE_ENV_ID` 和服务端 Secret `CLOUDBASE_APIKEY` 注入函数环境。还需 `AUTH_MODE=cloudbase`、可信 `JWT_ISSUER`/`JWT_AUDIENCE`、客户端映射 `CLOUDBASE_CLIENT_ORIGINS`、会话签名 Secrets (`SESSION_PRIVATE_KEY`/`SESSION_KEY_ID`) 和明确的 `CORS_ORIGINS`。网站只接受明确的 HTTPS 来源；桌面打包版只额外接受精确的 macOS `tauri://localhost` 与 Windows `http://tauri.localhost` 来源，不允许任意 HTTP 或通配符。CloudBase access token 由后端经官方 user/me 与 token/introspect 双校验，再换发影序短会话。缺少身份配置时业务失败关闭。
+生产可以用 CloudBase 官方 PostgreSQL REST：不设 `DATABASE_URL`，将 `CLOUDBASE_ENV_ID` 和服务端 Secret `CLOUDBASE_APIKEY` 注入函数环境。还需 `AUTH_MODE=cloudbase`、可信 `JWT_ISSUER`/`JWT_AUDIENCE`、客户端映射 `CLOUDBASE_CLIENT_ORIGINS`、会话签名 Secrets (`SESSION_PRIVATE_KEY`/`SESSION_KEY_ID`) 和明确的 `CORS_ORIGINS`。浏览器网站来源只接受明确的 HTTPS 域名；Tauri 桌面 API 由 Rust 原生 HTTPS 客户端调用，不依赖 WebView CORS，也不需要把 `tauri://localhost` 或 `http://tauri.localhost` 加入安全来源。CloudBase access token 由后端经官方 user/me 与 token/introspect 双校验，再换发影序短会话。缺少身份配置时业务失败关闭。
 
 生产不自动建表。`yingxu-dev` 的 PostgreSQL v1–v16 已于 2026-10-27 应用并验证；函数候选仍未部署。此前 `0.2.0-store-preview` 的健康状态仅是历史快照，不代表当前函数版本或正式认证已就绪。
 
@@ -98,6 +98,14 @@ useModel=true 现在进入实际 LangGraph model→tools→model 条件循环，
 本地ZIP 0.7.0-account-session-preview-093b3d54029c.zip，34,245,375字节，2730条目，SHA256 0682dcef5f9986c32f15f790115a37f6f46389bae3fcbf4b913b1a477d11c114。源码匹配、凭据扫描及ZIP逐文件回读通过；schema11仅本地，云仍schema10/应用0.2.0，未部署。R10桌面8项合成回归与构建已收，已派R11短会话客户端和真实本地fixture联调，运行中不重复派发。
 
 官方接口参考：https://docs.cloudbase.net/http-api/auth/auth-token-introspect 。实际供应商返回client_id的语义及真实注册配置仍待云端验收，不能以合成测试代替。
+
+## 桌面原生客户端接入（Codex 云端分支）
+
+桌面 Rust 宿主以固定 HTTPS API origin 调用本服务：身份交换、退出、设备列表/撤销、同步偏好、备份 outbox 事件，以及只读 Agent turns/turn history。桌面包的 `YINGXU_CLOUD_API_ORIGIN` 是公开的 HTTPS 根域名配置；不在 WebView 中请求、不把 app JWT 暴露给 Vue，也不通过 CORS 放行 Tauri 本地来源。备份事件收到成功响应后才确认 SQLite outbox；请求失败会保留事件以供重试。路径隐私仍由 `syncPaths` 偏好与本地 outbox 投影控制。
+
+云端 Agent UI 默认关闭；用户开启后，每轮只发送本次文字、固定的 `sessionId=default` 和唯一 `turnId`，`useModel=false`，服务只检索当前账号已经同步的备份任务摘要并保存可同步的对话历史。它不接触原片/照片、本机路径或执行工具；文件改名/移动/上传仍不在此云端通道授权。云模型/BYOK 请求、逐次模型同意和用量展示仍未实现，必须等用户提供模型服务商和密钥管理配置后再做；不把平台级 Secret 当作用户自带 Key。
+
+本地验证包含 Tauri 15 项合成 Rust 测试、SQLite outbox ack 测试、前端 Vue/TS 生产构建，以及 CloudBase 会话交换、sync snapshot 与模型 API 共 13 项本地 Python HTTP 测试；没有真实 CloudBase 请求、邮件、模型或图片传输。线上 API origin、CloudBase 服务端 Secrets 和函数部署尚未配置/验证。
 
 
 ## 0.7.1 短会话公钥轮换（本地）

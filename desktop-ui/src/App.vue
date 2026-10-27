@@ -2,17 +2,17 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import type { AgentReply, AppSettings, ArchiveTask, AuditResult, Device, MediaFile, NamePreset, TaskState, UserSession } from './api/contracts'
 import { createMockApi } from './api/mock'
-import { emailCodeSignIn, emailCodeSignUp, isNativeTauriRuntime, passwordSignIn, requestEmailCode, signOut as nativeSignOut } from './api/nativeAuth'
+import { cloudApiRequest, currentCloudSession, emailCodeSignIn, emailCodeSignUp, getCloudSyncPreferences, isNativeTauriRuntime, nativeCoreRequest, passwordSignIn, putCloudSyncPreferences, requestEmailCode, signOut as nativeSignOut, syncBackupRecords } from './api/nativeAuth'
 import { Activity, Archive, ArrowDownToLine, ArrowRight, Bell, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock3, Cloud, Copy, Database, FileImage, FileVideo, Filter, Folder, HardDrive, Image, LayoutDashboard, LockKeyhole, Moon, MoreHorizontal, Play, Plus, Search, Send, Settings2, ShieldCheck, Sparkles, Sun, WandSparkles, X } from './icons'
 
 const api = createMockApi()
 const nativeTauriRuntime = isNativeTauriRuntime()
 type Page = 'home' | 'backup' | 'transfer' | 'library' | 'history' | 'task' | 'agent' | 'account' | 'presets' | 'health' | 'delivery' | 'settings'
 const page = ref<Page>('home')
-type DesktopAuthState = { kind: 'mock'; user: UserSession } | { kind: 'cloudbase-provider'; subject: string; expiresIn: number; identifier: string }
+type DesktopAuthState = { kind: 'mock'; user: UserSession } | { kind: 'cloud-session'; subject: string; deviceId: string; expiresIn: number; expiresAtUnix: number; identifier: string }
 const authState = ref<DesktopAuthState | null>(null)
-const activeDisplayName = computed(() => authState.value?.kind === 'mock' ? authState.value.user.displayName : authState.value?.kind === 'cloudbase-provider' ? authState.value.identifier : '')
-const activeEmail = computed(() => authState.value?.kind === 'mock' ? authState.value.user.email : authState.value?.kind === 'cloudbase-provider' ? (authState.value.identifier.includes('@') ? authState.value.identifier : '') : '')
+const activeDisplayName = computed(() => authState.value?.kind === 'mock' ? authState.value.user.displayName : authState.value?.kind === 'cloud-session' ? authState.value.identifier : '')
+const activeEmail = computed(() => authState.value?.kind === 'mock' ? authState.value.user.email : authState.value?.kind === 'cloud-session' ? (authState.value.identifier.includes('@') ? authState.value.identifier : '') : '')
 const loginMode = ref<'wechat' | 'phone-code' | 'email-code' | 'email-password' | 'email-signup'>(nativeTauriRuntime ? 'email-password' : 'wechat')
 const loginIdentifier = ref('')
 const loginProof = ref('')
@@ -55,6 +55,7 @@ const backupTask = ref<ArchiveTask | null>(null)
 const newPresetName = ref('')
 const agentInput = ref('')
 const agentMessages = ref<{role:'assistant'|'user';text:string;reply?:AgentReply;actionId?:string}[]>([])
+const agentCloudMode = ref(false)
 const settings = reactive<AppSettings>({ theme: 'light', startOnLogin: true, backgroundOnClose: true, verify: true, autoAnalyze: true, similarity: 88, maxUploadMbps: 0, syncHistory: true, syncAgent: true, syncThumbnails: true, syncPaths: false, webhookEnabled: false, webhookUrl: '', aiProvider: '本地规则优先' })
 const deliveryName = ref('客户交付包 · 春日人像')
 const deliveryContact = ref(true)
@@ -100,9 +101,33 @@ async function loadData() {
   const [snapshot, settingData, deviceData, presetData, fileData] = await Promise.all([api.workbench.snapshot(), api.settings.get(), api.account.devices(), api.presets.list(), api.library.search('', 'all', 'all')])
   tasks.value = snapshot.tasks; summary.fileCount = snapshot.fileCount; summary.totalSize = snapshot.totalSize; summary.destinations = snapshot.destinations; summary.reviewCount = snapshot.reviewCount
   Object.assign(settings, settingData); devices.value = deviceData; presets.value = presetData; files.value = fileData
+  if (nativeTauriRuntime) {
+    const localSettings = await nativeCoreRequest<AppSettings>('settings.get')
+    Object.assign(settings, localSettings)
+    if (authState.value?.kind === 'cloud-session') {
+      try {
+        const cloud = await getCloudSyncPreferences()
+        Object.assign(settings, { syncHistory: cloud.syncRecords, syncAgent: cloud.syncAgentSessions, syncThumbnails: cloud.syncThumbnails, syncPaths: cloud.syncPaths })
+        await nativeCoreRequest('settings.update', { syncHistory: cloud.syncRecords, syncAgent: cloud.syncAgentSessions, syncThumbnails: cloud.syncThumbnails, syncPaths: cloud.syncPaths })
+      } catch (error) { say(typeof error === 'string' ? error : error instanceof Error ? error.message : '读取云端同步设置失败。') }
+      try { await refreshCloudDevices() } catch (error) { say(typeof error === 'string' ? error : error instanceof Error ? error.message : '读取影序设备列表失败。') }
+    }
+  }
   document.documentElement.dataset.theme = settings.theme
 }
-onMounted(async () => { const restored = await api.auth.restore(); if (restored) authState.value = { kind: 'mock', user: restored } })
+onMounted(async () => {
+  if (nativeTauriRuntime) {
+    try {
+      const session = await currentCloudSession()
+      if (session) {
+        authState.value = { kind: 'cloud-session', subject: session.ownerId, deviceId: session.deviceId, expiresIn: session.expiresIn, expiresAtUnix: session.expiresAtUnix, identifier: session.displayName }
+        await loadData()
+      }
+    } catch (error) { loginError.value = typeof error === 'string' ? error : error instanceof Error ? error.message : '读取本机登录状态失败。' }
+    return
+  }
+  const restored = await api.auth.restore(); if (restored) authState.value = { kind: 'mock', user: restored }
+})
 onUnmounted(() => { if (emailCodeTimer !== undefined) window.clearInterval(emailCodeTimer) })
 function setLoginMode(mode: typeof loginMode.value) {
   loginMode.value = mode
@@ -155,7 +180,7 @@ async function signIn() {
         : loginMode.value === 'email-signup'
           ? await emailCodeSignUp(loginIdentifier.value.trim(), signupPassword.value, emailVerificationId.value, loginProof.value)
           : await emailCodeSignIn(loginIdentifier.value.trim(), emailVerificationId.value, loginProof.value)
-      authState.value = { kind: 'cloudbase-provider', subject: identity.subject, expiresIn: identity.expiresIn, identifier: loginIdentifier.value.trim() }
+      authState.value = { kind: 'cloud-session', subject: identity.ownerId, deviceId: identity.deviceId, expiresIn: identity.expiresIn, expiresAtUnix: identity.expiresAtUnix, identifier: identity.displayName }
     } else {
       const mockLoginMode = loginMode.value === 'email-signup' ? 'email-code' : loginMode.value
       authState.value = { kind: 'mock', user: await api.auth.login(mockLoginMode, loginIdentifier.value, loginProof.value || 'qr-confirmed') }
@@ -178,20 +203,68 @@ async function refreshHistory() { tasks.value = await api.history.list(query.val
 async function searchFiles() { files.value = await api.library.search(query.value, filterKind.value, filterQuality.value) }
 async function inspectTransfer() { transferBusy.value = true; transferFiles.value = await api.transfer.inspect('旧素材来源', transferTarget.value); selectedTransfer.value = transferFiles.value.filter(f => f.kind !== 'other').map(f => f.id); transferBusy.value = false }
 async function beginTransfer() { const task = await api.transfer.start(selectedTransfer.value, transferTarget.value, transferConfirmSource.value); taskDetail.value = task; tasks.value = [task, ...tasks.value]; page.value = 'task'; say(task.state === 'failed' ? '请先确认目标校验后是否移除来源。' : '转移演示已启动；来源仅在校验成功并二次确认后才会移除。') }
-async function askAgent() { const text = agentInput.value.trim(); if (!text) return; agentMessages.value.push({ role:'user', text }); agentInput.value = ''; const reply = await api.agent.ask(text); agentMessages.value.push({ role:'assistant', text:reply.text, reply, actionId:reply.proposedAction ? `act-${Date.now()}` : undefined }) }
+async function askAgent() {
+  const text = agentInput.value.trim(); if (!text) return
+  agentMessages.value.push({ role:'user', text }); agentInput.value = ''
+  if (nativeTauriRuntime && agentCloudMode.value && authState.value?.kind === 'cloud-session') {
+    try {
+      const result = await cloudApiRequest<{ answer: string; matches?: unknown[]; sessionId?: string; persisted?: boolean }>('POST', '/v1/agent/turns', { query: text, useModel: false, sessionId: 'default', turnId: `turn-${crypto.randomUUID()}` })
+      agentMessages.value.push({ role:'assistant', text: result.answer || '云端检索完成。' })
+    } catch (error) { agentMessages.value.push({ role:'assistant', text: typeof error === 'string' ? error : error instanceof Error ? error.message : '云端 Agent 请求失败。' }) }
+    return
+  }
+  const reply = await api.agent.ask(text); agentMessages.value.push({ role:'assistant', text:reply.text, reply, actionId:reply.proposedAction ? `act-${Date.now()}` : undefined })
+}
+async function loadCloudAgentHistory() {
+  if (!nativeTauriRuntime || authState.value?.kind !== 'cloud-session' || !settings.syncAgent) { say('请先启用 Agent 会话同步。'); return }
+  try {
+    const result = await cloudApiRequest<{ turns: { turnId: string; query: string; response: { answer?: string } }[] }>('GET', '/v1/agent/sessions/default/turns?after_id=0')
+    agentMessages.value = result.turns.flatMap(turn => [{ role:'user' as const, text:turn.query }, { role:'assistant' as const, text:turn.response?.answer || '已恢复一条云端会话。' }])
+    say(`已恢复 ${result.turns.length} 轮云端 Agent 对话。`)
+  } catch (error) { say(typeof error === 'string' ? error : error instanceof Error ? error.message : '恢复云端会话失败。') }
+}
 async function confirmAgent(message: { actionId?: string }, accepted: boolean) { if (!message.actionId) return; say(await api.agent.confirm(message.actionId, accepted)); message.actionId = undefined }
-async function updateSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]) { Object.assign(settings, await api.settings.update({ [key]: value })); if (key === 'theme') document.documentElement.dataset.theme = settings.theme }
+async function updateSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
+  if (nativeTauriRuntime) {
+    const patch = { [key]: value }
+    if (authState.value?.kind === 'cloud-session' && ['syncHistory', 'syncAgent', 'syncThumbnails', 'syncPaths'].includes(key)) {
+      const cloud = { syncRecords: settings.syncHistory, syncAgentSessions: settings.syncAgent, syncThumbnails: settings.syncThumbnails, syncPaths: settings.syncPaths }
+      const next = { ...cloud, ...(key === 'syncHistory' ? { syncRecords: Boolean(value) } : {}), ...(key === 'syncAgent' ? { syncAgentSessions: Boolean(value) } : {}), ...(key === 'syncThumbnails' ? { syncThumbnails: Boolean(value) } : {}), ...(key === 'syncPaths' ? { syncPaths: Boolean(value) } : {}) }
+      await putCloudSyncPreferences(next)
+    }
+    const saved = await nativeCoreRequest<Partial<AppSettings>>('settings.update', patch)
+    Object.assign(settings, saved)
+  } else Object.assign(settings, await api.settings.update({ [key]: value }))
+  if (key === 'theme') document.documentElement.dataset.theme = settings.theme
+}
+async function syncCloudHistory() {
+  try { const result = await syncBackupRecords(); say(result.sent ? `已同步 ${result.acknowledged} 条备份记录。` : '本机没有待同步的备份记录。') }
+  catch (error) { say(typeof error === 'string' ? error : error instanceof Error ? error.message : '备份记录同步失败。') }
+}
+async function refreshCloudDevices() {
+  if (!nativeTauriRuntime || authState.value?.kind !== 'cloud-session') { devices.value = await api.account.devices(); return }
+  const currentDeviceId = authState.value.deviceId
+  const response = await cloudApiRequest<{ deviceId: string; displayName: string; origin: 'desktop' | 'mobile'; revoked: boolean; lastSeenAt: string }[]>('GET', '/v1/devices')
+  devices.value = response.map(device => ({ id: device.deviceId, name: device.displayName, platform: device.origin === 'desktop' ? '桌面端' : '移动端', online: false, lastSeen: device.lastSeenAt, current: device.deviceId === currentDeviceId, revoked: device.revoked }))
+}
 async function createPreset() { const name = newPresetName.value.trim() || `新建预设 ${presets.value.length + 1}`; const item = await api.presets.save({ id:`preset-${Date.now()}`, name, pattern:'日期 / 事件 / 设备 / 自定义文本', isDefault:false }); presets.value = [...presets.value, item]; newPresetName.value = ''; say('预设已加入本机演示列表。') }
 async function removePreset(item: NamePreset) { if (item.isDefault) return; await api.presets.remove(item.id); presets.value = presets.value.filter(p => p.id !== item.id) }
 async function runAudit() { auditResult.value = await api.audit.run() }
 async function restoreFile(file: MediaFile) { say(await api.audit.restore(file.path, '桌面 / 恢复文件')) }
 async function createDelivery() { const item = await api.delivery.create(deliveryName.value, deliverySelection.value, deliveryContact.value, deliveryManifest.value); say(`已创建演示交付包 ${item.id}，没有生成或移动真实文件。`) }
-async function revokeDevice(device: Device) { if (device.current) return; await api.account.revoke(device.id); devices.value = await api.account.devices(); say(`${device.name} 已在演示设备列表中撤销。`) }
+async function revokeDevice(device: Device) {
+  if (device.current) return
+  if (nativeTauriRuntime && authState.value?.kind === 'cloud-session') {
+    await cloudApiRequest('POST', `/v1/devices/${device.id}/revoke`, {})
+    await refreshCloudDevices()
+    say(`${device.name} 已从影序账号撤销。`)
+  } else { await api.account.revoke(device.id); devices.value = await api.account.devices(); say(`${device.name} 已在演示设备列表中撤销。`) }
+}
 async function clearHistory() { await api.history.clear(); tasks.value = []; showModal.value = ''; say('演示历史已清空；真实备份文件不受影响。') }
 async function renameTask(task: ArchiveTask) { const name = window.prompt('输入新的记录名称', task.name); if (!name?.trim()) return; await api.history.rename(task.id, name.trim()); task.name = name.trim(); say('记录名称已更新（演示）。') }
 async function connectProvider(provider: 'baidu'|'quark') { say(await api.settings.connectProvider(provider)) }
 async function resetSettings() { const value = await api.settings.reset(); Object.assign(settings,value); document.documentElement.dataset.theme = value.theme; say('设置已恢复默认演示值。') }
-function setPage(next: Page) { page.value = next; taskDetail.value = next === 'task' ? selectedTask.value : null; if (next === 'history') void refreshHistory(); if (next === 'library') void searchFiles(); if (next === 'account') void api.account.devices().then(value => devices.value = value); if (next === 'presets') void api.presets.list().then(value => presets.value = value) }
+function setPage(next: Page) { page.value = next; taskDetail.value = next === 'task' ? selectedTask.value : null; if (next === 'history') void refreshHistory(); if (next === 'library') void searchFiles(); if (next === 'account') void refreshCloudDevices(); if (next === 'presets') void api.presets.list().then(value => presets.value = value) }
 function toggleGlobalSearch() { globalSearchOpen.value = !globalSearchOpen.value; globalSearchQuery.value = '' }
 function chooseGlobalSearch(next: Page) { setPage(next); globalSearchOpen.value = false; globalSearchQuery.value = '' }
 function submitGlobalSearch() { const match = globalSearchMatches.value[0]; if (match) chooseGlobalSearch(match.id) }
@@ -202,7 +275,7 @@ function taskStateLabel(state: TaskState) { return ({ queued:'排队中', runnin
   <main v-if="!authState" class="login-shell">
     <div class="login-brand"><div class="brand-mark"><i></i><i></i><i></i><i></i></div><span>影序 <small>YINGXU</small></span></div>
     <section class="login-card">
-      <div class="login-intro"><span class="eyebrow">影序 · 桌面端 V2 草稿</span><h1>欢迎回到影序</h1><p>{{ nativeTauriRuntime ? '验证 CloudBase 账号身份。当前桌面工作区仍为本地演示数据，影序会话交换与跨设备同步尚未接入。' : '登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。' }}</p></div>
+      <div class="login-intro"><span class="eyebrow">影序 · 桌面端 V2 草稿</span><h1>欢迎回到影序</h1><p>{{ nativeTauriRuntime ? '使用邮箱或密码验证账号，并建立本机影序短会话。照片原片不会上传到影序云端。' : '登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。' }}</p></div>
       <div class="login-tabs">
         <template v-if="nativeTauriRuntime">
           <button :class="{chosen:loginMode==='email-password'}" @click="setLoginMode('email-password')">邮箱密码</button>
@@ -233,7 +306,7 @@ function taskStateLabel(state: TaskState) { return ({ queued:'排队中', runnin
       </div>
       <p v-if="loginError" class="error-note">{{ loginError }}</p>
       <button class="primary-button login-submit" @click="signIn" :disabled="loginBusy">{{ loginBusy?'正在登录…':nativeTauriRuntime?'验证 CloudBase 账号':'登录影序（演示）' }}</button>
-      <p class="login-disclaimer">{{ nativeTauriRuntime?'通过本机 Tauri 安全通道验证 CloudBase 身份；这不代表影序云端会话或同步已建立。':'V2 草稿预览 · 登录仅为界面演示，不会连接认证服务' }}</p>
+      <p class="login-disclaimer">{{ nativeTauriRuntime?'认证和会话交换均通过本机 Tauri HTTPS 通道；当前业务页面数据仍在逐步接入云端。':'V2 草稿预览 · 登录仅为界面演示，不会连接认证服务' }}</p>
     </section>
     <footer class="login-footer"><span><LockKeyhole :size="14" /> 安全同步 · 原片留在你的设备</span><span>Windows / macOS</span></footer>
     <div v-if="notice" class="toast">{{ notice }}</div>
@@ -250,7 +323,7 @@ function taskStateLabel(state: TaskState) { return ({ queued:'排队中', runnin
       <header class="topbar"><div class="breadcrumbs"><span>影序</span><ChevronRight :size="13"/><b>{{ activeTitle }}</b></div><div class="top-actions"><span class="draft-chip"><i></i> V2 草稿预览</span><span class="demo-chip"><i></i> 演示数据</span><div class="search-action-wrap"><button class="icon-button" aria-label="搜索工作区和工具" :aria-expanded="globalSearchOpen" @click="toggleGlobalSearch"><Search :size="17"/></button><span v-if="!globalSearchOpen" class="search-tooltip" role="tooltip">搜索</span><div v-if="globalSearchOpen" class="global-search-popover" @keydown.esc="globalSearchOpen=false"><form class="global-search-field" @submit.prevent="submitGlobalSearch"><Search :size="16"/><input v-model="globalSearchQuery" autofocus placeholder="搜索工作区和工具" aria-label="搜索工作区和工具"/><button v-if="globalSearchQuery" type="button" class="global-search-clear" aria-label="清除搜索" @click="globalSearchQuery=''">×</button></form><div v-if="globalSearchQuery.trim() && globalSearchMatches.length" class="global-search-results"><button v-for="item in globalSearchMatches" :key="item.id" class="global-search-result" @click="chooseGlobalSearch(item.id)"><component :is="item.icon" :size="15"/><span>{{ item.label }}</span><small>{{ item.group }}</small></button></div><div v-else-if="globalSearchQuery.trim()" class="global-search-empty">未搜索到相关页面</div><div v-else class="global-search-hint">搜索工作区与工具，输入完整名称可直接跳转</div></div></div><button class="icon-button" aria-label="通知" title="通知" @click="say('当前没有新的演示通知。')"><Bell :size="17"/></button><span class="top-divider"></span><button class="theme-button" @click="updateSetting('theme',settings.theme==='light'?'dark':'light')"><component :is="settings.theme==='light'?Sun:Moon" :size="15"/>{{ settings.theme==='light'?'浅色':'深色' }}</button></div></header>
       <div class="page-scroll"><div class="page-content">
         <div v-if="notice" class="toast inline-toast">{{ notice }}</div>
-        <div v-if="authState?.kind==='cloudbase-provider'" class="notice-card cloudbase-boundary-notice"><ShieldCheck :size="18"/><div><b>CloudBase 身份已验证</b><span>影序短会话交换和云端同步尚未接入。此处展示的工作区、任务、素材与设备数据均为本地 Mock 演示数据。</span></div></div>
+        <div v-if="authState?.kind==='cloud-session'" class="notice-card cloudbase-boundary-notice"><ShieldCheck :size="18"/><div><b>影序云端会话已建立</b><span>当前工作区业务数据仍在逐步接入；照片原片不会上传到云端。</span></div></div>
 
         <template v-if="page==='home'">
           <header class="welcome-row"><div><span class="eyebrow">桌面工作空间 · 演示模式</span><h1>早上好，{{ activeDisplayName }} <span>☀</span></h1><p>今天也为你的每一份作品，留好安全副本。</p></div><button class="primary-button" @click="backupStep=1;setPage('backup')"><Plus :size="16"/> 新建备份任务</button></header>
@@ -294,13 +367,13 @@ function taskStateLabel(state: TaskState) { return ({ queued:'排队中', runnin
 
         <template v-else-if="page==='agent'">
           <PageHeading eyebrow="受限工具 · 操作需确认" title="Agent 助手" description="查找和预览可直接进行；改名、移动、上传、清理等操作先列出对象与目标。"/>
-          <section class="agent-layout"><aside class="panel agent-aside"><button class="primary-button full-width" @click="agentMessages=[]"><Plus :size="15"/>新建对话</button><h4>最近对话</h4><button class="conversation-link"><Sparkles :size="14"/>查找海边日落照片 <small>今天 10:12</small></button><button class="conversation-link"><Archive :size="14"/>昨晚的备份任务结果 <small>昨天 19:34</small></button><div class="safety-callout"><ShieldCheck :size="16"/>所有有副作用的操作都需你确认。</div></aside><div class="panel chat-panel"><div class="chat-scroll"><div class="agent-welcome"><span class="agent-orb"><Sparkles :size="20"/></span><b>你好，{{ activeDisplayName }}</b><p>可以查找素材、询问备份状态，或先预览文件操作计划。</p><div class="suggestion-tags"><button @click="agentInput='查找青岛海边照片'">查找青岛海边照片</button><button @click="agentInput='查看最近失败的任务'">查看最近失败的任务</button></div></div><div v-for="(message,index) in agentMessages" :key="index" :class="['message-row',message.role]"><b v-if="message.role==='user'">{{ activeDisplayName }}</b><span v-else class="agent-mini">✦</span><div class="message-content"><p>{{ message.text }}</p><div v-if="message.reply?.matches.length" class="match-list"><article v-for="file in message.reply.matches" :key="file.id"><Image :size="15"/><span><b>{{ file.name }}</b><small>{{ file.path }} · {{ file.quality }}</small></span></article></div><div v-if="message.reply?.proposedAction" class="action-plan"><b>待确认操作计划</b><span>操作：{{ message.reply.proposedAction.kind }} · {{ message.reply.proposedAction.label }}</span><span>对象：{{ message.reply.proposedAction.objects.join('、') }}</span><span>目标：{{ message.reply.proposedAction.target }}</span><div v-if="message.actionId" class="plan-actions"><button class="secondary-button compact" @click="confirmAgent(message,false)">取消</button><button class="primary-button compact" @click="confirmAgent(message,true)">确认演示操作</button></div></div></div></div></div><form class="composer" @submit.prevent="askAgent"><input v-model="agentInput" placeholder="例如：把今天的 RAW 文件整理到项目目录…"/><button class="primary-button" type="submit"><Send :size="15"/>发送</button></form><p class="table-foot centered">演示 Agent 不会读取或修改本机文件；真实工具采用白名单与逐次确认。</p></div></section>
+          <section class="agent-layout"><aside class="panel agent-aside"><button class="primary-button full-width" @click="agentCloudMode?loadCloudAgentHistory():agentMessages=[]"><Plus :size="15"/>{{ agentCloudMode?'刷新云端对话':'新建本地演示对话' }}</button><h4>最近对话</h4><button v-if="agentCloudMode" class="conversation-link" @click="loadCloudAgentHistory"><Sparkles :size="14"/>恢复默认云端对话 <small>跨设备同步</small></button><button v-else class="conversation-link"><Sparkles :size="14"/>查找海边日落照片 <small>演示记录</small></button><div class="safety-callout"><ShieldCheck :size="16"/>云端 Agent 只检索已同步的备份摘要；文件操作仍需桌面本机确认。</div></aside><div class="panel chat-panel"><div class="chat-scroll"><div class="agent-welcome"><span class="agent-orb"><Sparkles :size="20"/></span><b>你好，{{ activeDisplayName }}</b><p>可以查找素材、询问备份状态，或先预览文件操作计划。</p><div class="suggestion-tags"><button @click="agentInput='查找青岛海边照片'">查找青岛海边照片</button><button @click="agentInput='查看最近失败的任务'">查看最近失败的任务</button></div></div><div v-for="(message,index) in agentMessages" :key="index" :class="['message-row',message.role]"><b v-if="message.role==='user'">{{ activeDisplayName }}</b><span v-else class="agent-mini">✦</span><div class="message-content"><p>{{ message.text }}</p><div v-if="message.reply?.matches.length" class="match-list"><article v-for="file in message.reply.matches" :key="file.id"><Image :size="15"/><span><b>{{ file.name }}</b><small>{{ file.path }} · {{ file.quality }}</small></span></article></div><div v-if="message.reply?.proposedAction" class="action-plan"><b>待确认操作计划</b><span>操作：{{ message.reply.proposedAction.kind }} · {{ message.reply.proposedAction.label }}</span><span>对象：{{ message.reply.proposedAction.objects.join('、') }}</span><span>目标：{{ message.reply.proposedAction.target }}</span><div v-if="message.actionId" class="plan-actions"><button class="secondary-button compact" @click="confirmAgent(message,false)">取消</button><button class="primary-button compact" @click="confirmAgent(message,true)">确认演示操作</button></div></div></div></div></div><label v-if="nativeTauriRuntime" class="setting-row cloud-agent-opt-in"><span><b>使用云端 Agent</b><small>只发送本次文字和已同步备份摘要，不传照片/原片；当前不调用云模型。</small></span><input v-model="agentCloudMode" type="checkbox" @change="agentCloudMode&&loadCloudAgentHistory()"/></label><form class="composer" @submit.prevent="askAgent"><input v-model="agentInput" :placeholder="agentCloudMode?'询问已同步的备份任务…':'例如：把今天的 RAW 文件整理到项目目录…'"/><button class="primary-button" type="submit"><Send :size="15"/>发送</button></form><p class="table-foot centered">{{ agentCloudMode?'云端只读检索；执行操作和访问本机文件仍需桌面 Agent 本地确认。':'演示 Agent 不会读取或修改本机文件。' }}</p></div></section>
         </template>
 
         <template v-else-if="page==='account'">
           <PageHeading eyebrow="个人账号与设备" title="账号与设备" :description="nativeTauriRuntime ? '当前仅验证 CloudBase 身份；影序账户会话与设备同步尚未接入。' : '桌面端与 Pocket 共用影序账号；这里管理登录方式、设备会话和可选同步字段。'"/>
-          <section class="account-grid"><div class="panel account-card"><div class="account-profile"><span class="profile-avatar">{{ activeDisplayName.slice(0,1) }}</span><div><h3>{{ activeDisplayName }}</h3><p>{{ authState?.kind==='cloudbase-provider' ? 'CloudBase 身份已验证 · 影序会话未交换' : `${activeEmail} · 已登录演示账号` }}</p></div><span class="state-pill success">本机在线</span></div><h4>登录方式关联</h4><div class="provider-row"><span class="method-icon wechat">微</span><span><b>微信扫码</b><small>账号关联将在认证后端接入时启用</small></span><button class="secondary-button compact" disabled>待接入</button></div><div class="provider-row"><span class="method-icon">@</span><span><b>{{ authState?.kind==='cloudbase-provider' ? 'CloudBase 账号' : '邮箱账号' }}</b><small>{{ activeEmail || activeDisplayName }} · 当前身份提供方</small></span><button class="text-button" disabled>{{ authState?.kind==='cloudbase-provider' ? '已验证' : '演示账号' }}</button></div><button class="danger-button" @click="logout">退出当前账号</button></div><div class="panel sync-card"><div class="panel-heading"><div><h3>跨设备同步范围</h3><p>原片、令牌和精确 GPS/EXIF 不同步；当前本页内容为演示数据。</p></div></div><label class="setting-row"><span><b>备份记录</b><small>同步任务状态和目的地摘要</small></span><input type="checkbox" :checked="settings.syncHistory" @change="updateSetting('syncHistory',($event.target as HTMLInputElement).checked)"/></label><label class="setting-row"><span><b>Agent 会话</b><small>用户/助手文本、工具摘要和结果</small></span><input type="checkbox" :checked="settings.syncAgent" @change="updateSetting('syncAgent',($event.target as HTMLInputElement).checked)"/></label><label class="setting-row"><span><b>压缩缩略图</b><small>最长边约 512px，可随时关闭</small></span><input type="checkbox" :checked="settings.syncThumbnails" @change="updateSetting('syncThumbnails',($event.target as HTMLInputElement).checked)"/></label><label class="setting-row"><span><b>电脑名称与完整路径</b><small>手机仅可查看路径，不可打开或控制电脑</small></span><input type="checkbox" :checked="settings.syncPaths" @change="updateSetting('syncPaths',($event.target as HTMLInputElement).checked)"/></label><p class="table-foot">数据删除与注销级联清除能力将在真实云端阶段实现。</p></div></section>
-          <section class="panel devices-panel"><div class="panel-heading"><div><h3>设备与会话</h3><p>在线状态和最后同步时间（演示）</p></div><button class="text-button" @click="say('设备列表已刷新。')">刷新</button></div><article v-for="device in devices" :key="device.id" class="device-row"><span class="device-icon"><component :is="device.platform==='Android'||device.platform==='iOS'?Image:HardDrive" :size="17"/></span><span><b>{{ device.name }} <small v-if="device.current">当前设备</small></b><small>{{ device.platform }} · {{ device.lastSeen }}</small></span><span :class="['state-pill',device.online?'success':'queued']">{{ device.online?'在线':'离线' }}</span><button v-if="!device.current" class="secondary-button compact" @click="revokeDevice(device)">撤销设备</button></article></section>
+          <section class="account-grid"><div class="panel account-card"><div class="account-profile"><span class="profile-avatar">{{ activeDisplayName.slice(0,1) }}</span><div><h3>{{ activeDisplayName }}</h3><p>{{ authState?.kind==='cloud-session' ? `影序云端会话 · ${authState.deviceId}` : `${activeEmail} · 已登录演示账号` }}</p></div><span class="state-pill success">本机在线</span></div><h4>登录方式关联</h4><div class="provider-row"><span class="method-icon wechat">微</span><span><b>微信扫码</b><small>按你的决定暂不接入</small></span><button class="secondary-button compact" disabled>待接入</button></div><div class="provider-row"><span class="method-icon">@</span><span><b>{{ authState?.kind==='cloud-session' ? 'CloudBase 账号' : '邮箱账号' }}</b><small>{{ activeEmail || activeDisplayName }} · 当前身份提供方</small></span><button class="text-button" disabled>{{ authState?.kind==='cloud-session' ? '已验证' : '演示账号' }}</button></div><button class="danger-button" @click="logout">退出当前账号</button></div><div class="panel sync-card"><div class="panel-heading"><div><h3>跨设备同步范围</h3><p>原片、令牌和精确 GPS/EXIF 不同步；同步 API 正在接入。</p></div><button class="secondary-button compact" @click="syncCloudHistory">同步备份记录</button></div><label class="setting-row"><span><b>备份记录</b><small>同步任务状态和目的地摘要</small></span><input type="checkbox" :checked="settings.syncHistory" @change="updateSetting('syncHistory',($event.target as HTMLInputElement).checked)"/></label><label class="setting-row"><span><b>Agent 会话</b><small>用户/助手文本、工具摘要和结果</small></span><input type="checkbox" :checked="settings.syncAgent" @change="updateSetting('syncAgent',($event.target as HTMLInputElement).checked)"/></label><label class="setting-row"><span><b>压缩缩略图</b><small>最长边约 512px，可随时关闭</small></span><input type="checkbox" :checked="settings.syncThumbnails" @change="updateSetting('syncThumbnails',($event.target as HTMLInputElement).checked)"/></label><label class="setting-row"><span><b>电脑名称与完整路径</b><small>手机仅可查看路径，不可打开或控制电脑</small></span><input type="checkbox" :checked="settings.syncPaths" @change="updateSetting('syncPaths',($event.target as HTMLInputElement).checked)"/></label><p class="table-foot">注销级联清除能力仍待接入。</p></div></section>
+          <section class="panel devices-panel"><div class="panel-heading"><div><h3>设备与会话</h3><p>{{ nativeTauriRuntime?'影序账号已注册的设备及最近活动时间':'设备列表（演示）' }}</p></div><button class="text-button" @click="refreshCloudDevices">刷新</button></div><article v-for="device in devices" :key="device.id" class="device-row"><span class="device-icon"><component :is="device.platform==='Android'||device.platform==='iOS'||device.platform==='移动端'?Image:HardDrive" :size="17"/></span><span><b>{{ device.name }} <small v-if="device.current">当前设备</small></b><small>{{ device.platform }} · {{ device.lastSeen }}</small></span><span :class="['state-pill',device.revoked?'failed':device.current||device.online?'success':'queued']">{{ device.revoked?'已撤销':device.current?'当前设备':nativeTauriRuntime?'已注册':device.online?'在线':'离线' }}</span><button v-if="!device.current&&!device.revoked" class="secondary-button compact" @click="revokeDevice(device)">撤销设备</button></article></section>
         </template>
 
         <template v-else-if="page==='presets'">

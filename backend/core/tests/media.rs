@@ -134,6 +134,38 @@ fn queued_path_payload_respects_current_privacy_switch() {
 }
 
 #[test]
+fn outbox_is_marked_sent_only_after_explicit_server_ack() {
+    let f = F::new();
+    fs::write(f.source.join("a"), b"a").unwrap();
+    f.import();
+    let outbox = |method: &str, params| {
+        f.e.dispatch(Request {
+            request_id: "sync-ack".into(),
+            version: 1,
+            method: method.into(),
+            params,
+        })
+    };
+    let events = outbox("sync.outbox", json!({"afterSequence":0,"limit":20}))
+        .data
+        .unwrap();
+    assert_eq!(events.as_array().unwrap().len(), 1);
+    let sequence = events[0]["sequence"].as_i64().unwrap();
+    let ack = outbox("sync.ack", json!({"throughSequence":sequence}))
+        .data
+        .unwrap();
+    assert_eq!(ack["acknowledged"], 1);
+    assert!(
+        outbox("sync.outbox", json!({"afterSequence":0,"limit":20}))
+            .data
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn source_index_is_read_only_and_preserves_current_analysis() {
     let f = F::new();
     image::RgbImage::from_pixel(12, 8, image::Rgb([80, 100, 120]))
