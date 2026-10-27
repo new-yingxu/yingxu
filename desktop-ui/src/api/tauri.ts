@@ -10,8 +10,10 @@ import type {
   ModelStatus,
   NamePreset,
   ScanReport, IndexResult, NetdiskProvider, NetdiskTask,
+  QuarantineItem,
 } from "./contracts";
 import { ACTION_WINDOW_MS, createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
+import { confirmLocalFileAction, prepareLocalFileAction, selectLocalDirectory } from "./local-file-actions";
 import { formatBytes, formatTime, mapJob, mapMedia } from "./format";
 import type { RawJob, RawMedia } from "./format";
 export class ApiError extends Error {
@@ -352,6 +354,13 @@ export function createTauriApi(options: Options = {}): AppApi {
   }
   const api: AppApi = {
     mode: "native",
+    fileActions: {
+      selectDirectory: () => selectLocalDirectory(invoke, "destination"),
+      prepare: (request) => prepareLocalFileAction(invoke, request),
+      confirm: (actionId, accepted) => confirmLocalFileAction(invoke, actionId, accepted),
+      stageCandidate: (mediaId) => rpc("quarantine.stage", { mediaId }),
+      listQuarantine: () => rpc<QuarantineItem[]>("quarantine.list", {}),
+    },
     model: localAgent.model,
     auth: {
       restore: () => rpc("auth.restore"),

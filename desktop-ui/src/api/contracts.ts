@@ -1,3 +1,5 @@
+import type { LocalDirectoryGrant, LocalFileActionPreview, LocalFileActionReceipt } from './local-file-actions'
+
 export type Result<T> =
   { ok: true; data: T } | { ok: false; code: string; message: string };
 export type TaskState =
@@ -155,6 +157,7 @@ export interface DeliveryPackage {
 
 /** UI contract: native adapter maps to local RPC; browser preview uses explicit mock data. */
 export interface DesktopApi {
+  fileActions: LocalFileActionService;
   auth: {
     restore(): Promise<UserSession | null>;
     login(
@@ -322,6 +325,29 @@ export interface LocalIntegration {
     onError: (error: unknown) => void,
     onNotice?: (message: string) => void,
   ): Promise<() => void>;
+}
+export interface QuarantineItem {
+  id: string
+  mediaId: string
+  name: string
+  bytes: number
+  sha256: string
+  state: string
+  createdAt: string
+  updatedAt: string
+  restoreViaSystemTrash: boolean
+  originalPreserved: true
+}
+export interface LocalFileActionService {
+  selectDirectory(): Promise<LocalDirectoryGrant | null>
+  prepare(request:
+    | { tool: 'rename_item'; mediaId: string; newName: string }
+    | { tool: 'move_item'; mediaId: string; destinationGrantId: string }
+    | { tool: 'cleanup_quarantine'; quarantineId: string }
+  ): Promise<LocalFileActionPreview>
+  confirm(actionId: string, accepted: boolean): Promise<LocalFileActionReceipt>
+  stageCandidate(mediaId: string): Promise<{ id: string; name: string; state: string; originalPreserved: true }>
+  listQuarantine(): Promise<QuarantineItem[]>
 }
 export type ModelStatus = UnconfiguredModelStatus | ConfiguredModelStatus;
 export interface ModelService {

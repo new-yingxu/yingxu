@@ -2,6 +2,7 @@
 import ScanSummary from "./components/ScanSummary.vue";
 import NetdiskPanel from "./components/NetdiskPanel.vue";
 import ModelConsent from "./components/ModelConsent.vue";
+import AgentLocalFileActions from "./components/AgentLocalFileActions.vue";
 import OllamaOnboarding from "./components/OllamaOnboarding.vue";
 import AgentActionCard from "./components/AgentActionCard.vue";
 import { canEnterNativeLocalMode, canShowDevDiagnostics, canUseCloudFeatures, enterNativeLocalMode, runCloudAction } from "./api/local-mode";
@@ -225,6 +226,13 @@ type AgentMessage = {
   actionId?: string;
 };
 const agentMessages = ref<AgentMessage[]>([]);
+const latestAgentMatches = computed(() => {
+  for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
+    const message = agentMessages.value[index];
+    if (message.role === "assistant" && message.reply?.matches.length) return message.reply.matches;
+  }
+  return [];
+});
 const settings = reactive<AppSettings>({
   theme: "light",
   startOnLogin: true,
@@ -2519,6 +2527,12 @@ function taskStateLabel(state: TaskState) {
                   上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。
                 </p>
                 <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" @reply="appendModelReply" />
+                <AgentLocalFileActions
+                  v-if="api.fileActions"
+                  :service="api.fileActions"
+                  :matches="latestAgentMatches"
+                  :demo="isMock"
+                />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"
