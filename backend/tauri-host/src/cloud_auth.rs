@@ -6,6 +6,9 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const AUTH_PATH: &str = "/auth/v1/signin";
 const SIGNOUT_PATH: &str = "/auth/v1/user/signout";
+const EMAIL_VERIFICATION_PATH: &str = "/auth/v1/verification";
+const VERIFY_EMAIL_PATH: &str = "/auth/v1/verification/verify";
+const SIGNUP_PATH: &str = "/auth/v1/signup";
 const KEYRING_SERVICE: &str = "app.yingxu.desktop.cloudbase";
 const KEYRING_ACCOUNT: &str = "user-session-v1";
 const MAX_RESPONSE_BYTES: u64 = 64 * 1024;
@@ -59,6 +62,16 @@ impl AuthConfig {
         let mut url = self
             .origin
             .join(SIGNOUT_PATH)
+            .map_err(|_| AuthError::InvalidConfiguration)?;
+        url.query_pairs_mut()
+            .append_pair("client_id", &self.client_id);
+        Ok(url)
+    }
+
+    fn endpoint_url(&self, path: &str) -> Result<Url, AuthError> {
+        let mut url = self
+            .origin
+            .join(path)
             .map_err(|_| AuthError::InvalidConfiguration)?;
         url.query_pairs_mut()
             .append_pair("client_id", &self.client_id);
@@ -136,6 +149,50 @@ impl fmt::Debug for AuthTokens {
 struct PasswordGrant<'a> {
     username: &'a str,
     password: &'a str,
+}
+
+#[derive(Serialize)]
+struct EmailCodeRequest<'a> {
+    email: &'a str,
+    target: &'static str,
+}
+
+#[derive(Deserialize)]
+struct EmailCodeResponse {
+    verification_id: String,
+    expires_in: u64,
+}
+
+#[derive(Serialize)]
+struct VerifyEmailCodeRequest<'a> {
+    verification_id: &'a str,
+    verification_code: &'a str,
+}
+
+#[derive(Deserialize, Zeroize, ZeroizeOnDrop)]
+struct VerificationToken {
+    verification_token: String,
+    #[zeroize(skip)]
+    expires_in: u64,
+}
+
+#[derive(Serialize)]
+struct EmailCodeLogin<'a> {
+    verification_token: &'a str,
+}
+
+#[derive(Serialize)]
+struct EmailCodeSignup<'a> {
+    email: &'a str,
+    password: &'a str,
+    verification_token: &'a str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailCodeChallenge {
+    pub verification_id: String,
+    pub expires_in: u64,
 }
 
 #[derive(Deserialize)]
@@ -219,6 +276,129 @@ impl CloudBaseAuthClient {
         Ok(identity)
     }
 
+    pub fn request_email_code(
+        &self,
+        email: &str,
+        for_signup: bool,
+    ) -> Result<EmailCodeChallenge, AuthError> {
+        if !valid_email(email) {
+            return Err(AuthError::InvalidInput);
+        }
+        let url = self.config.endpoint_url(EMAIL_VERIFICATION_PATH)?;
+        let request = EmailCodeRequest {
+            email,
+            target: if for_signup { "ANY" } else { "USER" },
+        };
+        let body =
+            Zeroizing::new(serde_json::to_vec(&request).map_err(|_| AuthError::InvalidInput)?);
+        let response = self.transport.post_json(&url, &body, None)?;
+        let challenge: EmailCodeResponse =
+            serde_json::from_value(response).map_err(|_| AuthError::InvalidResponse)?;
+        if challenge.verification_id.is_empty()
+            || challenge.verification_id.len() > 500
+            || challenge.expires_in == 0
+        {
+            return Err(AuthError::InvalidResponse);
+        }
+        Ok(EmailCodeChallenge {
+            verification_id: challenge.verification_id,
+            expires_in: challenge.expires_in,
+        })
+    }
+
+    pub fn email_code_sign_in(
+        &self,
+        email: &str,
+        verification_id: &str,
+        verification_code: &str,
+    ) -> Result<AuthIdentity, AuthError> {
+        if !valid_email(email) || !valid_verification_input(verification_id, verification_code) {
+            return Err(AuthError::InvalidInput);
+        }
+        let verification = self.verify_email_code(verification_id, verification_code)?;
+        let url = self.config.sign_in_url()?;
+        let request = EmailCodeLogin {
+            verification_token: &verification.verification_token,
+        };
+        let body =
+            Zeroizing::new(serde_json::to_vec(&request).map_err(|_| AuthError::InvalidInput)?);
+        let response = self.transport.post_json(&url, &body, None)?;
+        self.store_token_response(response)
+    }
+
+    pub fn email_code_sign_up(
+        &self,
+        email: &str,
+        password: &str,
+        verification_id: &str,
+        verification_code: &str,
+    ) -> Result<AuthIdentity, AuthError> {
+        if !valid_email(email)
+            || password.is_empty()
+            || password.len() > 1024
+            || !valid_verification_input(verification_id, verification_code)
+        {
+            return Err(AuthError::InvalidInput);
+        }
+        let verification = self.verify_email_code(verification_id, verification_code)?;
+        let url = self.config.endpoint_url(SIGNUP_PATH)?;
+        let request = EmailCodeSignup {
+            email,
+            password,
+            verification_token: &verification.verification_token,
+        };
+        let body =
+            Zeroizing::new(serde_json::to_vec(&request).map_err(|_| AuthError::InvalidInput)?);
+        let response = self.transport.post_json(&url, &body, None)?;
+        self.store_token_response(response)
+    }
+
+    fn verify_email_code(
+        &self,
+        verification_id: &str,
+        verification_code: &str,
+    ) -> Result<VerificationToken, AuthError> {
+        let url = self.config.endpoint_url(VERIFY_EMAIL_PATH)?;
+        let request = VerifyEmailCodeRequest {
+            verification_id,
+            verification_code,
+        };
+        let body =
+            Zeroizing::new(serde_json::to_vec(&request).map_err(|_| AuthError::InvalidInput)?);
+        let response = self.transport.post_json(&url, &body, None)?;
+        let token: VerificationToken =
+            serde_json::from_value(response).map_err(|_| AuthError::InvalidResponse)?;
+        if token.verification_token.is_empty() || token.expires_in == 0 {
+            return Err(AuthError::InvalidResponse);
+        }
+        Ok(token)
+    }
+
+    fn store_token_response(&self, response: serde_json::Value) -> Result<AuthIdentity, AuthError> {
+        let token_response: TokenResponse =
+            serde_json::from_value(response).map_err(|_| AuthError::InvalidResponse)?;
+        if !token_response.token_type.eq_ignore_ascii_case("bearer")
+            || token_response.access_token.is_empty()
+            || token_response.refresh_token.is_empty()
+            || token_response.expires_in == 0
+            || token_response.sub.is_empty()
+        {
+            return Err(AuthError::InvalidResponse);
+        }
+        let identity = AuthIdentity {
+            subject: token_response.sub.clone(),
+            expires_in: token_response.expires_in,
+        };
+        let tokens = AuthTokens {
+            access_token: token_response.access_token,
+            refresh_token: token_response.refresh_token,
+            expires_in: token_response.expires_in,
+            subject: token_response.sub,
+        };
+        self.token_store.save(&tokens)?;
+        Ok(identity)
+    }
+
     fn post_to(&self, url: &str, body: &serde_json::Value) -> Result<(), AuthError> {
         let url = Url::parse(url).map_err(|_| AuthError::InvalidEndpoint)?;
         validate_auth_endpoint(&self.config.origin, &url, &self.config.client_id)?;
@@ -251,9 +431,29 @@ fn valid_username(username: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"-_.:+ @".contains(byte))
 }
 
+fn valid_email(email: &str) -> bool {
+    !email.is_empty()
+        && email.len() <= 254
+        && !email.chars().any(char::is_whitespace)
+        && email.contains('@')
+        && email.split_once('@').is_some_and(|(local, domain)| {
+            !local.is_empty() && !domain.is_empty() && domain.contains('.')
+        })
+}
+
+fn valid_verification_input(verification_id: &str, code: &str) -> bool {
+    !verification_id.trim().is_empty()
+        && verification_id.len() <= 500
+        && code.len() == 6
+        && code.bytes().all(|byte| byte.is_ascii_digit())
+}
+
 fn validate_auth_endpoint(origin: &Url, target: &Url, client_id: &str) -> Result<(), AuthError> {
     let query = target.query_pairs().collect::<Vec<_>>();
-    let allowed_path = matches!(target.path(), AUTH_PATH | SIGNOUT_PATH);
+    let allowed_path = matches!(
+        target.path(),
+        AUTH_PATH | SIGNOUT_PATH | EMAIL_VERIFICATION_PATH | VERIFY_EMAIL_PATH | SIGNUP_PATH
+    );
     if origin.scheme() != "https"
         || target.scheme() != "https"
         || target.host_str() != origin.host_str()
@@ -373,7 +573,10 @@ impl TokenStore for SystemTokenStore {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, Mutex},
+    };
 
     #[derive(Default)]
     struct MockTransport {
@@ -393,6 +596,27 @@ mod tests {
                 serde_json::from_slice(body).unwrap(),
             ));
             self.response.lock().unwrap().take().unwrap()
+        }
+    }
+
+    #[derive(Default)]
+    struct SequenceTransport {
+        requests: Mutex<Vec<(String, serde_json::Value)>>,
+        responses: Mutex<VecDeque<Result<serde_json::Value, AuthError>>>,
+    }
+
+    impl AuthTransport for SequenceTransport {
+        fn post_json(
+            &self,
+            url: &reqwest::Url,
+            body: &[u8],
+            bearer_token: Option<&str>,
+        ) -> Result<serde_json::Value, AuthError> {
+            self.requests.lock().unwrap().push((
+                format!("{}|bearer={}", url, bearer_token.unwrap_or("")),
+                serde_json::from_slice(body).unwrap(),
+            ));
+            self.responses.lock().unwrap().pop_front().unwrap()
         }
     }
 
@@ -424,6 +648,21 @@ mod tests {
     ) {
         let transport = Arc::new(MockTransport::default());
         *transport.response.lock().unwrap() = Some(response);
+        let tokens = Arc::new(MemoryTokenStore::default());
+        let config = AuthConfig::new("https://auth.example.test", "desktop-client").unwrap();
+        let client = CloudBaseAuthClient::new(config, transport.clone(), tokens.clone());
+        (client, transport, tokens)
+    }
+
+    fn sequence_client(
+        responses: impl IntoIterator<Item = Result<serde_json::Value, AuthError>>,
+    ) -> (
+        CloudBaseAuthClient,
+        Arc<SequenceTransport>,
+        Arc<MemoryTokenStore>,
+    ) {
+        let transport = Arc::new(SequenceTransport::default());
+        *transport.responses.lock().unwrap() = responses.into_iter().collect();
         let tokens = Arc::new(MemoryTokenStore::default());
         let config = AuthConfig::new("https://auth.example.test", "desktop-client").unwrap();
         let client = CloudBaseAuthClient::new(config, transport.clone(), tokens.clone());
@@ -492,6 +731,115 @@ mod tests {
             AuthError::InvalidInput
         );
         assert!(transport.request.lock().unwrap().is_none());
+        assert!(tokens.load().unwrap().is_none());
+    }
+
+    #[test]
+    fn email_code_challenge_uses_user_or_any_target_and_validates_response() {
+        let (client, transport, _) = sequence_client([
+            Ok(json!({"verification_id":"verify-fixture","expires_in":600,"is_user":true})),
+            Ok(json!({"verification_id":"signup-fixture","expires_in":600,"is_user":false})),
+        ]);
+        let existing = client
+            .request_email_code("user@example.com", false)
+            .unwrap();
+        let new_user = client.request_email_code("new@example.com", true).unwrap();
+        assert_eq!(existing.verification_id, "verify-fixture");
+        assert_eq!(existing.expires_in, 600);
+        assert_eq!(new_user.verification_id, "signup-fixture");
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(
+            requests[0].0,
+            "https://auth.example.test/auth/v1/verification?client_id=desktop-client|bearer="
+        );
+        assert_eq!(
+            requests[0].1,
+            json!({"email":"user@example.com","target":"USER"})
+        );
+        assert_eq!(
+            requests[1].1,
+            json!({"email":"new@example.com","target":"ANY"})
+        );
+    }
+
+    #[test]
+    fn email_code_sign_in_keeps_verification_token_in_native_layer() {
+        let (client, transport, tokens) = sequence_client([
+            Ok(json!({"verification_token":"verification-secret","expires_in":600})),
+            Ok(
+                json!({"token_type":"Bearer","access_token":"access-fixture","refresh_token":"refresh-fixture","expires_in":7200,"sub":"user-fixture"}),
+            ),
+        ]);
+        let identity = client
+            .email_code_sign_in("user@example.com", "verify-id", "123456")
+            .unwrap();
+        assert_eq!(identity.subject, "user-fixture");
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(
+            requests[0].0,
+            "https://auth.example.test/auth/v1/verification/verify?client_id=desktop-client|bearer="
+        );
+        assert_eq!(
+            requests[0].1,
+            json!({"verification_id":"verify-id","verification_code":"123456"})
+        );
+        assert_eq!(
+            requests[1].1,
+            json!({"verification_token":"verification-secret"})
+        );
+        assert!(tokens.load().unwrap().is_some());
+    }
+
+    #[test]
+    fn email_signup_requires_verified_code_and_stores_only_session_tokens() {
+        let (client, transport, tokens) = sequence_client([
+            Ok(json!({"verification_token":"verification-secret","expires_in":600})),
+            Ok(
+                json!({"token_type":"Bearer","access_token":"access-fixture","refresh_token":"refresh-fixture","expires_in":7200,"sub":"new-user"}),
+            ),
+        ]);
+        client
+            .email_code_sign_up("new@example.com", "password-fixture", "verify-id", "123456")
+            .unwrap();
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(
+            requests[1].0,
+            "https://auth.example.test/auth/v1/signup?client_id=desktop-client|bearer="
+        );
+        assert_eq!(
+            requests[1].1,
+            json!({"email":"new@example.com","password":"password-fixture","verification_token":"verification-secret"})
+        );
+        assert_eq!(tokens.load().unwrap().unwrap().subject, "new-user");
+    }
+
+    #[test]
+    fn email_code_inputs_are_rejected_before_network_and_malformed_tokens_are_not_saved() {
+        let (client, transport, tokens) =
+            sequence_client([Ok(json!({"verification_token":"" ,"expires_in":0}))]);
+        assert_eq!(
+            client.request_email_code("bad", false).unwrap_err(),
+            AuthError::InvalidInput
+        );
+        assert_eq!(
+            client
+                .email_code_sign_in("user@example.com", "", "123456")
+                .unwrap_err(),
+            AuthError::InvalidInput
+        );
+        assert!(transport.requests.lock().unwrap().is_empty());
+        assert_eq!(
+            client
+                .email_code_sign_in("user@example.com", "verify-id", "12a456")
+                .unwrap_err(),
+            AuthError::InvalidInput
+        );
+        assert_eq!(
+            client
+                .email_code_sign_in("user@example.com", "verify-id", "123456")
+                .unwrap_err(),
+            AuthError::InvalidResponse
+        );
         assert!(tokens.load().unwrap().is_none());
     }
 

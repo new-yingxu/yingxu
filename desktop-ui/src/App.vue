@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import type { AgentReply, AppSettings, ArchiveTask, AuditResult, Device, MediaFile, NamePreset, TaskState, UserSession } from './api/contracts'
 import { createMockApi } from './api/mock'
-import { isNativeTauriRuntime, passwordSignIn, signOut as nativeSignOut } from './api/nativeAuth'
+import { emailCodeSignIn, emailCodeSignUp, isNativeTauriRuntime, passwordSignIn, requestEmailCode, signOut as nativeSignOut } from './api/nativeAuth'
 import { Activity, Archive, ArrowDownToLine, ArrowRight, Bell, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock3, Cloud, Copy, Database, FileImage, FileVideo, Filter, Folder, HardDrive, Image, LayoutDashboard, LockKeyhole, Moon, MoreHorizontal, Play, Plus, Search, Send, Settings2, ShieldCheck, Sparkles, Sun, WandSparkles, X } from './icons'
 
 const api = createMockApi()
@@ -13,9 +13,16 @@ type DesktopAuthState = { kind: 'mock'; user: UserSession } | { kind: 'cloudbase
 const authState = ref<DesktopAuthState | null>(null)
 const activeDisplayName = computed(() => authState.value?.kind === 'mock' ? authState.value.user.displayName : authState.value?.kind === 'cloudbase-provider' ? authState.value.identifier : '')
 const activeEmail = computed(() => authState.value?.kind === 'mock' ? authState.value.user.email : authState.value?.kind === 'cloudbase-provider' ? (authState.value.identifier.includes('@') ? authState.value.identifier : '') : '')
-const loginMode = ref<'wechat' | 'phone-code' | 'email-code' | 'email-password'>(nativeTauriRuntime ? 'email-password' : 'wechat')
+const loginMode = ref<'wechat' | 'phone-code' | 'email-code' | 'email-password' | 'email-signup'>(nativeTauriRuntime ? 'email-password' : 'wechat')
 const loginIdentifier = ref('')
 const loginProof = ref('')
+const signupPassword = ref('')
+const emailVerificationId = ref('')
+const emailChallengeFor = ref('')
+const emailChallengeForSignup = ref(false)
+const emailCodeCooldown = ref(0)
+const codeBusy = ref(false)
+let emailCodeTimer: number | undefined
 const loginError = ref('')
 const loginBusy = ref(false)
 const notice = ref('')
@@ -96,32 +103,72 @@ async function loadData() {
   document.documentElement.dataset.theme = settings.theme
 }
 onMounted(async () => { const restored = await api.auth.restore(); if (restored) authState.value = { kind: 'mock', user: restored } })
+onUnmounted(() => { if (emailCodeTimer !== undefined) window.clearInterval(emailCodeTimer) })
+function setLoginMode(mode: typeof loginMode.value) {
+  loginMode.value = mode
+  loginProof.value = ''
+  signupPassword.value = ''
+  emailVerificationId.value = ''
+  emailChallengeFor.value = ''
+  emailChallengeForSignup.value = false
+}
+async function sendEmailCode() {
+  loginError.value = ''
+  const email = loginIdentifier.value.trim()
+  if (!email || !email.includes('@')) { loginError.value = '请输入有效的邮箱地址。'; return }
+  if (!nativeTauriRuntime) { say('验证码发送将在真实认证服务接入后启用。'); return }
+  if (emailCodeCooldown.value > 0) return
+  codeBusy.value = true
+  try {
+    const challenge = await requestEmailCode(email, loginMode.value === 'email-signup')
+    emailVerificationId.value = challenge.verificationId
+    emailChallengeFor.value = email.toLowerCase()
+    emailChallengeForSignup.value = loginMode.value === 'email-signup'
+    loginProof.value = ''
+    emailCodeCooldown.value = 60
+    if (emailCodeTimer !== undefined) window.clearInterval(emailCodeTimer)
+    emailCodeTimer = window.setInterval(() => {
+      emailCodeCooldown.value = Math.max(0, emailCodeCooldown.value - 1)
+      if (emailCodeCooldown.value === 0 && emailCodeTimer !== undefined) {
+        window.clearInterval(emailCodeTimer)
+        emailCodeTimer = undefined
+      }
+    }, 1000)
+    say(`验证码已发送，${Math.ceil(challenge.expiresIn / 60)} 分钟内有效。`)
+  } catch (error) { loginError.value = typeof error === 'string' ? error : error instanceof Error ? error.message : '验证码发送失败，请稍后重试。' }
+  finally { codeBusy.value = false }
+}
 async function signIn() {
   loginError.value = ''
-  if (nativeTauriRuntime && loginMode.value !== 'email-password') {
-    loginError.value = '当前桌面认证切片仅接通邮箱或用户名密码登录。'
-    return
-  }
+  if (nativeTauriRuntime && !['email-password', 'email-code', 'email-signup'].includes(loginMode.value)) { loginError.value = '当前桌面仅启用邮箱认证。'; return }
   if (loginMode.value === 'wechat') loginIdentifier.value ||= 'wechat-demo'
   if (!loginIdentifier.value.trim()) { loginError.value = '请填写手机号或邮箱。'; return }
-  if (loginMode.value !== 'wechat' && !loginProof.value.trim()) { loginError.value = loginMode.value.endsWith('code') ? '请输入验证码。' : '请输入密码。'; return }
+  if (loginMode.value !== 'wechat' && !loginProof.value.trim()) { loginError.value = loginMode.value.endsWith('code') || loginMode.value === 'email-signup' ? '请输入验证码。' : '请输入密码。'; return }
+  if (nativeTauriRuntime && loginMode.value !== 'email-password' && !emailVerificationId.value) { loginError.value = '请先获取邮箱验证码。'; return }
+  if (nativeTauriRuntime && loginMode.value !== 'email-password' && (emailChallengeFor.value !== loginIdentifier.value.trim().toLowerCase() || emailChallengeForSignup.value !== (loginMode.value === 'email-signup'))) { loginError.value = '邮箱或认证方式已变化，请重新获取验证码。'; emailVerificationId.value = ''; return }
+  if (loginMode.value === 'email-signup' && !signupPassword.value) { loginError.value = '请设置登录密码。'; return }
   loginBusy.value = true
   try {
     if (nativeTauriRuntime) {
-      const identity = await passwordSignIn(loginIdentifier.value.trim(), loginProof.value)
+      const identity = loginMode.value === 'email-password'
+        ? await passwordSignIn(loginIdentifier.value.trim(), loginProof.value)
+        : loginMode.value === 'email-signup'
+          ? await emailCodeSignUp(loginIdentifier.value.trim(), signupPassword.value, emailVerificationId.value, loginProof.value)
+          : await emailCodeSignIn(loginIdentifier.value.trim(), emailVerificationId.value, loginProof.value)
       authState.value = { kind: 'cloudbase-provider', subject: identity.subject, expiresIn: identity.expiresIn, identifier: loginIdentifier.value.trim() }
     } else {
-      authState.value = { kind: 'mock', user: await api.auth.login(loginMode.value, loginIdentifier.value, loginProof.value || 'qr-confirmed') }
+      const mockLoginMode = loginMode.value === 'email-signup' ? 'email-code' : loginMode.value
+      authState.value = { kind: 'mock', user: await api.auth.login(mockLoginMode, loginIdentifier.value, loginProof.value || 'qr-confirmed') }
     }
     await loadData(); page.value = 'home'
   }
   catch (error) { loginError.value = typeof error === 'string' ? error : error instanceof Error ? error.message : '登录失败，请稍后重试。' }
-  finally { loginProof.value = ''; loginBusy.value = false }
+  finally { loginProof.value = ''; signupPassword.value = ''; loginBusy.value = false }
 }
 async function logout() {
   if (nativeTauriRuntime) await nativeSignOut()
   else await api.auth.logout()
-  authState.value = null; page.value = 'home'; loginProof.value = ''; loginIdentifier.value = ''; loginMode.value = nativeTauriRuntime ? 'email-password' : 'wechat'
+  authState.value = null; page.value = 'home'; loginProof.value = ''; signupPassword.value = ''; loginIdentifier.value = ''; emailVerificationId.value = ''; emailChallengeFor.value = ''; emailChallengeForSignup.value = false; loginMode.value = nativeTauriRuntime ? 'email-password' : 'wechat'
 }
 async function scanSource() { scanBusy.value = true; sources.value = (await api.backup.scan()).sources; scanBusy.value = false; say('扫描完成：发现 1 个可读来源（演示数据）。') }
 async function startBackup() { const task = await api.backup.start({ sourceId: sources.value[0]?.path || '/Volumes/SD_CARD/DCIM', destinations: backupTargets.value, presetId: backupPreset.value, verify: settings.verify }); backupTask.value = task; tasks.value = [task, ...tasks.value]; page.value = 'task'; selectedTaskId.value = task.id; taskDetail.value = task; say('演示任务已启动，不会读写本机文件。') }
@@ -156,16 +203,37 @@ function taskStateLabel(state: TaskState) { return ({ queued:'排队中', runnin
     <div class="login-brand"><div class="brand-mark"><i></i><i></i><i></i><i></i></div><span>影序 <small>YINGXU</small></span></div>
     <section class="login-card">
       <div class="login-intro"><span class="eyebrow">影序 · 桌面端 V2 草稿</span><h1>欢迎回到影序</h1><p>{{ nativeTauriRuntime ? '验证 CloudBase 账号身份。当前桌面工作区仍为本地演示数据，影序会话交换与跨设备同步尚未接入。' : '登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。' }}</p></div>
-      <div class="login-tabs"><button v-if="!nativeTauriRuntime" :class="{chosen:loginMode==='wechat'}" @click="loginMode='wechat'">微信扫码</button><button v-if="!nativeTauriRuntime" :class="{chosen:loginMode==='phone-code'}" @click="loginMode='phone-code'">手机号</button><button :class="{chosen:loginMode==='email-code'||loginMode==='email-password'}" @click="loginMode=nativeTauriRuntime?'email-password':'email-code'">{{ nativeTauriRuntime?'邮箱 / 用户名':'邮箱' }}</button></div>
+      <div class="login-tabs">
+        <template v-if="nativeTauriRuntime">
+          <button :class="{chosen:loginMode==='email-password'}" @click="setLoginMode('email-password')">邮箱密码</button>
+          <button :class="{chosen:loginMode==='email-code'||loginMode==='email-signup'}" @click="setLoginMode('email-code')">邮箱验证码</button>
+        </template>
+        <template v-else>
+          <button :class="{chosen:loginMode==='wechat'}" @click="setLoginMode('wechat')">微信扫码</button>
+          <button :class="{chosen:loginMode==='phone-code'}" @click="setLoginMode('phone-code')">手机号</button>
+          <button :class="{chosen:loginMode==='email-code'||loginMode==='email-password'}" @click="setLoginMode('email-code')">邮箱</button>
+        </template>
+      </div>
       <div v-if="loginMode==='wechat'" class="wechat-login"><div class="qr-frame"><div class="qr-code"><i v-for="n in 121" :key="n" :class="{quiet:(n*7+n%5)%4===0 || (n%11===0 && n>20)}"></i><b>影</b></div></div><strong>使用微信扫描二维码登录</strong><span>请使用与影序 Pocket 相同的账号</span><button class="text-button" @click="loginMode='phone-code'">改用验证码登录</button></div>
       <div v-else class="login-fields">
-        <label>{{ loginMode==='phone-code'?'手机号':nativeTauriRuntime?'邮箱或用户名':'邮箱' }}</label><input v-model="loginIdentifier" :placeholder="loginMode==='phone-code'?'请输入手机号':nativeTauriRuntime?'请输入邮箱地址或用户名':'请输入邮箱地址'" />
-        <label>{{ loginMode==='email-password'?'密码':'验证码' }}</label><div class="proof-field"><input v-model="loginProof" :type="loginMode==='email-password'?'password':'text'" :placeholder="loginMode==='email-password'?'请输入密码':'请输入验证码'" /><button v-if="loginMode!=='email-password'" class="text-button" @click="say('验证码发送流程将在后端认证服务接入后启用。')">获取验证码</button></div>
-        <div v-if="loginMode==='email-code'" class="form-foot"><button class="text-button" @click="loginMode='email-password'">使用 Pocket 邮箱密码</button><button class="text-button" @click="loginMode='email-password'">注册账号</button></div>
+        <label>{{ loginMode==='phone-code'?'手机号':nativeTauriRuntime && loginMode==='email-password'?'邮箱或用户名':'邮箱' }}</label><input v-model="loginIdentifier" :type="nativeTauriRuntime && loginMode!=='email-password'?'email':'text'" :placeholder="loginMode==='phone-code'?'请输入手机号':nativeTauriRuntime && loginMode==='email-password'?'请输入邮箱地址或用户名':'请输入邮箱地址'" autocomplete="username" />
+        <label>{{ loginMode==='email-password'?'密码':'邮箱验证码' }}</label>
+        <div class="proof-field">
+          <input v-model="loginProof" :type="loginMode==='email-password'?'password':'text'" :placeholder="loginMode==='email-password'?'请输入密码':'请输入6位验证码'" :autocomplete="loginMode==='email-password'?'current-password':'one-time-code'" />
+          <button v-if="loginMode==='email-code'||loginMode==='email-signup'" class="text-button" :disabled="codeBusy||emailCodeCooldown>0" @click="sendEmailCode">{{ codeBusy?'发送中…':emailCodeCooldown>0?`${emailCodeCooldown} 秒后重试`:'获取验证码' }}</button>
+        </div>
+        <template v-if="loginMode==='email-signup'">
+          <label>设置登录密码</label><input v-model="signupPassword" type="password" autocomplete="new-password" placeholder="请设置登录密码" />
+          <div class="form-foot"><button class="text-button" @click="setLoginMode('email-code')">已有账号？返回邮箱登录</button></div>
+        </template>
+        <div v-else-if="loginMode==='email-code'" class="form-foot">
+          <button v-if="nativeTauriRuntime" class="text-button" @click="setLoginMode('email-signup')">注册新账号</button>
+          <button v-else class="text-button" @click="setLoginMode('email-password')">使用邮箱密码</button>
+        </div>
       </div>
       <p v-if="loginError" class="error-note">{{ loginError }}</p>
       <button class="primary-button login-submit" @click="signIn" :disabled="loginBusy">{{ loginBusy?'正在登录…':nativeTauriRuntime?'验证 CloudBase 账号':'登录影序（演示）' }}</button>
-      <p class="login-disclaimer">{{ nativeTauriRuntime?'通过本机 Tauri 安全通道验证 CloudBase 身份；这不代表影序云端会话或同步已建立。验证码登录将在后续版本接入':'V2 草稿预览 · 登录仅为界面演示，不会连接认证服务' }}</p>
+      <p class="login-disclaimer">{{ nativeTauriRuntime?'通过本机 Tauri 安全通道验证 CloudBase 身份；这不代表影序云端会话或同步已建立。':'V2 草稿预览 · 登录仅为界面演示，不会连接认证服务' }}</p>
     </section>
     <footer class="login-footer"><span><LockKeyhole :size="14" /> 安全同步 · 原片留在你的设备</span><span>Windows / macOS</span></footer>
     <div v-if="notice" class="toast">{{ notice }}</div>

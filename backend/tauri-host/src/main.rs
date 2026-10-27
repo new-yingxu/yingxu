@@ -43,6 +43,77 @@ async fn cloudbase_password_sign_in(
 }
 
 #[tauri::command]
+async fn cloudbase_request_email_code(
+    window: tauri::WebviewWindow,
+    email: String,
+    for_signup: bool,
+) -> Result<cloud_auth::EmailCodeChallenge, String> {
+    if window.label() != "main" {
+        return Err("PERMISSION_DENIED".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = cloud_auth::CloudBaseAuthClient::from_embedded_config()
+            .map_err(|error| error.to_string())?;
+        client
+            .request_email_code(email.trim(), for_signup)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| cloud_auth::AuthError::ServiceUnavailable.to_string())?
+}
+
+#[tauri::command]
+async fn cloudbase_email_code_sign_in(
+    window: tauri::WebviewWindow,
+    email: String,
+    verification_id: String,
+    verification_code: String,
+) -> Result<cloud_auth::AuthIdentity, String> {
+    let verification_code = Zeroizing::new(verification_code);
+    if window.label() != "main" {
+        return Err("PERMISSION_DENIED".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = cloud_auth::CloudBaseAuthClient::from_embedded_config()
+            .map_err(|error| error.to_string())?;
+        client
+            .email_code_sign_in(email.trim(), verification_id.trim(), &verification_code)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| cloud_auth::AuthError::ServiceUnavailable.to_string())?
+}
+
+#[tauri::command]
+async fn cloudbase_email_code_sign_up(
+    window: tauri::WebviewWindow,
+    email: String,
+    password: String,
+    verification_id: String,
+    verification_code: String,
+) -> Result<cloud_auth::AuthIdentity, String> {
+    let password = Zeroizing::new(password);
+    let verification_code = Zeroizing::new(verification_code);
+    if window.label() != "main" {
+        return Err("PERMISSION_DENIED".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = cloud_auth::CloudBaseAuthClient::from_embedded_config()
+            .map_err(|error| error.to_string())?;
+        client
+            .email_code_sign_up(
+                email.trim(),
+                &password,
+                verification_id.trim(),
+                &verification_code,
+            )
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| cloud_auth::AuthError::ServiceUnavailable.to_string())?
+}
+
+#[tauri::command]
 async fn cloudbase_sign_out(window: tauri::WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
         return Err("PERMISSION_DENIED".into());
@@ -282,6 +353,9 @@ fn main() {
             select_directory,
             backend_request,
             cloudbase_password_sign_in,
+            cloudbase_request_email_code,
+            cloudbase_email_code_sign_in,
+            cloudbase_email_code_sign_up,
             cloudbase_sign_out
         ])
         .plugin(
