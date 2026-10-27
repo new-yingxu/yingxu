@@ -7,8 +7,9 @@
 - 服务源码：`../../cloud-service/`
 - `yingxu-dev` 体验环境的 PostgreSQL schema v11–v16 已于 2026-10-27 逐项应用并读回验证；当前服务启动要求 schema v16。
 - 当前目标改为 HTTP 云函数：官方支持 FastAPI、Python 3.11 与 WebSocket。体验版的云托管 CPU/内存需另行开启超限按量，因此本项目暂不创建云托管服务。
-- 云函数仍未部署。认证渠道、服务端 Secrets、可信 issuer/audience/JWKS、客户端来源和 HTTPS CORS 尚未配置。SMS 控制台等待账号持有人审阅并接受服务条款；不得用开发 token 或 SQLite 作为生产身份/数据层。
-- 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。
+- 用户确认认证首期采用邮箱 + 微信，手机号短信延期。腾讯云短信产品已开通，但账号为个人认证且没有可用大陆企业主体；腾讯云不允许个人认证账号创建个人自用短信资质，因此短信签名/模板暂不可办。不得借用未授权企业材料或绕过资质规定。
+- CloudBase 邮箱验证和微信开放平台渠道尚未配置；邮箱可先评估 CloudBase 内置邮件代发，微信需先有网站应用 AppID/AppSecret 与回调域。服务端 Secrets、可信 session issuer/audience/JWKS、client_id 映射和 HTTPS CORS 仍未设置，云函数未部署。
+- 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。不得用开发 token 或 SQLite 作为生产身份/数据层。
 - 新候选 ZIP 和详细证据见 [`cloudbase-v16-migration-20261027.md`](../../cloud-service/evidence/cloudbase-v16-migration-20261027.md)。未上传部署，未清理合成测试账号，未调用真实短信、微信、邮箱或云模型。
 
 ## 本地启动
@@ -23,12 +24,12 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 
 ## HTTP 云函数部署准备
 
-1. 当前采用官方 PostgREST：将环境ID与服务端API Key作为函数环境 Secret 注入，DATABASE_URL 留空。无需用户转发数据库密码。若改用协议直连，另核实网络、TLS及最小权限账号。
-2. 依次执行 PostgreSQL v1、v2-access、v3-preferences-rpc、v4-action-receipts 迁移。v2撤销默认客户端授权并启用RLS；v3提供后端专用偏好更新事务；v4持久化Agent回执结果。当前四个版本已执行，生产readiness要求version4。
-3. 确认可信身份服务签发的 JWT claims (`sub`、`device_id`、`origin`) 与 JWKS URL。没有这份身份契约时不能启用生产 API。
-4. 使用 `python3 infra/cloud/prepare_function_context.py` 生成 `infra/cloud/function-build/`，需要 uv。脚本按 `requirements.linux.lock` 安装 Python 3.11/x86_64 manylinux2014 wheels 到 `third_party/`，避免把 macOS 二进制上传到 Linux。
-5. 从 `infra/cloud/function-build/` 目录运行 `tcb fn deploy yingxu-agent-api --dir "$PWD" --ws --runtime Python3.11 --install-dependency false -e yingxu-dev-d8gowpye17ee27a61`。只上传该目录。实际执行使用绝对目录；CLI 的 `--dir .` 不应与 `--cwd` 混用，实测可能解析到仓库根目录。
-6. 部署后记录函数版本/路径和访问策略；验证 `/healthz`、`/readyz`、JWT、PostgreSQL 读写、WebSocket 与回滚。
+1. 当前采用官方 PostgREST：将环境 ID 与服务端 API Key 作为函数环境 Secret 注入，`DATABASE_URL` 留空。无需用户转发数据库密码。
+2. `yingxu-dev` 的 PostgreSQL v1–v16 已逐项应用并读回验证；服务 readiness 要求 schema v16。不要对线上重复执行旧版 v1–v4 迁移。
+3. 认证首期为邮箱 + 微信、短信延期。CloudBase 邮箱登录需启用邮箱验证码并配置发件方式；建议先用 CloudBase 内置邮件代发。微信登录需微信开放平台网站应用、AppID/AppSecret 和一致的 OAuth 回调配置。首次微信登录的账号关联流程须按 CloudBase 官方 SDK 语义实现。
+4. 配置正式 CloudBase 身份通道后，再生成服务端 session 签名密钥并以 Secrets 保存：`CLOUDBASE_CLIENT_ORIGINS`、`SESSION_PRIVATE_KEY`、`SESSION_KEY_ID`、`JWT_ISSUER`、`JWT_AUDIENCE`、`CLOUDBASE_ENV_ID`、`CLOUDBASE_APIKEY` 和 HTTPS `CORS_ORIGINS`。凭据不得进入仓库、客户端或聊天。
+5. 使用 `python3 infra/cloud/prepare_function_context.py` 生成 Linux/Python 3.11 函数上下文，并校验源文件、锁定依赖和候选包哈希。
+6. 只有身份渠道和 Secrets 完成后，才在体验环境部署已验证的 schema16 候选。部署后记录函数版本/路径和访问策略；验证 `/healthz`、`/readyz`、账号交换、PostgreSQL 读写、WebSocket 与回滚。
 
 ## 当前本地部署候选（不代表已部署）
 
@@ -41,6 +42,8 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 - [CloudBase FastAPI HTTP 云函数](https://docs.cloudbase.net/en/cloud-function/frameworks-examples/fastapi)
 - [CloudBase 云函数 CLI 部署](https://docs.cloudbase.net/cli-v1/functions/deploy)
 - [CloudBase PostgreSQL 连接](https://docs.cloudbase.net/database/postgresql/connecting-to-postgresql)
+- [CloudBase 邮箱验证码登录](https://docs.cloudbase.net/authentication-v2/method/email-login)
+- [CloudBase 微信授权登录](https://docs.cloudbase.net/authentication-v2/method/wechat-login)
 
 
 ## 本地续跑：路径脱敏后的幂等重试

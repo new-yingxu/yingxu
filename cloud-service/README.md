@@ -2,7 +2,7 @@
 
 ## 当前云端进度（2026-10-27）
 
-`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；正式配置、渠道凭据和云函数部署尚未完成。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态是当时记录，不覆盖本节当前状态。
+`yingxu-dev` 数据库已逐项应用并回读确认 PostgreSQL schema v11–v16。最新函数源码要求 schema v16；云函数尚未部署。用户确认首期先做邮箱 + 微信登录，短信延期：当前个人认证账号没有可用大陆企业主体，不能办理腾讯云国内短信个人自用资质。CloudBase 邮箱代发、微信开放平台网站应用、client_id 映射、服务端 Secrets、HTTPS CORS 和正式函数运行配置均待完成。迁移和本地候选包证据见 `evidence/cloudbase-v16-migration-20261027.md`。历史章节中的旧版本/线上状态是当时记录，不覆盖本节当前状态。
 
 FastAPI 服务的目录所有权属于云端 Agent 开发。共享契约位于仓库根目录 `contracts/`，开发和生产部署使用同一组 v1 schema。
 
@@ -21,9 +21,9 @@ cp .env.example .env
 
 ## 生产配置
 
-生产可以用 CloudBase 官方 PostgreSQL REST：不设 DATABASE_URL，将 CLOUDBASE_ENV_ID 和服务端 Secret CLOUDBASE_APIKEY 注入函数环境。也可用 SQLAlchemy `postgresql+psycopg://` 直连并遵照控制台 TLS 要求。还需可信 JWT issuer/audience/JWKS 和明确的 HTTPS CORS 来源；JWT 必须包含可信 sub/device_id/origin。缺少身份配置时业务失败关闭。
+生产可以用 CloudBase 官方 PostgreSQL REST：不设 `DATABASE_URL`，将 `CLOUDBASE_ENV_ID` 和服务端 Secret `CLOUDBASE_APIKEY` 注入函数环境。还需 `AUTH_MODE=cloudbase`、可信 `JWT_ISSUER`/`JWT_AUDIENCE`、客户端映射 `CLOUDBASE_CLIENT_ORIGINS`、会话签名 Secrets (`SESSION_PRIVATE_KEY`/`SESSION_KEY_ID`) 和明确的 HTTPS `CORS_ORIGINS`。CloudBase access token 由后端经官方 user/me 与 token/introspect 双校验，再换发影序短会话。缺少身份配置时业务失败关闭。
 
-生产不自动建表，需依次执行 infra/cloud 下的 PostgreSQL v1 至 v4 迁移。当前 0.2.0-store-preview 已在真实云函数上读回 database=ready，但用户认证未配置，所以整体 ready=false，不能作为正式用户上线验收。
+生产不自动建表。`yingxu-dev` 的 PostgreSQL v1–v16 已于 2026-10-27 应用并验证；函数候选仍未部署。此前 `0.2.0-store-preview` 的健康状态仅是历史快照，不代表当前函数版本或正式认证已就绪。
 
 CloudBase HTTP 云函数需要 `scf_bootstrap` 启动脚本并监听 9000 端口。依赖在云端安装；生产函数使用 Python 3.11，支持 HTTP 与 WebSocket。
 
