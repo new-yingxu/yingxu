@@ -1,17 +1,33 @@
 {
   "date": "2026-10-27",
   "branch": "codex/local-agent-ui-closure",
-  "scope": "isolated synthetic fixture only; no user media or CloudBase access",
+  "scope": "isolated macOS arm64 draft bundle; synthetic fixtures only; no user media or cloud access",
+  "qaBundle": {
+    "bundleIdentifier": "app.yingxu.desktop.next.codexqa20261027",
+    "dmg": "backend/tauri-host/target/release/bundle/dmg/影序本机QA 20261027_0.2.0-draft.1_aarch64.dmg",
+    "sizeMiB": 48.29,
+    "adHocSigned": true,
+    "notarized": false,
+    "isolatedAppData": "~/Library/Application Support/app.yingxu.desktop.next.codexqa20261027",
+    "dmgSha256": "08086d775e33b84c6b027e8aae90a5ef8a975e5fb04d3d180e385c2ee8e96820",
+    "sidecarManifestSha256": "ec895be625c7aa164e5640ca27ee2dcedaeb5fc8c3208083f88067aebc2d4db1"
+  },
   "checks": {
-    "desktopUiProductionBuild": "passed; Vue typecheck and Vite, 44 modules",
-    "localAgentAndNativeAdapter": "passed; 28 checks",
-    "coreRustTests": "passed; 64 tests across unit and integration suites",
-    "tauriHostTests": "passed; 7 tests",
-    "hostToSidecarToSQLiteToOllama": "passed; opt-in test packaged_local_agent_real_model_tool_round_trip_from_host, 1 test, synthetic IMG_2048.jpg, temporary SQLite, qwen2.5:7b"
+    "coreRustTests": "passed: 35 unit + 6 API/delivery + 22 local backend + 6 media = 69",
+    "tauriHostTests": "passed: 9; opt-in real model test skipped because YINGXU_RUN_OLLAMA_HOST_TESTS was not set",
+    "desktopUiProductionBuild": "passed: Vue typecheck and Vite, 48 modules",
+    "localAgentAdapter": "passed: 10 checks",
+    "nativeAdapter": "passed: 18 checks against synthetic Rust CLI fixture",
+    "localFileActionContract": "passed: IPC contract verified",
+    "conversationSafety": "passed: old unresolved turn retained and not replayed; new conversation uses separate session; no provider call made",
+    "trayProgress": "passed: rate, ETA, unknown-speed, and idle states covered by host tests",
+    "sidecarManifest": "1187 files SHA-256 and sizes verified before copying staged package into isolated QA tree",
+    "visualUi": "login local-mode CTA, workspace, and Agent page inspected; no text overflow or clipping observed"
   },
   "notVerified": {
-    "packagedWebViewToTauriToSidecarToSQLiteToOllama": "blocked; prior packaged app status call hung in SecKeychainFindGenericPassword before sidecar startup; keychain unlock was skipped as instructed",
-    "uncertainPriorWebViewTurn": "not replayed",
-    "cloudBaseDeployment": "not attempted; migration v1-v16 source is now present and locally validated, but CloudBase CLI refresh DNS failure and missing verified deployment identity block cloud writes"
+    "packagedWebViewToTauriToSidecarToSQLiteToOllama": "blocked: Agent status failed before sidecar startup with macOS Keychain timeout; UI reports system credential store did not return. No keychain prompt appeared on screen after one isolated app restart; no model request was sent.",
+    "sidecarOllamaRoundTrip": "not run; no sidecar process started by this QA bundle",
+    "uncertainPriorWebViewTurn": "not replayed; prior ledger outcome remains untouched",
+    "cloudTasks": "paused by user; no CloudBase or cloud deployment actions performed"
   }
 }

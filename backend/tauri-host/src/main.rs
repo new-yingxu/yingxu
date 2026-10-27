@@ -637,7 +637,6 @@ async fn open_system_trash(app: tauri::AppHandle) -> Result<(), CoreError> {
     .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))?
 }
 
-
 fn check_paths(state: &HostState, request: &Request) -> Result<(), CoreError> {
     if request.method == "worker.runNext" {
         return Err(CoreError::new("PERMISSION_DENIED", "worker 由桌面宿主管理"));
@@ -1311,6 +1310,58 @@ fn install_crash_logger() {
     }));
 }
 
+fn format_rate(bytes_per_second: u64) -> String {
+    const UNITS: [&str; 4] = ["B/s", "KB/s", "MB/s", "GB/s"];
+    let mut value = bytes_per_second as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+fn tray_progress(job: &yingxu_core::Job) -> (String, String) {
+    let percent = job.progress.clamp(0.0, 100.0).round() as u8;
+    let speed = job.runtime["speedBytesPerSecond"].as_u64().unwrap_or(0);
+    if job.state != "running" {
+        let state = match job.state.as_str() {
+            "queued" => "排队中",
+            "paused" => "已暂停",
+            _ => "等待中",
+        };
+        return (
+            format!("{state} {percent}%"),
+            format!("影序 · {} · {state} · {percent}%", job.name),
+        );
+    }
+
+    let rate = if speed > 0 {
+        format_rate(speed)
+    } else {
+        "计算中".to_string()
+    };
+    let total_bytes = job.total_bytes.saturating_mul(job.targets.len() as u64);
+    let remaining_bytes =
+        (total_bytes as f64 * (100.0 - job.progress.clamp(0.0, 100.0)) / 100.0) as u64;
+    let eta = if speed == 0 {
+        "估算中".to_string()
+    } else {
+        let seconds = remaining_bytes / speed;
+        if seconds >= 3600 {
+            format!("{}小时{}分", seconds / 3600, seconds % 3600 / 60)
+        } else if seconds >= 60 {
+            format!("{}分{}秒", seconds / 60, seconds % 60)
+        } else {
+            format!("{seconds}秒")
+        }
+    };
+    (
+        format!("{percent}% · {rate}"),
+        format!("影序 · {} · {percent}% · {rate} · 剩余约 {eta}", job.name),
+    )
+}
+
 /// 首次关窗缩托盘的一次性提示（测试反馈 §9 P1）。Windows 原生气泡需要签名/AUMID，
 /// 这里用一次性原生对话框兜底，并发前端事件供后续做 toast。
 fn tray_hint_once(app: &tauri::AppHandle, state: &HostState) {
@@ -1423,6 +1474,41 @@ fn main() {
                 }
                 running.store(false, Ordering::Release);
             });
+            let progress_stop = shutdown_flag.clone();
+            let progress_engine = engine.clone();
+            let progress_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                while !progress_stop.load(Ordering::Acquire) {
+                    let active = progress_engine.store.jobs().ok().and_then(|jobs| {
+                        jobs.into_iter()
+                            .filter_map(|job| {
+                                let priority = match job.state.as_str() {
+                                    "running" => 3,
+                                    "paused" => 2,
+                                    "queued" => 1,
+                                    _ => return None,
+                                };
+                                Some((job, priority))
+                            })
+                            .max_by_key(|(_, priority)| *priority)
+                            .map(|(job, _)| job)
+                    });
+                    if let Some(job) = active.as_ref() {
+                        let _ = progress_handle.emit("local-job-updated", job);
+                    }
+                    let (title, tooltip) = active
+                        .as_ref()
+                        .map_or_else(|| (String::new(), "影序 YINGXU".to_string()), tray_progress);
+                    let main_thread_handle = progress_handle.clone();
+                    let _ = progress_handle.run_on_main_thread(move || {
+                        if let Some(tray) = main_thread_handle.tray_by_id("main") {
+                            let _ = tray.set_title((!title.is_empty()).then_some(title.as_str()));
+                            let _ = tray.set_tooltip(Some(tooltip.as_str()));
+                        }
+                    });
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            });
             app.manage(HostState {
                 engine,
                 shutdown: shutdown_flag,
@@ -1451,8 +1537,9 @@ fn main() {
                     });
                 }
             }
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("main")
                 .icon(tauri::image::Image::new_owned(pixels, 24, 24))
+                .title("")
                 .tooltip("影序 YINGXU")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1502,8 +1589,8 @@ mod agent_action_tests {
     use super::{
         HostState, check_paths, local_agent_request, local_agent_status_or_unavailable,
         resolve_local_agent_executable, spawn_local_agent, spawn_local_agent_with_timeout,
-        stop_local_agent_process, validate_action_expiry, validate_local_turn_request,
-        validate_local_turn_response,
+        stop_local_agent_process, tray_progress, validate_action_expiry,
+        validate_local_turn_request, validate_local_turn_response,
     };
     use std::collections::{HashMap, HashSet};
     use std::{
@@ -1516,6 +1603,63 @@ mod agent_action_tests {
         agent::execute_read_tool,
         api::{PROTOCOL_VERSION, Request},
     };
+
+    fn tray_job(state: &str, progress: f64, speed: u64) -> yingxu_core::Job {
+        yingxu_core::Job {
+            id: "job-1".into(),
+            name: "测试备份".into(),
+            kind: "backup".into(),
+            state: state.into(),
+            phase: "copying".into(),
+            source: PathBuf::from("/source"),
+            source_identity: yingxu_core::Fingerprint {
+                bytes: 0,
+                modified_ns: 0,
+                identity: "source".into(),
+            },
+            verify: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            total_bytes: 60 * 1024 * 1024,
+            files: 1,
+            progress,
+            targets: vec![yingxu_core::Target {
+                id: "target-1".into(),
+                path: PathBuf::from("/target"),
+                identity: yingxu_core::Fingerprint {
+                    bytes: 0,
+                    modified_ns: 0,
+                    identity: "target".into(),
+                },
+                state: "running".into(),
+                copied: 0,
+                skipped: 0,
+                verified: 0,
+                failed: 0,
+            }],
+            items: vec![],
+            error: None,
+            options: serde_json::json!({}),
+            runtime: serde_json::json!({ "speedBytesPerSecond": speed }),
+        }
+    }
+
+    #[test]
+    fn tray_progress_includes_rate_and_estimated_remaining_time() {
+        let (title, tooltip) = tray_progress(&tray_job("running", 25.0, 1024 * 1024));
+        assert!(title.contains("25%"));
+        assert!(title.contains("1.0 MB/s"));
+        assert!(tooltip.contains("测试备份"));
+        assert!(tooltip.contains("剩余约 45秒"));
+    }
+
+    #[test]
+    fn tray_progress_handles_unknown_speed_and_idle_jobs() {
+        let (_, running) = tray_progress(&tray_job("running", 0.0, 0));
+        assert!(running.contains("估算中"));
+        let (paused, _) = tray_progress(&tray_job("paused", 40.0, 0));
+        assert!(paused.contains("已暂停"));
+    }
 
     fn local_agent_step_states(
         database_path: &std::path::Path,
