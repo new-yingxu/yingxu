@@ -16,6 +16,7 @@ body{min-width:0}
 .sidebar{min-height:0}
 .side-nav{min-height:0;flex:1}
 .main-area{min-height:0;height:auto}
+.login-method-note{font-size:10px;line-height:1.55;color:var(--muted);margin:2px 0}.login-method-note.warning{color:#9a6c2a}.register-actions{margin-top:14px;align-items:center}.register-actions .primary-button{flex:1}
 .page-scroll{min-height:0}
 .nav-item>.ui-symbol{width:18px!important;flex:0 0 18px}
 .nav-item>span:not(.ui-symbol){flex:1;min-width:0}

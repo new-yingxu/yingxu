@@ -158,11 +158,15 @@ type Page =
   | "settings";
 const page = ref<Page>("home");
 const session = ref<Awaited<ReturnType<typeof api.auth.restore>>>(null);
-const loginMode = ref<
-  "wechat" | "phone-code" | "email-code" | "email-password"
->("wechat");
+const loginMode = ref<"phone-code" | "email-code" | "email-password">(
+  "email-code",
+);
+const authIntent = ref<"login" | "register">("login");
 const loginIdentifier = ref("");
 const loginProof = ref("");
+const registerUsername = ref("");
+const registerPassword = ref("");
+const registerPasswordConfirm = ref("");
 const loginError = ref("");
 const loginBusy = ref(false);
 const notice = ref("");
@@ -597,14 +601,18 @@ onUnmounted(() => {
 async function signIn() {
   if (localWorkspace.value) return;
   loginError.value = "";
-  if (isMock && loginMode.value === "wechat")
-    loginIdentifier.value ||= "wechat-demo";
-  if (!loginIdentifier.value.trim()) {
-    loginError.value = "请填写手机号或邮箱。";
+  if (loginMode.value === "phone-code") {
+    loginError.value = "短信通道尚未完成服务商、签名和模板配置，暂不能发送或验证短信。";
     return;
   }
-  if (loginMode.value !== "wechat" && !loginProof.value.trim()) {
-    loginError.value = "请填写验证码或密码。";
+  if (!loginIdentifier.value.trim()) {
+    loginError.value =
+      loginMode.value === "email-password" ? "请填写用户名。" : "请填写邮箱地址。";
+    return;
+  }
+  if (!loginProof.value.trim()) {
+    loginError.value =
+      loginMode.value === "email-password" ? "请填写密码。" : "请填写验证码。";
     return;
   }
   loginBusy.value = true;
@@ -612,7 +620,7 @@ async function signIn() {
     session.value = await api.auth.login(
       loginMode.value,
       loginIdentifier.value,
-      loginProof.value || "qr-confirmed",
+      loginProof.value,
     );
     await loadData();
     page.value = "home";
@@ -1096,57 +1104,101 @@ function taskStateLabel(state: TaskState) {
     <section class="login-card">
       <div class="login-intro">
         <span class="eyebrow">影序 · 桌面端 V2 草稿</span>
-        <h1>欢迎回到影序</h1>
+        <h1>{{ authIntent === "register" ? "创建影序账号" : "欢迎回到影序" }}</h1>
         <p>
-          登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。
+          {{
+            authIntent === "register"
+              ? "先验证邮箱，再设置用户名和密码。照片与视频原片仍留在你的设备。"
+              : "登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。"
+          }}
         </p>
       </div>
-      <div class="login-tabs">
+      <div v-if="authIntent === 'login'" class="login-tabs">
         <button
-          :class="{ chosen: loginMode === 'wechat' }"
-          @click="loginMode = 'wechat'"
-        >
-          微信扫码</button
-        ><button
           :class="{ chosen: loginMode === 'phone-code' }"
           @click="loginMode = 'phone-code'"
         >
-          手机号</button
-        ><button
-          :class="{
-            chosen:
-              loginMode === 'email-code' || loginMode === 'email-password',
-          }"
+          短信验证码
+        </button>
+        <button
+          :class="{ chosen: loginMode === 'email-code' }"
           @click="loginMode = 'email-code'"
         >
-          邮箱
+          邮箱验证码
+        </button>
+        <button
+          :class="{ chosen: loginMode === 'email-password' }"
+          @click="loginMode = 'email-password'"
+        >
+          用户名/密码
         </button>
       </div>
-      <div v-if="loginMode === 'wechat' && isMock" class="wechat-login">
-        <div class="qr-frame">
-          <div class="qr-code">
-            <i
-              v-for="n in 121"
-              :key="n"
-              :class="{
-                quiet: (n * 7 + (n % 5)) % 4 === 0 || (n % 11 === 0 && n > 20),
-              }"
-            ></i
-            ><b>影</b>
-          </div>
-        </div>
-        <strong>使用微信扫描二维码登录</strong
-        ><span>请使用与影序 Pocket 相同的账号</span
-        ><button class="text-button" @click="loginMode = 'phone-code'">
-          改用验证码登录
-        </button>
-      </div>
-      <div v-else-if="loginMode !== 'wechat'" class="login-fields">
-        <label>{{ loginMode === "phone-code" ? "手机号" : "邮箱" }}</label
-        ><input
+      <div v-if="authIntent === 'register'" class="login-fields">
+        <label>邮箱</label>
+        <input
           v-model="loginIdentifier"
+          type="email"
+          autocomplete="email"
+          placeholder="请输入邮箱地址"
+        />
+        <label>邮箱验证码</label>
+        <div class="proof-field">
+          <input
+            v-model="loginProof"
+            inputmode="numeric"
+            autocomplete="one-time-code"
+            placeholder="请输入邮箱验证码"
+          />
+          <button class="text-button" disabled>发送接口待接入</button>
+        </div>
+        <label>设置用户名</label>
+        <input
+          v-model="registerUsername"
+          autocomplete="username"
+          placeholder="请输入用户名"
+        />
+        <label>设置密码</label>
+        <input
+          v-model="registerPassword"
+          type="password"
+          autocomplete="new-password"
+          placeholder="至少 8 位"
+        />
+        <label>确认密码</label>
+        <input
+          v-model="registerPasswordConfirm"
+          type="password"
+          autocomplete="new-password"
+          placeholder="请再次输入密码"
+        />
+        <p class="login-method-note">邮箱验证码使用 CloudBase 邮件代发；桌面端注册/认证接口尚未接入，此预览不会发送验证码或创建账号。</p>
+      </div>
+      <div v-else class="login-fields">
+        <label>
+          {{
+            loginMode === "phone-code"
+              ? "手机号"
+              : loginMode === "email-password"
+                ? "用户名"
+                : "邮箱"
+          }}
+        </label>
+        <input
+          v-model="loginIdentifier"
+          :type="
+            loginMode === 'phone-code'
+              ? 'tel'
+              : loginMode === 'email-code'
+                ? 'email'
+                : 'text'
+          "
+          :autocomplete="loginMode === 'email-password' ? 'username' : 'email'"
           :placeholder="
-            loginMode === 'phone-code' ? '请输入手机号' : '请输入邮箱地址'
+            loginMode === 'phone-code'
+              ? '请输入手机号'
+              : loginMode === 'email-password'
+                ? '请输入用户名'
+                : '请输入邮箱地址'
           "
         />
         <label>{{ loginMode === "email-password" ? "密码" : "验证码" }}</label>
@@ -1154,47 +1206,49 @@ function taskStateLabel(state: TaskState) {
           <input
             v-model="loginProof"
             :type="loginMode === 'email-password' ? 'password' : 'text'"
-            :placeholder="
-              loginMode === 'email-password' ? '请输入密码' : '请输入验证码'
-            "
-          /><button
-            v-if="loginMode !== 'email-password'"
-            class="text-button"
-            @click="say('验证码发送流程将在后端认证服务接入后启用。')"
-          >
-            获取验证码
+            :autocomplete="loginMode === 'email-password' ? 'current-password' : 'one-time-code'"
+            :inputmode="loginMode === 'email-password' ? undefined : 'numeric'"
+            :placeholder="loginMode === 'email-password' ? '请输入密码' : '请输入验证码'"
+          />
+          <button v-if="loginMode !== 'email-password'" class="text-button" disabled>
+            {{ loginMode === 'phone-code' ? '暂不开放' : '发送接口待接入' }}
           </button>
         </div>
+        <p v-if="loginMode === 'phone-code'" class="login-method-note warning">短信暂不开放发送：腾讯大陆短信服务商、已审核签名和模板尚未配置。</p>
+        <p v-else-if="loginMode === 'email-code'" class="login-method-note">邮箱验证码方式采用 CloudBase 邮件代发；桌面端认证接口尚未接入，当前不会发送验证码。</p>
+        <p v-else class="login-method-note">用户名/密码登录；注册账号需先完成邮箱验证。真实认证服务尚未接入。</p>
         <div v-if="loginMode === 'email-code'" class="form-foot">
-          <button class="text-button" @click="loginMode = 'email-password'">
-            使用 Pocket 邮箱密码</button
-          ><button class="text-button" @click="loginMode = 'email-password'">
-            注册账号
-          </button>
+          <button class="text-button" @click="loginMode = 'email-password'">使用用户名/密码</button>
+          <button class="text-button" @click="authIntent = 'register'; loginProof = ''; loginError = ''">注册账号</button>
+        </div>
+        <div v-if="loginMode === 'email-password'" class="form-foot">
+          <button class="text-button" @click="authIntent = 'register'; loginMode = 'email-code'; loginProof = ''; loginError = ''">注册新账号</button>
+          <button class="text-button" @click="loginMode = 'email-code'">使用邮箱验证码</button>
         </div>
       </div>
       <p v-if="loginError" class="error-note">{{ loginError }}</p>
       <p v-if="props.testTransport" class="integration-banner">
         {{ props.testTransport }}
       </p>
-      <p v-if="!isMock" class="error-note">
-        真实登录未连接。未生成可用微信二维码，不会创建演示账号。
-      </p>
+      <p v-if="!isMock" class="error-note">真实登录与注册接口尚未连接；当前不会创建账号或建立登录会话。</p>
       <button
+        v-if="authIntent === 'login'"
         class="primary-button login-submit"
         @click="signIn"
-        :disabled="loginBusy || !isMock"
+        :disabled="loginBusy || !isMock || loginMode === 'phone-code'"
       >
         {{
           !isMock
             ? "真实登录尚未接入"
             : loginBusy
               ? "正在登录…"
-              : loginMode === "wechat"
-                ? "扫码完成，进入影序（演示）"
-                : "登录影序（演示）"
+              : "登录影序（演示）"
         }}
       </button>
+      <div v-else class="form-foot register-actions">
+        <button class="secondary-button" @click="authIntent = 'login'; loginMode = 'email-code'; loginError = ''">返回登录</button>
+        <button class="primary-button" disabled>注册服务待接入</button>
+      </div>
       <p v-if="canEnterLocalWorkspace" class="local-mode-note">
         本机模式无需登录，照片、任务和 Agent 留在此设备；账号、云同步与网盘功能将停用。
       </p>
@@ -2558,22 +2612,23 @@ function taskStateLabel(state: TaskState) {
                 </div>
                 <h4>登录方式关联</h4>
                 <div class="provider-row">
-                  <span class="method-icon wechat">微</span
-                  ><span
-                    ><b>微信扫码</b
-                    ><small>账号关联将在认证后端接入时启用</small></span
-                  ><button class="secondary-button compact" disabled>
-                    待接入
-                  </button>
+                  <span class="method-icon">短</span>
+                  <span><b>短信验证码</b><small>服务商、签名和模板配置待完成，暂不开放发送</small></span>
+                  <button class="secondary-button compact" disabled>暂不可用</button>
                 </div>
                 <div class="provider-row">
                   <span class="method-icon">@</span
                   ><span
-                    ><b>邮箱账号</b
+                    ><b>邮箱验证码</b
                     ><small
-                      >{{ displayEmail }} · 与 Pocket 邮箱账号兼容入口</small
+                      >CloudBase 邮件代发 · 桌面认证接口待接入</small
                     ></span
-                  ><button class="text-button">已关联</button>
+                  ><button class="secondary-button compact" disabled>待接入</button>
+                </div>
+                <div class="provider-row">
+                  <span class="method-icon">密</span>
+                  <span><b>用户名/密码</b><small>注册需先验证邮箱 · 真实认证服务待接入</small></span>
+                  <button class="secondary-button compact" disabled>待接入</button>
                 </div>
                 <button class="danger-button" @click="logout">
                   退出当前账号
