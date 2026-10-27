@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -27,6 +27,59 @@ struct HostState {
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     sources: Mutex<HashSet<PathBuf>>,
     targets: Mutex<HashSet<PathBuf>>,
+    directory_grants: Mutex<HashMap<String, (String, PathBuf)>>,
+}
+
+fn format_rate(bytes_per_second: u64) -> String {
+    const UNITS: [&str; 4] = ["B/s", "KB/s", "MB/s", "GB/s"];
+    let mut value = bytes_per_second as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+fn tray_progress(job: &yingxu_core::Job) -> (String, String) {
+    let percent = job.progress.clamp(0.0, 100.0).round() as u8;
+    let speed = job.runtime["speedBytesPerSecond"].as_u64().unwrap_or(0);
+    if job.state != "running" {
+        let state = match job.state.as_str() {
+            "queued" => "排队中",
+            "paused" => "已暂停",
+            _ => "等待中",
+        };
+        return (
+            format!("{state} {percent}%"),
+            format!("影序 · {} · {state} · {percent}%", job.name),
+        );
+    }
+
+    let rate = if speed > 0 {
+        format_rate(speed)
+    } else {
+        "计算中".to_string()
+    };
+    let total_bytes = job.total_bytes.saturating_mul(job.targets.len() as u64);
+    let remaining_bytes =
+        (total_bytes as f64 * (100.0 - job.progress.clamp(0.0, 100.0)) / 100.0) as u64;
+    let eta = if speed == 0 {
+        "估算中".to_string()
+    } else {
+        let seconds = remaining_bytes / speed;
+        if seconds >= 3600 {
+            format!("{}小时{}分", seconds / 3600, seconds % 3600 / 60)
+        } else if seconds >= 60 {
+            format!("{}分{}秒", seconds / 60, seconds % 60)
+        } else {
+            format!("{seconds}秒")
+        }
+    };
+    (
+        format!("{percent}% · {rate}"),
+        format!("影序 · {} · {percent}% · {rate} · 剩余约 {eta}", job.name),
+    )
 }
 
 #[tauri::command]
@@ -65,10 +118,209 @@ async fn select_directory(
             .lock()
             .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "授权目录状态不可用"))?
             .insert(path.clone());
-        Ok(serde_json::json!({"path":path,"purpose":purpose}))
+        let grant_id = format!(
+            "directory-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        state
+            .directory_grants
+            .lock()
+            .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "目录授权状态不可用"))?
+            .insert(grant_id.clone(), (purpose.clone(), path.clone()));
+        Ok(serde_json::json!({"path":path,"purpose":purpose,"grantId":grant_id}))
     })
     .await
     .map_err(|e| CoreError::new("BACKGROUND_TASK_FAILED", e))?
+}
+
+/// Prepare a local Agent filesystem operation. Model supplied values are
+/// limited to a tool name, indexed media ID, name, or an opaque directory grant.
+#[tauri::command]
+async fn agent_prepare_file_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    tool: String,
+    media_id: Option<String>,
+    new_name: Option<String>,
+    destination_grant_id: Option<String>,
+    quarantine_id: Option<String>,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可准备本地文件操作",
+        ));
+    }
+    let state = app.state::<HostState>();
+    if tool == "cleanup_quarantine" {
+        let quarantine_id =
+            quarantine_id.ok_or_else(|| CoreError::new("INVALID_PARAMS", "缺少隔离项编号"))?;
+        let preview = state.engine.quarantine_prepare_cleanup(&quarantine_id)?;
+        return Ok(serde_json::json!({
+            "actionId":format!("quarantine:{}", preview["actionId"].as_str().unwrap_or_default()),
+            "tool":tool,
+            "objectName":preview["name"],
+            "targetPath":"系统废纸篓中的待处理废片副本",
+            "effect":"将待处理废片副本移入系统废纸篓；原始素材不变",
+            "requiresConfirmation":true,
+            "expiresAt":preview["expiresAt"]
+        }));
+    }
+    if !["rename_item", "move_item"].contains(&tool.as_str()) {
+        return Err(CoreError::new(
+            "AGENT_TOOL_NOT_ALLOWED",
+            "不支持的本地文件操作",
+        ));
+    }
+    let media_id = media_id.ok_or_else(|| CoreError::new("INVALID_PARAMS", "缺少素材编号"))?;
+    let engine = state.engine.clone();
+    let lookup_id = media_id.clone();
+    let source_path =
+        tauri::async_runtime::spawn_blocking(move || engine.agent_resolve_open_item(&lookup_id))
+            .await
+            .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))??;
+    let source_roots = state
+        .sources
+        .lock()
+        .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "来源目录授权状态不可用"))?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    yingxu_core::agent::validate_open_grant(&source_path, &source_roots)?;
+    let destination = if tool == "move_item" {
+        let grant_id = destination_grant_id.ok_or_else(|| {
+            CoreError::new("DESTINATION_GRANT_REQUIRED", "请先选择并授权目标目录")
+        })?;
+        let grants = state
+            .directory_grants
+            .lock()
+            .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "目录授权状态不可用"))?;
+        let (purpose, path) = grants.get(&grant_id).ok_or_else(|| {
+            CoreError::new(
+                "DESTINATION_GRANT_REQUIRED",
+                "目标目录授权已失效，请重新选择",
+            )
+        })?;
+        if purpose != "destination" {
+            return Err(CoreError::new(
+                "PERMISSION_DENIED",
+                "目标目录授权用途不匹配",
+            ));
+        }
+        Some(path.clone())
+    } else {
+        None
+    };
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine.prepare_file_action(
+            &tool,
+            &media_id,
+            new_name.as_deref(),
+            destination.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))?
+}
+
+/// Consume one preview. Every accepted rename/move rechecks both source and
+/// destination grants immediately before the core touches any file.
+#[tauri::command]
+async fn agent_confirm_file_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action_id: String,
+    accepted: bool,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可确认本地文件操作",
+        ));
+    }
+    let state = app.state::<HostState>();
+    if let Some(id) = action_id.strip_prefix("quarantine:") {
+        let mut receipt = state.engine.quarantine_confirm_cleanup(id, accepted)?;
+        receipt["actionId"] = serde_json::Value::String(action_id);
+        receipt["tool"] = serde_json::Value::String("cleanup_quarantine".into());
+        receipt["userConfirmed"] = serde_json::Value::Bool(accepted);
+        receipt["cloudExecutionAuthorized"] = serde_json::Value::Bool(false);
+        return Ok(receipt);
+    }
+    if accepted {
+        let preview = state.engine.file_action_preview(&action_id)?;
+        let source = PathBuf::from(preview["sourcePath"].as_str().unwrap_or_default());
+        let target = PathBuf::from(preview["targetPath"].as_str().unwrap_or_default());
+        let source_roots = state
+            .sources
+            .lock()
+            .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "来源目录授权状态不可用"))?
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        yingxu_core::agent::validate_open_grant(&source, &source_roots)?;
+        if preview["tool"] == "move_item" {
+            let target_parent = target
+                .parent()
+                .ok_or_else(|| CoreError::new("INVALID_DESTINATION", "目标目录无效"))?;
+            let grants = state
+                .directory_grants
+                .lock()
+                .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "目录授权状态不可用"))?;
+            if !grants.values().any(|(purpose, path)| {
+                purpose == "destination"
+                    && target_parent.starts_with(path)
+                    && std::fs::canonicalize(path).ok().as_ref() == Some(path)
+            }) {
+                return Err(CoreError::new(
+                    "DESTINATION_GRANT_REQUIRED",
+                    "目标目录授权已失效，请重新预览",
+                ));
+            }
+        }
+    }
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.confirm_file_action(&action_id, accepted))
+        .await
+        .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))?
+}
+
+#[tauri::command]
+async fn open_system_trash(app: tauri::AppHandle) -> Result<(), CoreError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let result = {
+            let home = app
+                .path()
+                .home_dir()
+                .map_err(|error| CoreError::new("HOME_DIR_FAILED", error))?;
+            let path = home.join(".Trash");
+            std::process::Command::new("open").arg(path).spawn()
+        };
+        #[cfg(target_os = "windows")]
+        let result = std::process::Command::new("explorer.exe")
+            .arg("shell:RecycleBinFolder")
+            .spawn();
+        #[cfg(target_os = "linux")]
+        let result = std::process::Command::new("xdg-open")
+            .arg("trash:///")
+            .spawn();
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        let result: Result<std::process::Child, std::io::Error> = Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "系统废纸篓不受支持",
+        ));
+        result
+            .map(|_| ())
+            .map_err(|error| CoreError::new("SYSTEM_TRASH_OPEN_FAILED", error))
+    })
+    .await
+    .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))?
 }
 
 fn check_paths(state: &HostState, request: &Request) -> Result<(), CoreError> {
@@ -123,6 +375,7 @@ fn check_paths(state: &HostState, request: &Request) -> Result<(), CoreError> {
         | "library.analyzePhoto"
         | "library.analyzeRaw"
         | "library.thumbnail"
+        | "quarantine.stage"
         | "video.probe"
         | "video.analyze"
         | "netdisk.enqueue" => vec![
@@ -549,6 +802,9 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             select_directory,
+            open_system_trash,
+            agent_prepare_file_action,
+            agent_confirm_file_action,
             backend_request,
             agent_open_item
         ])
@@ -608,6 +864,42 @@ fn main() {
                 }
                 running.store(false, Ordering::Release);
             });
+            let progress_stop = shutdown_flag.clone();
+            let progress_engine = engine.clone();
+            let progress_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                while !progress_stop.load(Ordering::Acquire) {
+                    let active = progress_engine.store.jobs().ok().and_then(|jobs| {
+                        jobs.into_iter()
+                            .filter_map(|job| {
+                                let priority = match job.state.as_str() {
+                                    "running" => 3,
+                                    "paused" => 2,
+                                    "queued" => 1,
+                                    _ => return None,
+                                };
+                                Some((job, priority))
+                            })
+                            .max_by_key(|(_, priority)| *priority)
+                            .map(|(job, _)| job)
+                    });
+                    if let Some(job) = active.as_ref() {
+                        let _ = progress_handle.emit("local-job-updated", job);
+                    }
+                    let (title, tooltip) = active
+                        .as_ref()
+                        .map_or_else(|| (String::new(), "影序 YINGXU".to_string()), tray_progress);
+                    let handle = progress_handle.clone();
+                    let main_thread_handle = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        if let Some(tray) = main_thread_handle.tray_by_id("main") {
+                            let _ = tray.set_title((!title.is_empty()).then_some(title.as_str()));
+                            let _ = tray.set_tooltip(Some(tooltip.as_str()));
+                        }
+                    });
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            });
             app.manage(HostState {
                 engine,
                 shutdown: shutdown_flag,
@@ -615,6 +907,7 @@ fn main() {
                 worker: Mutex::new(Some(thread)),
                 sources: Mutex::new(HashSet::new()),
                 targets: Mutex::new(HashSet::new()),
+                directory_grants: Mutex::new(HashMap::new()),
             });
             let open = MenuItem::with_id(app, "open", "打开影序", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出影序", true, None::<&str>)?;
@@ -632,8 +925,9 @@ fn main() {
                     });
                 }
             }
-            TrayIconBuilder::new()
+            TrayIconBuilder::with_id("main")
                 .icon(tauri::image::Image::new_owned(pixels, 24, 24))
+                .title("")
                 .tooltip("影序 YINGXU")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -682,6 +976,63 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn tray_job(state: &str, progress: f64, speed: u64) -> yingxu_core::Job {
+        yingxu_core::Job {
+            id: "job-1".into(),
+            name: "测试备份".into(),
+            kind: "backup".into(),
+            state: state.into(),
+            phase: "copying".into(),
+            source: PathBuf::from("/source"),
+            source_identity: yingxu_core::Fingerprint {
+                bytes: 0,
+                modified_ns: 0,
+                identity: "source".into(),
+            },
+            verify: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+            total_bytes: 60 * 1024 * 1024,
+            files: 1,
+            progress,
+            targets: vec![yingxu_core::Target {
+                id: "target-1".into(),
+                path: PathBuf::from("/target"),
+                identity: yingxu_core::Fingerprint {
+                    bytes: 0,
+                    modified_ns: 0,
+                    identity: "target".into(),
+                },
+                state: "running".into(),
+                copied: 0,
+                skipped: 0,
+                verified: 0,
+                failed: 0,
+            }],
+            items: vec![],
+            error: None,
+            options: serde_json::json!({}),
+            runtime: serde_json::json!({ "speedBytesPerSecond": speed }),
+        }
+    }
+
+    #[test]
+    fn tray_progress_includes_rate_and_estimated_remaining_time() {
+        let (title, tooltip) = tray_progress(&tray_job("running", 25.0, 1024 * 1024));
+        assert!(title.contains("25%"));
+        assert!(title.contains("1.0 MB/s"));
+        assert!(tooltip.contains("测试备份"));
+        assert!(tooltip.contains("剩余约 45秒"));
+    }
+
+    #[test]
+    fn tray_progress_handles_unknown_speed_and_idle_jobs() {
+        let (_, running) = tray_progress(&tray_job("running", 0.0, 0));
+        assert!(running.contains("估算中"));
+        let (paused, _) = tray_progress(&tray_job("paused", 40.0, 0));
+        assert!(paused.contains("已暂停"));
+    }
+
     fn host_fixture() -> (PathBuf, PathBuf, PathBuf, HostState, String) {
         let base = std::env::temp_dir().canonicalize().unwrap();
         let temp = base.join(format!(
@@ -710,6 +1061,7 @@ mod tests {
             worker: Mutex::new(None),
             sources: Mutex::new(HashSet::new()),
             targets: Mutex::new(HashSet::new()),
+            directory_grants: Mutex::new(HashMap::new()),
         };
         (temp, source, target, state, media_id)
     }
@@ -747,6 +1099,7 @@ mod tests {
             "video.probe",
             "video.analyze",
             "netdisk.enqueue",
+            "quarantine.stage",
         ] {
             let request = Request {
                 request_id: "media-grant-test".into(),
@@ -772,6 +1125,13 @@ mod tests {
             .lock()
             .unwrap()
             .insert(source.canonicalize().unwrap());
+        let quarantine_stage = Request {
+            request_id: "quarantine-grant-test".into(),
+            version: PROTOCOL_VERSION,
+            method: "quarantine.stage".into(),
+            params: serde_json::json!({"mediaId":media_id}),
+        };
+        assert!(check_paths(&state, &quarantine_stage).is_ok());
         let denied_destination = check_paths(&state, &delivery).unwrap_err();
         assert_eq!(denied_destination.code, "DIRECTORY_GRANT_REQUIRED");
         state
