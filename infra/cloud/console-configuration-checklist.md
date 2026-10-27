@@ -6,12 +6,19 @@
 
 1. 在 CloudBase 控制台切换到 `yingxu-dev`。
 2. 打开「身份认证」中的登录方式设置。
-3. 启用并配置邮箱验证码登录，确认发信配置和收件邮箱验证流程可用。
-4. 启用用户名/密码登录。新用户注册仍先通过邮箱验证码验证，再设置用户名和密码。
-5. 微信扫码保持暂停。
-6. 短信登录先保持不可用状态；只有短信服务商、合规签名、模板审核和实际投递均完成后，才把它列为可用登录方式。
+3. 邮箱验证码和用户名/密码可保持已启用；新用户注册仍先通过邮箱验证码验证，再设置用户名和密码。
+4. 微信扫码保持暂停。短信开关按用户截图保留为已启用，但当前尚无真实投递验收；客户端暂不把短信显示为可用登录方式，完成签名/模板与实际送达验证后再开放。
 
-## 二、云函数环境变量与 Secrets
+## 二、安全来源（桌面 WebView）
+
+打开「环境管理 → 安全来源」。CloudBase 官方 Web SDK 要求将来源域名加入安全来源。Tauri 打包版按平台使用不同来源，精确允许：
+
+- macOS：`localhost`（页面来源 `tauri://localhost`）
+- Windows：`tauri.localhost`（页面来源 `http://tauri.localhost`）
+
+`localhost` 通常已在默认安全来源内；核对即可，不要添加 `*`。只在实际缺少时补 `tauri.localhost`。本地 Vite 开发的 `127.0.0.1:5173` 后续需要单独用于开发验收时再添加，不作为生产域名。桌面端 API CORS 同时要求把实际 Tauri 来源原样放入函数的 `CORS_ORIGINS`。
+
+## 三、云函数环境变量与 Secrets
 
 进入「云函数/托管」中 `yingxu-agent-api` 的服务端环境配置。先配置非秘密项，再通过控制台 Secret/加密环境变量入口录入秘密。密钥只在控制台生成或粘贴，勿放在客户端、ZIP、日志、命令历史或聊天中。
 
@@ -19,7 +26,7 @@
 
 - `APP_ENV=production`
 - `AUTH_MODE=cloudbase`
-- `CORS_ORIGINS`：仅填写正式桌面/移动客户端的 HTTPS origin，逗号分隔，不使用 `*`；如客户端使用自定义协议，先确认当前服务 CORS 层是否需要该 origin，不要臆造网址。
+- `CORS_ORIGINS`：只填确切来源，逗号分隔，不使用 `*`。桌面打包版按实际平台填 `tauri://localhost` 和/或 `http://tauri.localhost`；网页版只填真实 HTTPS 域名。不要把 Vite 开发地址作为生产来源。
 - `CLOUDBASE_CLIENT_ORIGINS`：JSON 对象，将已登记的 CloudBase client ID 映射到 `desktop` 或 `mobile`，例如结构 `{"<desktop-client-id>":"desktop","<mobile-client-id>":"mobile"}`；替换占位符为控制台实际 client ID。
 - `JWT_ISSUER`：正式 HTTPS issuer URL。
 - `JWT_AUDIENCE`：影序服务端短会话的 audience 标识。
@@ -35,13 +42,13 @@
 
 `MODEL_OWNER_CREDENTIALS` 仅供用户明确启用服务端 BYOK/模型路由时使用，不是本地 Agent 或基本身份认证的部署前置项；当前不需要录入模型供应商密钥。不要设置开发用 `DEV_AUTH_TOKEN` 到生产环境。
 
-## 三、配置后的控制台自查
+## 四、配置后的控制台自查
 
 1. 核对函数仍未发布，先保存配置，不点击部署或发布。
 2. 回看变量名和 origin/client ID 映射，不在截图或工单中暴露密钥值。
-3. 确认所有客户端 origin 都是 HTTPS 且无通配符；issuer 使用 HTTPS。
+3. 确认 Web 来源为真实 HTTPS 域名；桌面只允许上文列明的精确 Tauri 来源且无通配符；issuer 使用 HTTPS。
 4. 确认邮箱验证码真实收件流程可用；不要为验证而向他人发送验证码。
-5. SMS 和微信保持暂停，直至各自的业务决策及配置条件满足。
+5. 短信保持“控制台开关已启用、客户端待真实投递验收”；微信扫码保持暂停。
 6. 配置完成后告知维护者“登录方式和函数变量已配置”，不要发送 Secret 值。后续再单独进行本地包复核、云端部署授权和部署后验收。
 
 ## 当前需用户在控制台填写的项目

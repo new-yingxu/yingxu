@@ -1,10 +1,34 @@
 from dataclasses import dataclass, field
 import os
+from urllib.parse import urlsplit
 
 DEFAULT_APP_VERSION = "0.9.0-local-sync-preview"
 # The current source uses the local-agent-step and atomic-action migrations too.
 # Refuse readiness on v14/v15 so the service cannot run against a partial schema.
 REQUIRED_SCHEMA_VERSION = 16
+
+# Tauri's packaged WebViews use platform-specific local origins. Keep these
+# exact values in the production allowlist; do not allow arbitrary HTTP origins.
+TAURI_PRODUCTION_ORIGINS = frozenset({"tauri://localhost", "http://tauri.localhost"})
+
+
+def production_cors_origin_allowed(origin: str) -> bool:
+    if origin in TAURI_PRODUCTION_ORIGINS:
+        return True
+    try:
+        parsed = urlsplit(origin)
+        return (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.path in ("", "/")
+            and not parsed.query
+            and not parsed.fragment
+            and "*" not in origin
+        )
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -91,8 +115,8 @@ class Settings:
             errors.append("production requires an explicit CORS_ORIGINS allowlist")
         if self.app_env == "production" and any("*" in origin for origin in self.cors_origins):
             errors.append("wildcard CORS origins are forbidden in production")
-        if self.app_env == "production" and any(not origin.startswith("https://") for origin in self.cors_origins):
-            errors.append("production CORS origins must use HTTPS")
+        if self.app_env == "production" and any(not production_cors_origin_allowed(origin) for origin in self.cors_origins):
+            errors.append("production CORS origins must be HTTPS or an exact supported Tauri app origin")
         if self.app_env == "production" and self.auth_mode == "jwt" and self.jwt_jwks_url and not self.jwt_jwks_url.startswith("https://"):
             errors.append("production JWT JWKS URL must use HTTPS")
         return errors

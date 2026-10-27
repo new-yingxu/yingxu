@@ -21,7 +21,7 @@ from .graph_checkpoints import PrincipalCheckpointSaver
 from .sync_snapshots import SnapshotStore, SnapshotNotFound, SnapshotExpired, SnapshotLimit
 from .account_data import AccountDataStore
 from .preset_store import PresetStore, PresetBody, PresetConflict, PresetNotFound, PresetLimit, PresetSyncDisabled
-from .config import Settings
+from .config import Settings, production_cors_origin_allowed
 from .model_provider import credential_for_owner, generate_answer, ModelNotConfigured, ModelUnavailable
 from .db import Base, build_database
 from .models import AgentAction, Device, SyncEvent, utcnow
@@ -63,7 +63,7 @@ app = FastAPI(title="影序 Cloud Service", version="0.1.0", lifespan=lifespan)
 _cors_settings = Settings.from_env()
 _cors_origins = [
     origin for origin in _cors_settings.cors_origins
-    if "*" not in origin and (_cors_settings.app_env != "production" or origin.startswith("https://"))
+    if "*" not in origin and (_cors_settings.app_env != "production" or production_cors_origin_allowed(origin))
 ]
 app.add_middleware(
     CORSMiddleware,

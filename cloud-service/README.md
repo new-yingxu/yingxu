@@ -21,7 +21,7 @@ cp .env.example .env
 
 ## 生产配置
 
-生产可以用 CloudBase 官方 PostgreSQL REST：不设 `DATABASE_URL`，将 `CLOUDBASE_ENV_ID` 和服务端 Secret `CLOUDBASE_APIKEY` 注入函数环境。还需 `AUTH_MODE=cloudbase`、可信 `JWT_ISSUER`/`JWT_AUDIENCE`、客户端映射 `CLOUDBASE_CLIENT_ORIGINS`、会话签名 Secrets (`SESSION_PRIVATE_KEY`/`SESSION_KEY_ID`) 和明确的 HTTPS `CORS_ORIGINS`。CloudBase access token 由后端经官方 user/me 与 token/introspect 双校验，再换发影序短会话。缺少身份配置时业务失败关闭。
+生产可以用 CloudBase 官方 PostgreSQL REST：不设 `DATABASE_URL`，将 `CLOUDBASE_ENV_ID` 和服务端 Secret `CLOUDBASE_APIKEY` 注入函数环境。还需 `AUTH_MODE=cloudbase`、可信 `JWT_ISSUER`/`JWT_AUDIENCE`、客户端映射 `CLOUDBASE_CLIENT_ORIGINS`、会话签名 Secrets (`SESSION_PRIVATE_KEY`/`SESSION_KEY_ID`) 和明确的 `CORS_ORIGINS`。网站只接受明确的 HTTPS 来源；桌面打包版只额外接受精确的 macOS `tauri://localhost` 与 Windows `http://tauri.localhost` 来源，不允许任意 HTTP 或通配符。CloudBase access token 由后端经官方 user/me 与 token/introspect 双校验，再换发影序短会话。缺少身份配置时业务失败关闭。
 
 生产不自动建表。`yingxu-dev` 的 PostgreSQL v1–v16 已于 2026-10-27 应用并验证；函数候选仍未部署。此前 `0.2.0-store-preview` 的健康状态仅是历史快照，不代表当前函数版本或正式认证已就绪。
 
