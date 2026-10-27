@@ -210,7 +210,14 @@ const backupTask = ref<ArchiveTask | null>(null);
 const newPresetName = ref("");
 const agentInput = ref("");
 const agentActionBusy = ref(false);
-const modelConsentRef = ref<{ submit(query: string): Promise<void> } | null>(null);
+const agentConversationKey = ref(0);
+const agentNewConversationReview = ref(false);
+const agentHasArchivedUnresolvedTurn = ref(false);
+const modelConsentRef = ref<{
+  submit(query: string): Promise<void>;
+  requiresRecovery(): boolean;
+  isBusy(): boolean;
+} | null>(null);
 type AgentMessage = {
   role: "assistant" | "user";
   text: string;
@@ -883,6 +890,25 @@ function appendModelReply(value: { query: string; reply: AgentReply }) {
       : undefined,
   });
   if (agentInput.value === value.query) agentInput.value = "";
+}
+function requestNewAgentConversation() {
+  if (modelConsentRef.value?.isBusy()) return;
+  if (modelConsentRef.value?.requiresRecovery()) {
+    agentNewConversationReview.value = true;
+    return;
+  }
+  startNewAgentConversation();
+}
+function startNewAgentConversation() {
+  agentMessages.value = [];
+  agentInput.value = "";
+  agentConversationKey.value += 1;
+  agentNewConversationReview.value = false;
+}
+function confirmNewAgentConversation() {
+  if (!agentNewConversationReview.value) return;
+  agentHasArchivedUnresolvedTurn.value = true;
+  startNewAgentConversation();
 }
 async function confirmAgent(message: AgentMessage, accepted: boolean) {
   if (!message.actionId || agentActionBusy.value) return;
@@ -2409,7 +2435,8 @@ function taskStateLabel(state: TaskState) {
               <aside class="panel agent-aside">
                 <button
                   class="primary-button full-width"
-                  @click="agentMessages = []"
+                  :disabled="modelConsentRef?.isBusy()"
+                  @click="requestNewAgentConversation"
                 >
                   <Plus :size="15" />新建对话
                 </button>
@@ -2488,7 +2515,10 @@ function taskStateLabel(state: TaskState) {
                   </div>
                 </div>
                 <OllamaOnboarding :service="api.model" />
-                <ModelConsent ref="modelConsentRef" :service="api.model" :query="agentInput" @reply="appendModelReply" />
+                <p v-if="agentHasArchivedUnresolvedTurn" role="status" class="safety-callout">
+                  上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。
+                </p>
+                <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" @reply="appendModelReply" />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"
@@ -2508,6 +2538,16 @@ function taskStateLabel(state: TaskState) {
               :busy="agentActionBusy"
               @decide="confirmAgent(pendingAgentAction, $event)"
             />
+            <div v-if="agentNewConversationReview" class="modal-backdrop" @keydown.esc="agentNewConversationReview = false">
+              <section role="alertdialog" aria-modal="true" aria-labelledby="new-agent-conversation-title" class="confirm-modal integration-confirm">
+                <h2 id="new-agent-conversation-title">新建独立对话</h2>
+                <p>上一轮结果未确认，可能已经运行过本机模型或只读检索。旧轮次记录会保留；新对话会使用新的会话和轮次编号，不会恢复、重发或删除旧轮次。发送新查询仍需单独确认。</p>
+                <div class="modal-actions">
+                  <button class="secondary-button" @click="agentNewConversationReview = false">保留当前状态</button>
+                  <button class="primary-button" @click="confirmNewAgentConversation">保留旧记录并新建对话</button>
+                </div>
+              </section>
+            </div>
           </template>
 
           <template v-else-if="page === 'account' && !isMock"

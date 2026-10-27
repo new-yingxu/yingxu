@@ -78,7 +78,11 @@ function keyboard(event:KeyboardEvent){
 }
 onMounted(()=>void refresh())
 onUnmounted(()=>{mounted=false;controller?.stop()})
-defineExpose({submit})
+defineExpose({
+  submit,
+  requiresRecovery: () => controller?.requiresRecovery() ?? false,
+  isBusy: () => busy.value,
+})
 </script>
 <template>
  <section class="model-consent-panel" aria-label="模型服务状态">
