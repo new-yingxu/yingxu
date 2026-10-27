@@ -7,9 +7,7 @@
 - 服务源码：`../../cloud-service/`
 - `yingxu-dev` 体验环境的 PostgreSQL schema v11–v16 已于 2026-10-27 逐项应用并读回验证；当前服务启动要求 schema v16。
 - 当前目标改为 HTTP 云函数：官方支持 FastAPI、Python 3.11 与 WebSocket。体验版的云托管 CPU/内存需另行开启超限按量，因此本项目暂不创建云托管服务。
-- 用户最新决定暂缓微信扫码，首期使用短信验证码、邮箱验证码（代发）和用户名密码；截图显示这三种方式在 yingxu-dev 控制台均已启用，邮箱显示“代发”。开关状态不代表短信已可投递。
-- CloudBase 短信登录还需配置短信服务商及审核通过的签名/模板。用户账号为个人认证且无可用大陆企业主体，腾讯云国内短信签名暂不可办，真实短信送达未验证。不得借用未授权企业材料或绕过资质规定。
-- 用户名密码新账号需先通过邮箱或短信验证码注册；邮箱验证码注册可同时设置用户名和密码。桌面登录/注册 UI 已在 `workbuddy/dev` 提交 `02fc058` 并推送；该提交移除了微信入口并呈现邮箱注册、短信待配置状态，但 CloudBase SDK 登录和短会话交换尚未接线。此云端分支尚未包含 workbuddy/dev 的 UI 提交。服务端 Secrets、可信 session issuer/audience/JWKS、client_id 映射和 HTTPS CORS 仍未设置，云函数未部署。
+- 当前登录决策：邮箱验证码与用户名/密码；用户名/密码账号先通过邮箱验证码注册。短信签名、模板和投递配置仍待用户完成，不能作为已可用登录方式；微信扫码暂停。此云端分支尚未包含桌面 UI 的 CloudBase SDK 登录和短会话交换接线。服务端 Secrets、可信 session issuer/audience、client_id 映射和 HTTPS CORS 仍未设置，云函数未部署。
 - 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。不得用开发 token 或 SQLite 作为生产身份/数据层。
 - 新候选 ZIP 和详细证据见 [`cloudbase-v16-migration-20261027.md`](../../cloud-service/evidence/cloudbase-v16-migration-20261027.md)。未上传部署，未清理合成测试账号，未调用真实短信、微信、邮箱或云模型。
 
@@ -27,10 +25,12 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 
 1. 当前采用官方 PostgREST：将环境 ID 与服务端 API Key 作为函数环境 Secret 注入，`DATABASE_URL` 留空。无需用户转发数据库密码。
 2. `yingxu-dev` 的 PostgreSQL v1–v16 已逐项应用并读回验证；服务 readiness 要求 schema v16。不要对线上重复执行旧版 v1–v4 迁移。
-3. 认证首期为邮箱验证码、用户名/密码和短信验证码；微信扫码暂缓。截图显示邮箱内置代发已开启。新用户须先通过邮箱验证码注册，再设置用户名/密码；短信通道在服务商、审核签名和模板配置完成前不可用。桌面 SDK 接入时按 CloudBase Authentication v2 官方流程实现，并将 CloudBase access token 交给服务端 `/v1/auth/session/exchange` 换发影序短会话。
+3. 认证首期为邮箱验证码和用户名/密码；微信扫码暂停，短信待服务商、审核签名和模板配置。新用户先通过邮箱验证码注册，再设置用户名/密码。桌面 SDK 接入时按 CloudBase Authentication v2 官方流程实现，并将 CloudBase access token 交给服务端 `/v1/auth/session/exchange` 换发影序短会话。
 4. 配置正式 CloudBase 身份通道后，再生成服务端 session 签名密钥并以 Secrets 保存：`CLOUDBASE_CLIENT_ORIGINS`、`SESSION_PRIVATE_KEY`、`SESSION_KEY_ID`、`JWT_ISSUER`、`JWT_AUDIENCE`、`CLOUDBASE_ENV_ID`、`CLOUDBASE_APIKEY` 和 HTTPS `CORS_ORIGINS`。凭据不得进入仓库、客户端或聊天。
 5. 使用 `python3 infra/cloud/prepare_function_context.py` 生成 Linux/Python 3.11 函数上下文，并校验源文件、锁定依赖和候选包哈希。
 6. 只有身份渠道和 Secrets 完成后，才在体验环境部署已验证的 schema16 候选。部署后记录函数版本/路径和访问策略；验证 `/healthz`、`/readyz`、账号交换、PostgreSQL 读写、WebSocket 与回滚。
+
+用户逐项配置路径与非敏感待办见 [`console-configuration-checklist.md`](console-configuration-checklist.md)。
 
 ## 当前本地部署候选（不代表已部署）
 

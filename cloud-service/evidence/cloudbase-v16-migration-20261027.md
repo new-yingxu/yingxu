@@ -19,7 +19,7 @@ Environment: `yingxu-dev` experience environment
 
 ## Remaining cloud prerequisites
 
-- Configure trusted issuer/audience/JWKS, session signing secrets, registered client origins, CloudBase service credentials and HTTPS CORS origins in CloudBase Secrets/configuration. No secret values are recorded here or in chat.
-- SMS login is not activated. The CloudBase console requires the account owner to review and accept Tencent SMS terms before setup can continue; the assistant must not accept that agreement for the user. Email and WeChat providers also need account-side setup and credentials.
+- Configure trusted HTTPS issuer/audience, session signing secrets (including key ID and optional verification-key overlap), registered client origins, CloudBase service credentials and HTTPS CORS origins in the function's server-side configuration. No secret values are recorded here or in chat.
+- Current login decision (updated 2026-10-27): email verification code and username/password; new accounts register through email verification before setting username/password. SMS signature/template/provider setup remains pending, and WeChat login is paused. Do not enable or advertise SMS as usable until delivery has been configured and verified by the account owner.
 - CloudBase CLI is not installed in this environment. Its console authorization asks for broad CloudBase resource access, so no authorization was granted. The SQL editor was used only for the specifically authorized v11–v16 migrations.
 - Do not deploy until authentication and service secrets are configured and validated. No function deployment or production login/model call was performed.
