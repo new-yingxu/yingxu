@@ -7,6 +7,7 @@
 - 服务源码：`../../cloud-service/`
 - `yingxu-dev` 体验环境的 PostgreSQL schema v11–v16 已于 2026-10-27 逐项应用并读回验证；当前服务启动要求 schema v16。
 - 2026-10-28 在 CloudBase HTTP 网关新增并读回 `/v1` → `yingxu-agent-api` 路由，已开启路径透传，网关 CORS 与网关级鉴权关闭。桌面使用 Tauri 原生 HTTPS；服务自身承担身份校验。无凭据 `GET /v1/agent/model` 返回 JSON 404，确认请求到达当前函数，但函数仍是旧预发布版本，不能作为新 API 验收。
+- 2026-10-28 完成桌面来源方案复核：Windows 和 macOS 均由 Tauri Rust 宿主经 HTTPS 直连，不需把 `tauri.localhost` 加入 CloudBase 安全来源，也不需为此升级套餐。CloudBase Authentication API 与影序 HTTP Gateway 是不同官方 HTTPS host；详细 origin 和构建参数见 `console-configuration-checklist.md` 与 `backend/tauri-host/README.md`。
 - 当前目标改为 HTTP 云函数：官方支持 FastAPI、Python 3.11 与 WebSocket。体验版的云托管 CPU/内存需另行开启超限按量，因此本项目暂不创建云托管服务。
 - 当前登录决策：只使用邮箱验证码与用户名/密码；用户名/密码账号先通过邮箱验证码注册。短信与微信登录均关闭且不属于首期范围。Codex 云端分支已接入 Tauri 原生 CloudBase 身份交换和影序短会话。服务端 Secrets、可信 session issuer/audience、client_id 映射仍未设置，云函数未部署。
 - 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。不得用开发 token 或 SQLite 作为生产身份/数据层。

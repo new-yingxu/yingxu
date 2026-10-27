@@ -9,21 +9,16 @@
 3. 当前实况：短信验证码“未启用”；邮箱验证码“已启用（代发）”；用户名密码“已启用”；微信开放平台登录“未启用”。与首期只使用邮箱验证码及用户名/密码的决定一致。
 4. 新用户注册仍先通过邮箱验证码验证，再设置用户名和密码。
 
-## 二、安全来源（桌面 WebView，控制台入口待核实）
+## 二、桌面网络与来源配置（已按原生 HTTPS 方案完成）
 
-CloudBase 官方文档说明，Web SDK 来源需要在环境安全来源中白名单登记；但用户 2026-10-27 的当前控制台截图显示：
+桌面端 CloudBase 登录和影序 API 请求都由 Tauri Rust 宿主通过 HTTPS 发出，WebView 不直接调用这些服务，也不使用 CloudBase Web SDK。因此：
 
-- 「环境管理 → 安全管控」页只有云函数限额、云托管限额、OPA 策略鉴权。
-- 「环境管理 → 环境设置」页只有环境信息、QPS 控制和预览状态配置。
+- 不需要把 `tauri.localhost` 或 `tauri://localhost` 添加到 CloudBase「安全来源」；无需为此升级套餐。
+- Windows 与 macOS 共用同一个影序 HTTP Gateway API origin：控制台显示的 `https://yingxu-dev-d8gowpye17ee27a61-1479513274.ap-shanghai.app.tcloudbase.com`。构建变量不带 `/v1`；HTTP Gateway 已配置 `/v1` 路由与路径透传。
+- CloudBase 账号认证走其官方 HTTPS HTTP API origin：`https://yingxu-dev-d8gowpye17ee27a61.api.tcloudbasegateway.com`，client ID 默认使用环境 ID `yingxu-dev-d8gowpye17ee27a61`。这与影序 API Gateway 是不同用途的两个 HTTPS host，不应混为一个域名。
+- `CORS_ORIGINS` 是函数自己的浏览器来源响应策略，不是 CloudBase 安全来源登记。当前桌面请求由原生 HTTP 发出，不靠 CORS 放行；服务端配置仍使用代码接受的精确 Tauri origins `tauri://localhost,http://tauri.localhost`，禁止通配符。若将来有网页直接访问 API，再单独加入其真实 HTTPS origin。
 
-两页均无“安全来源”列表。不要在这些页面修改任何内容。官方文档路径与当前控制台导航不一致，需继续检查当前 Safari 中独立打开的「控制台首页」旧控制台页，再确定实际入口。
-
-需要配置时，Tauri 打包版按平台使用不同来源，精确允许：
-
-- macOS：`localhost`（页面来源 `tauri://localhost`）
-- Windows：`tauri.localhost`（页面来源 `http://tauri.localhost`）
-
-官方文档称 `localhost` 默认安全来源；找到入口后再核对。不要添加 `*`。只在实际缺少时补 `tauri.localhost`。本地 Vite 开发的 `127.0.0.1:5173` 后续需要单独用于开发验收时再添加，不作为生产域名。桌面端 API CORS 同时要求把实际 Tauri 来源原样放入函数的 `CORS_ORIGINS`。
+已在 2026-10-28 用控制台保存并读回 `/v1` → `yingxu-agent-api`、路径透传开启；网关 CORS 与网关级鉴权保持关闭，由应用验证 Bearer 身份。未添加安全来源、未升级套餐。此方案同时适用于 macOS 和 Windows。
 
 ## 三、云函数环境变量与 Secrets
 
@@ -33,8 +28,8 @@ CloudBase 官方文档说明，Web SDK 来源需要在环境安全来源中白�
 
 - `APP_ENV=production`
 - `AUTH_MODE=cloudbase`
-- `CORS_ORIGINS`：只填确切来源，逗号分隔，不使用 `*`。桌面打包版按实际平台填 `tauri://localhost` 和/或 `http://tauri.localhost`；网页版只填真实 HTTPS 域名。不要把 Vite 开发地址作为生产来源。
-- `CLOUDBASE_CLIENT_ORIGINS`：JSON 对象，将已登记的 CloudBase client ID 映射到 `desktop` 或 `mobile`，例如结构 `{"<desktop-client-id>":"desktop","<mobile-client-id>":"mobile"}`；替换占位符为控制台实际 client ID。
+- `CORS_ORIGINS=tauri://localhost,http://tauri.localhost`：只允许两个精确桌面 WebView origin；不使用 `*`。桌面流量经 Rust 原生 HTTPS，不依赖浏览器 CORS。
+- `CLOUDBASE_CLIENT_ORIGINS={"yingxu-dev-d8gowpye17ee27a61":"desktop"}`：CloudBase 官方 HTTP API 的 client ID 默认是环境 ID；只有控制台实际配置了另一个 client ID 时才替换。移动端 client ID 等移动端接入时再登记。
 - `JWT_ISSUER`：正式 HTTPS issuer URL。
 - `JWT_AUDIENCE`：影序服务端短会话的 audience 标识。
 - `SESSION_KEY_ID`：当前签名密钥的非秘密 key ID。
@@ -53,7 +48,7 @@ CloudBase 官方文档说明，Web SDK 来源需要在环境安全来源中白�
 
 1. 核对函数仍未发布，先保存配置，不点击部署或发布。
 2. 回看变量名和 origin/client ID 映射，不在截图或工单中暴露密钥值。
-3. 确认 Web 来源为真实 HTTPS 域名；桌面只允许上文列明的精确 Tauri 来源且无通配符；issuer 使用 HTTPS。
+3. 确认桌面请求走 Rust 原生 HTTPS；`CORS_ORIGINS` 只有精确 Tauri origins 且无通配符；issuer 使用 HTTPS。CloudBase 安全来源不需要添加本地 Tauri 域名。
 4. 确认邮箱验证码真实收件流程可用；不要为验证而向他人发送验证码。
 5. 邮箱验证码与用户名/密码保持启用；短信与微信登录保持关闭。
 6. 配置完成后告知维护者“登录方式和函数变量已配置”，不要发送 Secret 值。后续再单独进行本地包复核、云端部署授权和部署后验收。
@@ -61,7 +56,6 @@ CloudBase 官方文档说明，Web SDK 来源需要在环境安全来源中白�
 ## 当前需用户在控制台确认的项目
 
 - 邮箱代发的实际收件投递仍待真实邮箱登录验收；本轮没有发送验证码。
-- 安全来源入口：官方文档写作「环境配置 → 安全来源」，但已核对当前「安全管控」和「环境设置」两页均没有安全来源列表。暂不要求添加域名；下一步检查独立的「控制台首页」旧控制台标签。
 - `yingxu-dev` 环境 ID 与服务端 API Key。
 - 正式 client ID 到 `desktop`/`mobile` 的映射。
 - HTTPS issuer、audience、会话签名私钥和 key ID。

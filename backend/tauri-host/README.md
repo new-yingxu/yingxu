@@ -7,15 +7,15 @@ The native desktop authentication flow supports CloudBase username/password logi
 The login hostname and CloudBase client ID are compile-time configuration, not credentials:
 
 ```sh
-YINGXU_CLOUDBASE_AUTH_ORIGIN="https://<your-cloudbase-auth-domain>" \
-YINGXU_CLOUDBASE_CLIENT_ID="<your-cloudbase-client-id>" \
-YINGXU_CLOUD_API_ORIGIN="https://<your-yingxu-api-domain>" \
+YINGXU_CLOUDBASE_AUTH_ORIGIN="https://yingxu-dev-d8gowpye17ee27a61.api.tcloudbasegateway.com" \
+YINGXU_CLOUDBASE_CLIENT_ID="yingxu-dev-d8gowpye17ee27a61" \
+YINGXU_CLOUD_API_ORIGIN="https://yingxu-dev-d8gowpye17ee27a61-1479513274.ap-shanghai.app.tcloudbase.com" \
 cargo tauri build
 ```
 
 Use HTTPS origins only; do not include API paths, query, fragment, username, password, or nonstandard ports. These public endpoint/client identifiers are embedded at build time and are intentionally absent from the repository. If CloudBase values are absent, provider sign-in fails closed. If the Yingxu API origin is absent, provider verification may succeed but app-session exchange fails closed; the UI does not report the user signed in. Never put a CloudBase secret, API key, user password, or token in these variables.
 
-The `yingxu-dev` CloudBase HTTP Gateway now has an enabled `/v1` route to the `yingxu-agent-api` HTTP function, with path passthrough enabled. Its origin is the environment's default HTTPS HTTP-Gateway domain shown in the CloudBase console; use that origin for `YINGXU_CLOUD_API_ORIGIN` (without `/v1`). Gateway CORS and Gateway-level authentication are off because the desktop uses native HTTPS and the service validates CloudBase/app-session bearer tokens itself. The current deployed function predates this branch: an unauthenticated `GET /v1/agent/model` reached it and returned JSON 404, proving routing/path passthrough only. It does not verify the current API, identity, or database readiness.
+Both Windows and macOS use the same compile-time HTTPS origins above. CloudBase authentication uses its official `api.tcloudbasegateway.com` host; the Yingxu application API uses the separate HTTP Gateway host with `/v1` routing. The CloudBase client ID defaults to the environment ID. Do not add local Tauri origins to CloudBase security sources: neither request is made by the WebView. The `yingxu-dev` HTTP Gateway has an enabled `/v1` route to `yingxu-agent-api`, with path passthrough enabled. Gateway CORS and Gateway-level authentication are off because the desktop uses native HTTPS and the service validates CloudBase/app-session bearer tokens itself. The current deployed function predates this branch: an unauthenticated `GET /v1/agent/model` reached it and returned JSON 404, proving routing/path passthrough only. It does not verify the current API, identity, or database readiness.
 
 CloudBase documents usernames as 2–48 ASCII characters, beginning with an ASCII letter or digit, with only letters, digits, `-_.:+ @` allowed thereafter. Email verification uses `/auth/v1/verification`, `/auth/v1/verification/verify`, and then the official sign-in or sign-up endpoint. Passwords and verification codes are sent only in HTTPS request bodies; request/response bodies and tokens are not logged. The native transport is HTTPS-only and does not follow redirects. Unit tests use synthetic responses only and do not send real email.
 
