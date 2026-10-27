@@ -19,7 +19,7 @@
     "localAgentAdapter": "passed: 10 checks",
     "nativeAdapter": "passed: 18 checks against synthetic Rust CLI fixture",
     "localFileActionContract": "passed: IPC contract verified",
-    "conversationSafety": "passed: prior uncertain WebView turn was not replayed; runtime verification used a new isolated session and exactly one authorized local provider request",
+    "conversationSafety": "passed: prior uncertain WebView turn was not replayed; one new synthetic-only local Agent turn used two Ollama model requests around one confirmed search_media tool call; no cloud fallback or user media access",
     "trayProgress": "passed: rate, ETA, unknown-speed, and idle states covered by host tests",
     "sidecarManifest": "1187 files SHA-256 and sizes verified before copying staged package into isolated QA tree",
     "visualUi": "login, workspace, Agent, and local media-analysis modal inspected in isolated desktop UI; no text overflow or clipping observed",
@@ -27,10 +27,10 @@
       "status": "passed",
       "keychain": "after user filled the macOS login keychain and restarted the isolated app, local status returned ready",
       "model": "qwen2.5:7b via local Ollama",
-      "query": "请只用本机运行信息回答：当前使用的模型是什么？是否启用云端回退？",
-      "ledger": "one completed local_agent_steps record; modelRequests=1; localToolRequests=0",
-      "ui": "final answer appeared in Agent conversation; answer did not itself know the configured model/fallback policy, which was independently shown by local status UI",
-      "sideEffects": "filesChanged=false; no files opened, modified, moved, uploaded, or deleted; no cloud fallback"
+      "query": "Search only the local index for the synthetic filename SYNTH_OVEREXPOSED; summarize the result without any file actions",
+      "ledger": "one completed local_agent_steps turn with step_index 0 awaiting exactly one search_media call and step_index 1 completed; modelRequests=2; matched only synthetic media ID 9e038b3a-dd3d-4165-9728-72c410d591e7",
+      "ui": "Agent conversation showed the search_media result and Chinese summary; result card exposed only name, kind, bytes, and review status",
+      "sideEffects": "Agent turn filesChanged=false; executionAuthorized=false; no photo bytes, full real paths, GPS, cloud service, or other tools used"
     },
     "syntheticLocalBackupRuntime": {
       "status": "passed",
@@ -50,11 +50,29 @@
       "cloudVision": false,
       "cleanup": "no cleanup action performed; UI states thresholds are uncalibrated and must not auto-clean"
     },
-    "invalidSyntheticJpegFixture": "first 339-byte placeholder JPEG was correctly reported as decode failure without claiming the original is corrupt; replaced for analysis check with a valid generated JPEG"
+    "invalidSyntheticJpegFixture": "first 339-byte placeholder JPEG was correctly reported as decode failure without claiming the original is corrupt; replaced for analysis check with a valid generated JPEG",
+    "syntheticQuarantineTrashRestoreRuntime": {
+      "status": "passed",
+      "fixture": "generated 512x512 white JPEG SYNTH_OVEREXPOSED.jpg; source retained",
+      "quarantine": "Agent result used only this synthetic indexed item; user-confirmed copy created a pending-review duplicate; UI showed SHA-256 538c3e4a9d71b048fdac9a7438bb84e08085bd8fda0bac96c2c915644f213b38",
+      "trash": "user-confirmed cleanup preview named the quarantine copy in System Trash as the only target; UI receipt completed cleanup_quarantine and reported original untouched",
+      "finderRestore": "Finder showed SYNTH_OVEREXPOSED.jpg in Trash; Put Back restored it to the isolated app quarantine path; app refresh reported restored from System Trash",
+      "hashVerification": "original source and restored quarantine copy both exist, 4723 bytes, SHA-256 538c3e4a9d71b048fdac9a7438bb84e08085bd8fda0bac96c2c915644f213b38",
+      "boundary": "No real user media, cloud, permanent deletion, or Trash emptying"
+    },
+    "packagedWebViewModelOnlyQuery": {
+      "status": "passed",
+      "keychain": "after user filled the macOS login keychain and restarted the isolated app, local status returned ready",
+      "model": "qwen2.5:7b via local Ollama",
+      "query": "请只用本机运行信息回答：当前使用的模型是什么？是否启用云端回退？",
+      "ledger": "one completed local_agent_steps record; modelRequests=1; localToolRequests=0",
+      "ui": "final answer appeared in Agent conversation; answer did not itself know the configured model/fallback policy, which was independently shown by local status UI",
+      "sideEffects": "filesChanged=false; no files opened, modified, moved, uploaded, or deleted; no cloud fallback",
+      "name": "model-only local query, no tools"
+    }
   },
   "notVerified": {
     "uncertainPriorWebViewTurn": "not replayed; this verification used a new isolated session and exactly one model request",
-    "cloudTasks": "paused by user; no CloudBase or cloud deployment actions performed",
-    "quarantineToSystemTrashRuntime": "not exercised in this UI session; real Finder/system Trash restore remains pending. No additional model request or real-media access was used to create a cleanup candidate; core/UI contract tests use synthetic fixtures."
+    "cloudTasks": "paused by user; no CloudBase or cloud deployment actions performed"
   }
 }
