@@ -5371,6 +5371,7 @@ dependencies = [
  "kamadak-exif",
  "libc",
  "md-5",
+ "objc2-foundation",
  "rusqlite",
  "rustls",
  "serde",

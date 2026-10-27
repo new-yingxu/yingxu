@@ -17,7 +17,7 @@ impl Store {
         };
         let mut c = this.connect()?;
         let version: i32 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 1 {
+        if version > 3 {
             return Err(CoreError::new(
                 "DATABASE_VERSION_NEWER",
                 "数据库版本高于当前程序，未修改数据库",
@@ -27,6 +27,38 @@ impl Store {
             let tx = c.transaction()?;
             tx.execute_batch(include_str!("schema.sql"))?;
             tx.pragma_update(None, "user_version", 1)?;
+            tx.commit()?;
+        }
+        if version <= 1 {
+            let tx = c.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS quarantine_items(\
+                    id TEXT PRIMARY KEY, media_id TEXT NOT NULL, name TEXT NOT NULL,\
+                    bytes INTEGER NOT NULL, sha256 TEXT NOT NULL, quarantine_path TEXT NOT NULL,\
+                    state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL\
+                );\
+                CREATE INDEX IF NOT EXISTS quarantine_state_created ON quarantine_items(state, created_at);\
+                CREATE TABLE IF NOT EXISTS quarantine_actions(\
+                    id TEXT PRIMARY KEY, quarantine_id TEXT NOT NULL REFERENCES quarantine_items(id),\
+                    expires_at TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL\
+                );\
+                PRAGMA user_version=2;",
+            )?;
+            tx.commit()?;
+        }
+        if version <= 2 {
+            let tx = c.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS file_action_previews(\
+                    id TEXT PRIMARY KEY, tool TEXT NOT NULL, media_id TEXT NOT NULL,\
+                    source_path TEXT NOT NULL, destination_path TEXT NOT NULL,\
+                    source_fingerprint TEXT NOT NULL, source_sha256 TEXT NOT NULL,\
+                    expires_at_ms INTEGER NOT NULL, state TEXT NOT NULL,\
+                    created_at TEXT NOT NULL, receipt TEXT\
+                );\
+                CREATE INDEX IF NOT EXISTS file_action_state_expiry ON file_action_previews(state,expires_at_ms);\
+                PRAGMA user_version=3;",
+            )?;
             tx.commit()?;
         }
         let check: String = c.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
@@ -169,5 +201,39 @@ impl Store {
             params![id(), now(), action, object, serde_json::to_string(&data)?],
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::*;
+    use rusqlite::Connection;
+    use tempfile::TempDir;
+
+    #[test]
+    fn version_one_database_migrates_additive_quarantine_tables() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let db_path = root.join("yingxu.sqlite");
+        let connection = Connection::open(&db_path).unwrap();
+        connection
+            .execute_batch(include_str!("schema.sql"))
+            .unwrap();
+        connection.pragma_update(None, "user_version", 1).unwrap();
+        drop(connection);
+
+        let store = Store::open(&root).unwrap();
+        let connection = store.connect().unwrap();
+        let version: i32 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        let table_count: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('quarantine_items','quarantine_actions','file_action_previews')",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(version, 3);
+        assert_eq!(table_count, 3);
     }
 }

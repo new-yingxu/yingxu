@@ -32,6 +32,7 @@ struct HostState {
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     sources: Mutex<HashSet<PathBuf>>,
     targets: Mutex<HashSet<PathBuf>>,
+    directory_grants: Mutex<HashMap<String, (String, PathBuf)>>,
     pending_agent_actions: Mutex<HashMap<String, PendingOpenAction>>,
     app_data_dir: PathBuf,
     local_agent: Mutex<Option<LocalAgentProcess>>,
@@ -431,11 +432,211 @@ async fn select_directory(
             .lock()
             .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "授权目录状态不可用"))?
             .insert(path.clone());
-        Ok(serde_json::json!({"path":path,"purpose":purpose}))
+        let grant_id = format!(
+            "directory-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        state
+            .directory_grants
+            .lock()
+            .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "目录授权状态不可用"))?
+            .insert(grant_id.clone(), (purpose.clone(), path.clone()));
+        Ok(serde_json::json!({"path":path,"purpose":purpose,"grantId":grant_id}))
     })
     .await
     .map_err(|e| CoreError::new("BACKGROUND_TASK_FAILED", e))?
 }
+
+/// Prepare a local Agent filesystem operation. Model supplied values are
+/// limited to a tool name, indexed media ID, name, or an opaque directory grant.
+#[tauri::command]
+async fn agent_prepare_file_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    tool: String,
+    media_id: Option<String>,
+    new_name: Option<String>,
+    destination_grant_id: Option<String>,
+    quarantine_id: Option<String>,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可准备本地文件操作",
+        ));
+    }
+    let state = app.state::<HostState>();
+    if tool == "cleanup_quarantine" {
+        let quarantine_id =
+            quarantine_id.ok_or_else(|| CoreError::new("INVALID_PARAMS", "缺少隔离项编号"))?;
+        let preview = state.engine.quarantine_prepare_cleanup(&quarantine_id)?;
+        return Ok(serde_json::json!({
+            "actionId":format!("quarantine:{}", preview["actionId"].as_str().unwrap_or_default()),
+            "tool":tool,
+            "objectName":preview["name"],
+            "targetPath":"系统废纸篓中的待处理废片副本",
+            "effect":"将待处理废片副本移入系统废纸篓；原始素材不变",
+            "requiresConfirmation":true,
+            "expiresAt":preview["expiresAt"]
+        }));
+    }
+    if !["rename_item", "move_item"].contains(&tool.as_str()) {
+        return Err(CoreError::new(
+            "AGENT_TOOL_NOT_ALLOWED",
+            "不支持的本地文件操作",
+        ));
+    }
+    let media_id = media_id.ok_or_else(|| CoreError::new("INVALID_PARAMS", "缺少素材编号"))?;
+    let engine = state.engine.clone();
+    let lookup_id = media_id.clone();
+    let source_path =
+        tauri::async_runtime::spawn_blocking(move || engine.agent_resolve_open_item(&lookup_id))
+            .await
+            .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))??;
+    let source_roots = state
+        .sources
+        .lock()
+        .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "来源目录授权状态不可用"))?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    yingxu_core::agent::validate_open_grant(&source_path, &source_roots)?;
+    let destination = if tool == "move_item" {
+        let grant_id = destination_grant_id.ok_or_else(|| {
+            CoreError::new("DESTINATION_GRANT_REQUIRED", "请先选择并授权目标目录")
+        })?;
+        let grants = state
+            .directory_grants
+            .lock()
+            .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "目录授权状态不可用"))?;
+        let (purpose, path) = grants.get(&grant_id).ok_or_else(|| {
+            CoreError::new(
+                "DESTINATION_GRANT_REQUIRED",
+                "目标目录授权已失效，请重新选择",
+            )
+        })?;
+        if purpose != "destination" {
+            return Err(CoreError::new(
+                "PERMISSION_DENIED",
+                "目标目录授权用途不匹配",
+            ));
+        }
+        Some(path.clone())
+    } else {
+        None
+    };
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine.prepare_file_action(
+            &tool,
+            &media_id,
+            new_name.as_deref(),
+            destination.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))?
+}
+
+/// Consume one preview. Every accepted rename/move rechecks both source and
+/// destination grants immediately before the core touches any file.
+#[tauri::command]
+async fn agent_confirm_file_action(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action_id: String,
+    accepted: bool,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可确认本地文件操作",
+        ));
+    }
+    let state = app.state::<HostState>();
+    if let Some(id) = action_id.strip_prefix("quarantine:") {
+        let mut receipt = state.engine.quarantine_confirm_cleanup(id, accepted)?;
+        receipt["actionId"] = serde_json::Value::String(action_id);
+        receipt["tool"] = serde_json::Value::String("cleanup_quarantine".into());
+        receipt["userConfirmed"] = serde_json::Value::Bool(accepted);
+        receipt["cloudExecutionAuthorized"] = serde_json::Value::Bool(false);
+        return Ok(receipt);
+    }
+    if accepted {
+        let preview = state.engine.file_action_preview(&action_id)?;
+        let source = PathBuf::from(preview["sourcePath"].as_str().unwrap_or_default());
+        let target = PathBuf::from(preview["targetPath"].as_str().unwrap_or_default());
+        let source_roots = state
+            .sources
+            .lock()
+            .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "来源目录授权状态不可用"))?
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        yingxu_core::agent::validate_open_grant(&source, &source_roots)?;
+        if preview["tool"] == "move_item" {
+            let target_parent = target
+                .parent()
+                .ok_or_else(|| CoreError::new("INVALID_DESTINATION", "目标目录无效"))?;
+            let grants = state
+                .directory_grants
+                .lock()
+                .map_err(|_| CoreError::new("STATE_UNAVAILABLE", "目录授权状态不可用"))?;
+            if !grants.values().any(|(purpose, path)| {
+                purpose == "destination"
+                    && target_parent.starts_with(path)
+                    && std::fs::canonicalize(path).ok().as_ref() == Some(path)
+            }) {
+                return Err(CoreError::new(
+                    "DESTINATION_GRANT_REQUIRED",
+                    "目标目录授权已失效，请重新预览",
+                ));
+            }
+        }
+    }
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.confirm_file_action(&action_id, accepted))
+        .await
+        .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))?
+}
+
+#[tauri::command]
+async fn open_system_trash(app: tauri::AppHandle) -> Result<(), CoreError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let result = {
+            let home = app
+                .path()
+                .home_dir()
+                .map_err(|error| CoreError::new("HOME_DIR_FAILED", error))?;
+            let path = home.join(".Trash");
+            std::process::Command::new("open").arg(path).spawn()
+        };
+        #[cfg(target_os = "windows")]
+        let result = std::process::Command::new("explorer.exe")
+            .arg("shell:RecycleBinFolder")
+            .spawn();
+        #[cfg(target_os = "linux")]
+        let result = std::process::Command::new("xdg-open")
+            .arg("trash:///")
+            .spawn();
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        let result: Result<std::process::Child, std::io::Error> = Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "系统废纸篓不受支持",
+        ));
+        result
+            .map(|_| ())
+            .map_err(|error| CoreError::new("SYSTEM_TRASH_OPEN_FAILED", error))
+    })
+    .await
+    .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))?
+}
+
 
 fn check_paths(state: &HostState, request: &Request) -> Result<(), CoreError> {
     if request.method == "worker.runNext" {
@@ -1161,7 +1362,10 @@ fn main() {
             agent_local_turn,
             agent_local_turn_results,
             agent_prepare_action,
-            agent_confirm_action
+            agent_confirm_action,
+            agent_prepare_file_action,
+            agent_confirm_file_action,
+            open_system_trash
         ])
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
@@ -1226,6 +1430,7 @@ fn main() {
                 worker: Mutex::new(Some(thread)),
                 sources: Mutex::new(HashSet::new()),
                 targets: Mutex::new(HashSet::new()),
+                directory_grants: Mutex::new(HashMap::new()),
                 pending_agent_actions: Mutex::new(HashMap::new()),
                 app_data_dir: root,
                 local_agent: Mutex::new(None),
@@ -1486,6 +1691,7 @@ mod agent_action_tests {
             worker: Mutex::new(None),
             sources: Mutex::new(HashSet::new()),
             targets: Mutex::new(HashSet::new()),
+            directory_grants: Mutex::new(HashMap::new()),
             pending_agent_actions: Mutex::new(HashMap::new()),
             app_data_dir: app_data,
             local_agent: Mutex::new(None),
