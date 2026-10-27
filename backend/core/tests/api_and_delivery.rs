@@ -211,7 +211,10 @@ fn cli_recovers_after_invalid_json() {
     assert_eq!(rows[1]["ok"], true);
     assert_eq!(rows[1]["data"]["databaseVersion"], 3);
     assert_eq!(rows[1]["data"]["capabilities"]["quarantine"], true);
-    assert_eq!(rows[1]["data"]["capabilities"]["agentFileActionPreview"], true);
+    assert_eq!(
+        rows[1]["data"]["capabilities"]["agentFileActionPreview"],
+        true
+    );
 }
 #[test]
 fn separate_process_kill_recovers_owned_temp_and_requires_resume() {

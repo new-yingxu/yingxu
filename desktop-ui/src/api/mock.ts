@@ -1,4 +1,5 @@
-import type { AppSettings, ArchiveTask, AuditResult, AgentReply, DeliveryPackage, DesktopApi, Device, MediaFile, NamePreset, TaskState, UserSession } from './contracts'
+import type { AppSettings, ArchiveTask, AuditResult, AgentReply, DeliveryPackage, DesktopApi, Device, MediaFile, NamePreset, TaskState, UserSession, QuarantineItem } from './contracts'
+import type { LocalFileActionPreview, LocalFileActionReceipt } from './local-file-actions'
 
 const delay = (ms = 140) => new Promise(resolve => setTimeout(resolve, ms))
 const fileData: MediaFile[] = [
@@ -30,7 +31,60 @@ let presets: NamePreset[] = [
 let packages: DeliveryPackage[] = []
 
 export function createMockApi(): DesktopApi {
+  const demoQuarantine: QuarantineItem[] = []
+  const pendingActions = new Map<string, LocalFileActionPreview>()
+  let actionSequence = 0
   return {
+    fileActions: {
+      async selectDirectory() { await delay(80); return { path: '/演示目标目录', purpose: 'destination', grantId: 'demo-directory-grant' } },
+      async prepare(request) {
+        await delay(60)
+        const actionId = `demo-action-${++actionSequence}`
+        const media = 'mediaId' in request ? fileData.find((item) => item.id === request.mediaId) : undefined
+        const quarantineItem = request.tool === 'cleanup_quarantine' ? demoQuarantine.find((item) => item.id === request.quarantineId) : undefined
+        if ((request.tool !== 'cleanup_quarantine' && !media) || (request.tool === 'cleanup_quarantine' && !quarantineItem)) throw new Error('演示数据中找不到该素材')
+        const name = request.tool === 'cleanup_quarantine' ? quarantineItem!.name : media!.name
+        const sourcePath = request.tool === 'cleanup_quarantine' ? `演示隔离目录/${name}` : media!.path
+        const targetName = request.tool === 'rename_item' ? request.newName : name
+        const targetPath = request.tool === 'move_item' ? `/演示目标目录/${name}` : request.tool === 'rename_item' ? `${media!.path.slice(0, media!.path.lastIndexOf('/') + 1)}${targetName}` : '系统废纸篓中的演示隔离副本'
+        const preview: LocalFileActionPreview = {
+          actionId, tool: request.tool, ...(media ? { mediaId: media.id } : {}), objectName: name,
+          ...(request.tool !== 'cleanup_quarantine' ? { sourcePath: media!.path } : {}),
+          ...(request.tool === 'rename_item' ? { targetName } : {}), targetPath,
+          sha256: '演示摘要 · 非真实文件哈希', effect: request.tool === 'cleanup_quarantine' ? '仅演示将隔离副本移入系统废纸篓；原片不变' : request.tool === 'rename_item' ? '仅演示在原目录重命名' : '仅演示移动到选定目录',
+          requiresConfirmation: true, expiresAtMs: Date.now() + 5 * 60_000,
+        }
+        pendingActions.set(actionId, preview)
+        return preview
+      },
+      async confirm(actionId, accepted) {
+        await delay(80)
+        const preview = pendingActions.get(actionId)
+        if (!preview) throw new Error('演示操作不存在或已处理')
+        pendingActions.delete(actionId)
+        const status = accepted ? 'succeeded' : 'declined'
+        const receipt: LocalFileActionReceipt = {
+          actionId, tool: preview.tool, status, ...(preview.mediaId ? { mediaId: preview.mediaId } : {}),
+          ...(preview.sourcePath ? { sourcePath: preview.sourcePath } : {}), targetPath: preview.targetPath,
+          ...(preview.sha256 ? { sha256: preview.sha256 } : {}), sourcePreserved: true,
+          destinationCreated: accepted, userConfirmed: accepted, cloudExecutionAuthorized: false,
+        }
+        if (accepted && preview.tool === 'cleanup_quarantine') {
+          const item = demoQuarantine.find((entry) => entry.name === preview.objectName)
+          if (item) item.state = 'trashed'
+        }
+        return receipt
+      },
+      async stageCandidate(mediaId) {
+        await delay(80)
+        const media = fileData.find((item) => item.id === mediaId)
+        if (!media || media.qualityState !== 'review') throw new Error('只有待复核演示素材可以复制到隔离目录')
+        const item: QuarantineItem = { id: `demo-quarantine-${++actionSequence}`, mediaId, name: media.name, bytes: 0, sha256: '演示摘要 · 非真实文件哈希', state: 'isolated', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), restoreViaSystemTrash: true, originalPreserved: true }
+        demoQuarantine.unshift(item)
+        return { id: item.id, name: item.name, state: item.state, originalPreserved: true }
+      },
+      async listQuarantine() { await delay(40); return demoQuarantine.map((item) => ({ ...item })) },
+    },
     auth: {
       async restore() { await delay(80); return lastSession },
       async login(method, identifier) {

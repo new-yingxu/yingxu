@@ -2,6 +2,7 @@
 import ScanSummary from "./components/ScanSummary.vue";
 import NetdiskPanel from "./components/NetdiskPanel.vue";
 import ModelConsent from "./components/ModelConsent.vue";
+import AgentLocalFileActions from "./components/AgentLocalFileActions.vue";
 import OllamaOnboarding from "./components/OllamaOnboarding.vue";
 import AgentActionCard from "./components/AgentActionCard.vue";
 import { canEnterNativeLocalMode, canShowDevDiagnostics, canUseCloudFeatures, enterNativeLocalMode, runCloudAction } from "./api/local-mode";
@@ -215,6 +216,13 @@ type AgentMessage = {
   actionId?: string;
 };
 const agentMessages = ref<AgentMessage[]>([]);
+const latestAgentMatches = computed(() => {
+  for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
+    const message = agentMessages.value[index];
+    if (message.role === "assistant" && message.reply?.matches.length) return message.reply.matches;
+  }
+  return [];
+});
 const settings = reactive<AppSettings>({
   theme: "light",
   startOnLogin: true,
@@ -2486,6 +2494,12 @@ function taskStateLabel(state: TaskState) {
                 </div>
                 <OllamaOnboarding :service="api.model" />
                 <ModelConsent ref="modelConsentRef" :service="api.model" :query="agentInput" @reply="appendModelReply" />
+                <AgentLocalFileActions
+                  v-if="api.fileActions"
+                  :service="api.fileActions"
+                  :matches="latestAgentMatches"
+                  :demo="isMock"
+                />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"

@@ -538,4 +538,30 @@ mod tests {
         assert!(source.exists());
         assert!(!PathBuf::from(preview["targetPath"].as_str().unwrap()).exists());
     }
+
+    #[test]
+    fn expired_preview_returns_receipt_without_touching_either_path() {
+        let temp = TempDir::new().unwrap();
+        let (engine, source, _, media_id, digest) = indexed_engine(&temp);
+        let preview = engine
+            .prepare_file_action("rename_item", &media_id, Some("renamed.jpg"), None)
+            .unwrap();
+        let action_id = preview["actionId"].as_str().unwrap();
+        engine
+            .store
+            .connect()
+            .unwrap()
+            .execute(
+                "UPDATE file_action_previews SET expires_at_ms=0 WHERE id=?1",
+                [action_id],
+            )
+            .unwrap();
+        let receipt = engine.confirm_file_action(action_id, true).unwrap();
+        assert_eq!(receipt["status"], "expired");
+        assert_eq!(receipt["userConfirmed"], true);
+        assert_eq!(receipt["sourcePreserved"], true);
+        assert_eq!(receipt["destinationCreated"], false);
+        assert_eq!(hash_file(&source).unwrap(), digest);
+        assert!(!PathBuf::from(preview["targetPath"].as_str().unwrap()).exists());
+    }
 }
