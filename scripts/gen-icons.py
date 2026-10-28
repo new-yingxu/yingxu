@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """影序应用图标资产生成器（按 docs/品牌/影序应用图标设计任务书-v1.0-草稿.md）。
 
-创意方向「叠影归序」：深森林绿底 + 三层错位米白画框（影像 → 层叠副本）+ 暖金光点。
-不写文字、不用相机/云盘/文件夹拼贴、不做重渐变。
+创意方向「影序 AI」：深森林绿圆角底 + 米白小方牌 + 深绿 Ai 字样，尺寸缩小时仍清楚。
 
 产出（可直接被 Tauri bundle 引用）：
   backend/tauri-host/icons/icon.png            1024 母版（方形、不预置圆角）
@@ -19,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent.parent
 ICON_DIR = ROOT / "backend" / "tauri-host" / "icons"
@@ -39,67 +38,35 @@ def rounded(draw, box, radius, **kw):
 
 
 def draw_mark(size, detail=3, round_corners=False, margin=0.0):
-    """按尺寸决定细节层级：小尺寸只留主轮廓 + 金点，避免细节糊成一团。"""
+    """绘制深绿底、米白 Ai 方牌的简洁应用图标。"""
     s = size * SUPERSAMPLE
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     pad = int(s * margin)
     body = [pad, pad, s - pad - 1, s - pad - 1]
-    # 母版满幅直角（不预置平台圆角），桌面变体才加圆角与留边
     radius = int((s - 2 * pad) * 0.225) if round_corners else 0
     ImageDraw.Draw(img, "RGBA").rounded_rectangle(body, radius=radius, fill=FOREST + (255,))
-
-    # 极轻的底部色阶，避免死平；不用重渐变
-    shade = Image.new("RGBA", (s, s), (0, 0, 0, 0))
-    ImageDraw.Draw(shade).rounded_rectangle(
-        [body[0], body[1] + int((s - 2 * pad) * 0.55), body[2], body[3]],
-        radius=radius,
-        fill=FOREST_DARK + (110,),
-    )
-    clip = Image.new("L", (s, s), 0)
-    ImageDraw.Draw(clip).rounded_rectangle(body, radius=radius, fill=255)
-    # 用 alpha_composite 做混合，composite 会整体替换导致底色丢失
-    shade.putalpha(Image.composite(shade.getchannel("A"), Image.new("L", (s, s), 0), clip))
-    img = Image.alpha_composite(img, shade)
     d = ImageDraw.Draw(img, "RGBA")
-
     field = s - 2 * pad
-    card = int(field * 0.435)
-    step = int(field * 0.082)
-    frame_w = max(2, int(field * (0.052 if detail > 1 else 0.085)))
-    cx = s // 2
-    cy = s // 2 + int(field * 0.03)
+    side = int(field * 0.48)
+    cx, cy = s // 2, s // 2
+    tile = [cx - side // 2, cy - side // 2, cx + side // 2, cy + side // 2]
+    d.rounded_rectangle(tile, radius=int(side * 0.15), fill=IVORY + (255,))
 
-    def box(dx, dy, side):
-        x0 = cx - side // 2 + dx
-        y0 = cy - side // 2 + dy
-        return [x0, y0, max(x0 + 2, x0 + side), max(y0 + 2, y0 + side)]
-
-    # 后两层：错位描边，表达「层叠副本」
-    if detail >= 2:
-        layers = 3 if detail >= 3 else 2
-        for i in range(layers - 1, 0, -1):
-            alpha = 60 + int(140 * (layers - i) / max(1, layers))
-            d.rounded_rectangle(
-                box(-step * i, -step * i, card),
-                radius=int(field * 0.05),
-                outline=IVORY + (alpha,),
-                width=frame_w,
-            )
-
-    # 前景：一张「影像窗口」
-    front = box(0, 0, card)
-    if detail >= 3:
-        d.rounded_rectangle(front, radius=int(field * 0.05), fill=IVORY + (255,))
-        inset = max(2, int(field * 0.052))
-        inner = [front[0] + inset, front[1] + inset, front[2] - inset, front[3] - inset]
-        d.rounded_rectangle(inner, radius=int(field * 0.03), fill=FOREST_DARK + (255,))
-    else:
-        d.rounded_rectangle(front, radius=int(field * 0.05), outline=IVORY + (255,), width=frame_w)
-
-    dot_r = max(2, int(field * (0.05 if detail > 1 else 0.075)))
-    dcx = (front[0] + front[2]) // 2
-    dcy = (front[1] + front[3]) // 2
-    d.ellipse([dcx - dot_r, dcy - dot_r, dcx + dot_r, dcy + dot_r], fill=GOLD + (255,))
+    font_candidates = (
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    )
+    font = None
+    for candidate in font_candidates:
+        try:
+            font = ImageFont.truetype(candidate, max(1, int(side * 0.55)))
+            break
+        except OSError:
+            continue
+    if font is None:
+        font = ImageFont.load_default()
+    d.text((cx, cy - int(side * 0.015)), "Ai", font=font, fill=FOREST_DARK + (255,), anchor="mm")
     return img.resize((size, size), Image.LANCZOS)
 
 

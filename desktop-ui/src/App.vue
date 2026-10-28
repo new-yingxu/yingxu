@@ -165,6 +165,7 @@ const loginMode = ref<
   "email-password" | "email-code" | "register" | "forgot-password"
 >("email-password");
 const loginIdentifier = ref("");
+const loginNickname = ref("");
 const loginProof = ref("");
 const loginError = ref("");
 const loginBusy = ref(false);
@@ -1181,6 +1182,10 @@ function taskStateLabel(state: TaskState) {
           </div>
           <label>邮箱</label>
           <input v-model="loginIdentifier" autocomplete="email" placeholder="请输入邮箱地址" />
+          <template v-if="loginMode === 'register'">
+            <label>昵称</label>
+            <input v-model="loginNickname" autocomplete="nickname" maxlength="40" placeholder="请输入你希望显示的昵称" />
+          </template>
           <label>邮箱验证码</label>
           <div class="proof-field">
             <input v-model="loginProof" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入邮箱验证码" />
