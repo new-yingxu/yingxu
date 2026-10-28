@@ -17,6 +17,18 @@ use std::{
 
 const ACTION_WINDOW_MS: i64 = 5 * 60 * 1000;
 
+type ConfirmFileActionRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    String,
+    Option<String>,
+);
+
 fn hash_file(path: &Path) -> CoreResult<String> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -181,7 +193,7 @@ impl Engine {
     pub fn confirm_file_action(&self, action_id: &str, accepted: bool) -> CoreResult<Value> {
         let mut c = self.store.connect()?;
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let row: Option<(String,String,String,String,String,String,i64,String,Option<String>)> = tx
+        let row: Option<ConfirmFileActionRow> = tx
             .query_row(
                 "SELECT tool,media_id,source_path,destination_path,source_fingerprint,source_sha256,expires_at_ms,state,receipt FROM file_action_previews WHERE id=?1",
                 [action_id],

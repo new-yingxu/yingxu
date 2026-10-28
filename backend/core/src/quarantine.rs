@@ -21,9 +21,9 @@ fn move_to_system_trash(path: &Path) -> Result<(), String> {
             .ok_or_else(|| "隔离副本路径编码无效".to_string())?;
         let path = NSString::from_str(path);
         let url = NSURL::fileURLWithPath(&path);
-        return NSFileManager::defaultManager()
+        NSFileManager::defaultManager()
             .trashItemAtURL_resultingItemURL_error(&url, None)
-            .map_err(|error| error.localizedDescription().to_string());
+            .map_err(|error| error.localizedDescription().to_string())
     }
 
     #[cfg(target_os = "windows")]
@@ -108,18 +108,20 @@ fn is_regular_file(path: &Path) -> CoreResult<fs::Metadata> {
     Ok(meta)
 }
 
-fn summary(
-    id: &str,
-    media_id: &str,
-    name: &str,
+struct QuarantineSummary<'a> {
+    id: &'a str,
+    media_id: &'a str,
+    name: &'a str,
     bytes: i64,
-    sha256: &str,
-    state: &str,
-    created_at: &str,
-    updated_at: &str,
+    sha256: &'a str,
+    state: &'a str,
+    created_at: &'a str,
+    updated_at: &'a str,
     restore_via_system_trash: bool,
-) -> Value {
-    json!({"id":id,"mediaId":media_id,"name":name,"bytes":bytes,"sha256":sha256,"state":state,"createdAt":created_at,"updatedAt":updated_at,"restoreViaSystemTrash":restore_via_system_trash,"originalPreserved":true})
+}
+
+fn summary(item: QuarantineSummary<'_>) -> Value {
+    json!({"id":item.id,"mediaId":item.media_id,"name":item.name,"bytes":item.bytes,"sha256":item.sha256,"state":item.state,"createdAt":item.created_at,"updatedAt":item.updated_at,"restoreViaSystemTrash":item.restore_via_system_trash,"originalPreserved":true})
 }
 
 impl Engine {
@@ -218,9 +220,17 @@ impl Engine {
             params![item_id, media_id, name, bytes, digest, destination.to_string_lossy(), created],
         )?;
         self.store.audit("quarantine_copy_created", &item_id, json!({"mediaId":media_id,"name":name,"bytes":bytes,"sha256":digest,"originalPreserved":true}))?;
-        Ok(summary(
-            &item_id, media_id, &name, bytes, &digest, "isolated", &created, &created, false,
-        ))
+        Ok(summary(QuarantineSummary {
+            id: &item_id,
+            media_id,
+            name: &name,
+            bytes,
+            sha256: &digest,
+            state: "isolated",
+            created_at: &created,
+            updated_at: &created,
+            restore_via_system_trash: false,
+        }))
     }
 
     /// Return metadata only; source and quarantine paths stay inside SQLite.
@@ -267,17 +277,17 @@ impl Engine {
                     restore_available = true;
                 }
             }
-            result.push(summary(
-                &id,
-                &media,
-                &name,
+            result.push(summary(QuarantineSummary {
+                id: &id,
+                media_id: &media,
+                name: &name,
                 bytes,
-                &digest,
-                &state,
-                &created,
-                &updated,
-                restore_available,
-            ));
+                sha256: &digest,
+                state: &state,
+                created_at: &created,
+                updated_at: &updated,
+                restore_via_system_trash: restore_available,
+            }));
         }
         tx.commit()?;
         for (id, digest) in restored {
@@ -324,7 +334,7 @@ impl Engine {
     }
 
     pub fn quarantine_confirm_cleanup(&self, action_id: &str, accepted: bool) -> CoreResult<Value> {
-        self.quarantine_confirm_cleanup_with(action_id, accepted, |path| move_to_system_trash(path))
+        self.quarantine_confirm_cleanup_with(action_id, accepted, move_to_system_trash)
     }
 
     fn quarantine_confirm_cleanup_with<F>(
