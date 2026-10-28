@@ -160,3 +160,25 @@ body{min-width:0}
 .local-mode-banner span{color:var(--muted)}
 .cloud-disabled-note{padding:12px 14px;border-radius:10px;background:var(--page);color:var(--muted);font-size:12px;line-height:1.6}
 .nav-item:disabled{opacity:.52;cursor:not-allowed}
+
+/* Screenshot-driven layout and brand fixes. */
+.brand-mark-img{display:block;width:30px;height:30px;flex:none;object-fit:cover;border-radius:8px}
+.login-brand .brand-mark-img{width:42px;height:42px;border-radius:12px}
+.native-home-actions{display:flex;align-items:center;gap:12px;margin:12px 0 0 -2px}
+.native-home-actions .primary-button,.native-home-actions .secondary-button{min-height:44px}
+.workspace-switch>span:nth-child(2){min-width:0}
+.workspace-switch b,.workspace-switch small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.transfer-path-fields{align-items:start}
+.transfer-path-fields>label{align-content:start;min-width:0}
+.transfer-path-fields>label:nth-child(2){display:grid;grid-template-columns:minmax(0,1fr);align-items:end;row-gap:7px}
+.transfer-path-fields>label:nth-child(2)>span{grid-column:1/-1}
+.transfer-path-fields>label:nth-child(2)>.secondary-button{width:100%;min-height:40px;box-sizing:border-box;white-space:nowrap}
+.agent-layout,.chat-panel{min-width:0}
+.chat-panel>.ollama-onboarding{width:100%;max-width:100%;max-height:min(36vh,380px);min-height:0;box-sizing:border-box;overflow:auto;flex:none}
+.restore-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch}
+.restore-controls>.select-field,.restore-controls>.primary-button{width:100%;min-width:0;min-height:44px;box-sizing:border-box}
+.auth-view-heading{display:grid;gap:6px;margin-bottom:4px}
+.auth-view-heading b{font-size:16px}
+.auth-view-heading span,.auth-not-connected{font-size:11px;line-height:1.5;color:var(--muted)}
+.form-foot{gap:18px;margin-top:2px}
+@media(max-width:760px){.restore-controls{grid-template-columns:minmax(0,1fr)}}

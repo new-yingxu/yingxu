@@ -162,8 +162,8 @@ type Page =
 const page = ref<Page>("home");
 const session = ref<Awaited<ReturnType<typeof api.auth.restore>>>(null);
 const loginMode = ref<
-  "wechat" | "phone-code" | "email-code" | "email-password"
->("wechat");
+  "email-password" | "email-code" | "register" | "forgot-password"
+>("email-password");
 const loginIdentifier = ref("");
 const loginProof = ref("");
 const loginError = ref("");
@@ -607,30 +607,55 @@ onUnmounted(() => {
 async function signIn() {
   if (localWorkspace.value) return;
   loginError.value = "";
-  if (isMock && loginMode.value === "wechat")
-    loginIdentifier.value ||= "wechat-demo";
   if (!loginIdentifier.value.trim()) {
-    loginError.value = "请填写手机号或邮箱。";
+    loginError.value = "请填写邮箱或用户名。";
     return;
   }
-  if (loginMode.value !== "wechat" && !loginProof.value.trim()) {
-    loginError.value = "请填写验证码或密码。";
+  if (!loginProof.value.trim()) {
+    loginError.value = "请填写密码或邮箱验证码。";
     return;
   }
   loginBusy.value = true;
   try {
+    const loginMethod = loginMode.value === "email-code" ? "email-code" : "email-password";
     session.value = await api.auth.login(
-      loginMode.value,
+      loginMethod,
       loginIdentifier.value,
       loginProof.value || "qr-confirmed",
     );
     await loadData();
     page.value = "home";
   } catch (error) {
-    loginError.value = errorText(error);
+    const message = errorText(error);
+    if (/\b(USER_NOT_FOUND|user_not_found|not_found)\b/.test(message)) {
+      loginMode.value = "register";
+      loginProof.value = "";
+      loginError.value = "此邮箱尚未注册，已为你切换到注册页面。";
+      return;
+    }
+    loginError.value = message;
   } finally {
     loginBusy.value = false;
   }
+}
+function showRegistration() {
+  loginMode.value = "register";
+  loginProof.value = "";
+  loginError.value = "";
+}
+function showPasswordReset() {
+  loginMode.value = "forgot-password";
+  loginProof.value = "";
+  loginError.value = "";
+}
+function submitAuthView() {
+  if (loginMode.value === "email-password" || loginMode.value === "email-code") {
+    void signIn();
+    return;
+  }
+  loginError.value = loginMode.value === "forgot-password"
+    ? "密码重置服务尚未接入；当前不会发送邮件或修改账号。"
+    : "邮箱注册服务尚未接入；当前不会创建账号。";
 }
 async function logout() {
   if (localWorkspace.value) {
@@ -1119,7 +1144,7 @@ function taskStateLabel(state: TaskState) {
     :inert="!!pendingConfirmation || !!analysis || !!taskReport"
   >
     <div class="login-brand">
-      <div class="brand-mark"><i></i><i></i><i></i><i></i></div>
+      <img class="brand-mark-img" src="/yingxu-app-icon.png" alt="影序应用图标" />
       <span>影序 <small>YINGXU</small></span>
     </div>
     <section class="login-card">
@@ -1131,97 +1156,57 @@ function taskStateLabel(state: TaskState) {
         </p>
       </div>
       <div class="login-tabs">
-        <button
-          :class="{ chosen: loginMode === 'wechat' }"
-          @click="loginMode = 'wechat'"
-        >
-          微信扫码</button
-        ><button
-          :class="{ chosen: loginMode === 'phone-code' }"
-          @click="loginMode = 'phone-code'"
-        >
-          手机号</button
-        ><button
-          :class="{
-            chosen:
-              loginMode === 'email-code' || loginMode === 'email-password',
-          }"
-          @click="loginMode = 'email-code'"
-        >
-          邮箱
-        </button>
+        <button :class="{ chosen: loginMode === 'email-password' }" @click="loginMode = 'email-password'">邮箱密码</button>
+        <button :class="{ chosen: loginMode === 'email-code' }" @click="loginMode = 'email-code'">邮箱验证码</button>
       </div>
-      <div v-if="loginMode === 'wechat' && isMock" class="wechat-login">
-        <div class="qr-frame">
-          <div class="qr-code">
-            <i
-              v-for="n in 121"
-              :key="n"
-              :class="{
-                quiet: (n * 7 + (n % 5)) % 4 === 0 || (n % 11 === 0 && n > 20),
-              }"
-            ></i
-            ><b>影</b>
+      <div class="login-fields">
+        <template v-if="loginMode === 'email-password' || loginMode === 'email-code'">
+          <label>邮箱或用户名</label>
+          <input v-model="loginIdentifier" autocomplete="username" placeholder="请输入邮箱地址或用户名" />
+          <label>{{ loginMode === 'email-password' ? '密码' : '邮箱验证码' }}</label>
+          <div class="proof-field">
+            <input v-model="loginProof" :type="loginMode === 'email-password' ? 'password' : 'text'" :autocomplete="loginMode === 'email-password' ? 'current-password' : 'one-time-code'" :placeholder="loginMode === 'email-password' ? '请输入密码' : '请输入邮箱验证码'" />
+            <button v-if="loginMode === 'email-code'" class="text-button" @click="loginError = '邮箱验证码服务尚未接入；当前不会发送邮件。'">获取验证码</button>
           </div>
-        </div>
-        <strong>使用微信扫描二维码登录</strong
-        ><span>请使用与影序 Pocket 相同的账号</span
-        ><button class="text-button" @click="loginMode = 'phone-code'">
-          改用验证码登录
-        </button>
-      </div>
-      <div v-else-if="loginMode !== 'wechat'" class="login-fields">
-        <label>{{ loginMode === "phone-code" ? "手机号" : "邮箱" }}</label
-        ><input
-          v-model="loginIdentifier"
-          :placeholder="
-            loginMode === 'phone-code' ? '请输入手机号' : '请输入邮箱地址'
-          "
-        />
-        <label>{{ loginMode === "email-password" ? "密码" : "验证码" }}</label>
-        <div class="proof-field">
-          <input
-            v-model="loginProof"
-            :type="loginMode === 'email-password' ? 'password' : 'text'"
-            :placeholder="
-              loginMode === 'email-password' ? '请输入密码' : '请输入验证码'
-            "
-          /><button
-            v-if="loginMode !== 'email-password'"
-            class="text-button"
-            @click="say('验证码发送流程将在后端认证服务接入后启用。')"
-          >
-            获取验证码
-          </button>
-        </div>
-        <div v-if="loginMode === 'email-code'" class="form-foot">
-          <button class="text-button" @click="loginMode = 'email-password'">
-            使用 Pocket 邮箱密码</button
-          ><button class="text-button" @click="loginMode = 'email-password'">
-            注册账号
-          </button>
-        </div>
+          <div class="form-foot">
+            <button class="text-button" @click="showPasswordReset">忘记密码？</button>
+            <button class="text-button" @click="showRegistration">注册账号</button>
+          </div>
+        </template>
+        <template v-else>
+          <div class="auth-view-heading">
+            <button class="text-button" @click="loginMode = 'email-password'; loginError = ''">‹ 返回登录</button>
+            <b>{{ loginMode === 'register' ? '创建影序账号' : '重置密码' }}</b>
+            <span>{{ loginMode === 'register' ? '验证邮箱并设置登录密码。' : '我们会向已注册邮箱发送验证码。' }}</span>
+          </div>
+          <label>邮箱</label>
+          <input v-model="loginIdentifier" autocomplete="email" placeholder="请输入邮箱地址" />
+          <label>邮箱验证码</label>
+          <div class="proof-field">
+            <input v-model="loginProof" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入邮箱验证码" />
+            <button class="text-button" @click="loginError = '邮箱验证服务尚未接入；当前不会发送邮件。'">获取验证码</button>
+          </div>
+          <label>{{ loginMode === 'register' ? '设置密码' : '新密码' }}</label>
+          <input type="password" autocomplete="new-password" placeholder="至少 8 位" />
+          <label>确认密码</label>
+          <input type="password" autocomplete="new-password" placeholder="请再次输入密码" />
+        </template>
       </div>
       <p v-if="loginError" class="error-note">{{ loginError }}</p>
       <p v-if="props.testTransport" class="integration-banner">
         {{ props.testTransport }}
       </p>
-      <p v-if="!isMock" class="error-note">
-        真实登录未连接。未生成可用微信二维码，不会创建演示账号。
-      </p>
+      <p v-if="!isMock" class="auth-not-connected">真实认证接口尚未连接；不会伪造登录、发送验证码或创建账号。</p>
       <button
         class="primary-button login-submit"
-        @click="signIn"
-        :disabled="loginBusy || !isMock"
+        @click="submitAuthView"
+        :disabled="loginBusy || (!isMock && (loginMode === 'register' || loginMode === 'forgot-password'))"
       >
         {{
-          !isMock
-            ? "真实登录尚未接入"
-            : loginBusy
-              ? "正在登录…"
-              : loginMode === "wechat"
-                ? "扫码完成，进入影序（演示）"
-                : "登录影序（演示）"
+          loginBusy ? "正在登录…" :
+          loginMode === 'register' ? '创建账号' :
+          loginMode === 'forgot-password' ? '重置密码' :
+          isMock ? '登录影序（演示）' : '登录影序账号'
         }}
       </button>
       <p v-if="canEnterLocalWorkspace" class="local-mode-note">
@@ -1256,7 +1241,7 @@ function taskStateLabel(state: TaskState) {
   >
     <aside class="sidebar">
       <div class="brand-row">
-        <div class="brand-mark"><i></i><i></i><i></i><i></i></div>
+        <img class="brand-mark-img" src="/yingxu-app-icon.png" alt="影序应用图标" />
         <div>
           <b>影序 <small>YINGXU</small></b
           ><span>智能影像管理</span>
@@ -1446,11 +1431,11 @@ function taskStateLabel(state: TaskState) {
                 >
               </div>
               <p>{{ localWorkspace ? "本地 Rust / SQLite；Agent、素材索引和备份仅在此设备运行，云账号与同步已停用。" : "结果来自本地 Rust / SQLite；云端身份、Agent、设备同步未连接。" }}</p>
-              <button class="primary-button" @click="setPage('backup')">
+              <div class="native-home-actions"><button class="primary-button" @click="setPage('backup')">
                 开始本地备份</button
               ><button class="secondary-button" @click="setPage('library')">
                 打开资料库
-              </button>
+              </button></div>
             </section>
             <section class="panel">
               <h3>最近本地任务</h3>
@@ -1933,7 +1918,7 @@ function taskStateLabel(state: TaskState) {
               description="来源先只读扫描；目标副本通过校验并经你再次确认后，才会移除来源。"
             />
             <section class="panel flow-panel">
-              <div class="two-column-fields">
+              <div class="two-column-fields transfer-path-fields">
                 <label
                   ><span>来源目录</span
                   ><input
@@ -2897,21 +2882,20 @@ function taskStateLabel(state: TaskState) {
                 先运行审计，再选择健康副本。输出目录通过原生选择器确定，并在写入前确认。
               </p>
               <label class="field-label">健康副本</label
-              ><select v-model="restorePath" class="select-field">
+              ><div class="restore-controls"><select v-model="restorePath" class="select-field">
                 <option
                   v-for="replica in healthyReplicas"
                   :key="replica.id"
                   :value="replica.path"
                 >
                   {{ replica.path }}
-                </option></select
-              ><button
+              </option></select><button
                 class="primary-button"
                 @click="restoreHealthyReplica"
                 :disabled="!restorePath || operationBusy"
               >
                 选择目标并预览恢复
-              </button>
+              </button></div>
               <p v-if="!healthyReplicas.length">尚无本轮审计通过的副本。</p>
             </section>
           </template>

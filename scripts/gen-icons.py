@@ -24,6 +24,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parent.parent
 ICON_DIR = ROOT / "backend" / "tauri-host" / "icons"
 SITE_ASSETS = ROOT / "site" / "assets"
+DESKTOP_UI_PUBLIC = ROOT / "desktop-ui" / "public"
 PREVIEW_DIR = ROOT / "docs" / "品牌" / "预览"
 
 FOREST = (39, 61, 49)        # #273D31 品牌主色
@@ -184,6 +185,8 @@ def main():
     print("ico: ok")
 
     SITE_ASSETS.mkdir(parents=True, exist_ok=True)
+    DESKTOP_UI_PUBLIC.mkdir(parents=True, exist_ok=True)
+    export_png(draw_mark(512, detail=3, round_corners=True, margin=0.06), DESKTOP_UI_PUBLIC / "yingxu-app-icon.png")
     export_png(draw_mark(180, detail=3, round_corners=True, margin=0.06), SITE_ASSETS / "icon-180.png")
     export_png(draw_mark(192, detail=3, round_corners=True, margin=0.06), SITE_ASSETS / "icon-192.png")
     export_png(draw_mark(512, detail=3, round_corners=True, margin=0.06), SITE_ASSETS / "icon-512.png")
