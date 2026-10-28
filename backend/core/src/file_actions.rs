@@ -223,14 +223,27 @@ impl Engine {
         let source_path = PathBuf::from(source);
         let destination_path = PathBuf::from(destination);
         if expires <= chrono::Utc::now().timestamp_millis() {
+            let receipt = json!({
+                "actionId":action_id,
+                "tool":tool,
+                "status":"expired",
+                "mediaId":media_id,
+                "sourcePath":source_path,
+                "targetPath":destination_path,
+                "sourcePreserved":true,
+                "destinationCreated":false,
+                "userConfirmed":accepted,
+                "cloudExecutionAuthorized":false,
+                "error":{"code":"ACTION_EXPIRED","message":"预览已过期，请重新查看目标和影响"}
+            });
             tx.execute(
-                "UPDATE file_action_previews SET state='expired' WHERE id=?1",
-                [action_id],
+                "UPDATE file_action_previews SET state='expired',receipt=?1 WHERE id=?2",
+                params![receipt.to_string(), action_id],
             )?;
             tx.commit()?;
-            return Ok(
-                json!({"actionId":action_id,"tool":tool,"status":"expired","mediaId":media_id,"sourcePath":source_path,"targetPath":destination_path,"sourcePreserved":true,"destinationCreated":false,"userConfirmed":true,"cloudExecutionAuthorized":false,"error":{"code":"ACTION_EXPIRED","message":"预览已过期，请重新查看目标和影响"}}),
-            );
+            self.store
+                .audit("agent_file_action_expired", action_id, receipt.clone())?;
+            return Ok(receipt);
         }
         if !accepted {
             let receipt = json!({"actionId":action_id,"tool":tool,"status":"declined","mediaId":media_id,"sourcePath":source_path,"targetPath":destination_path,"sourcePreserved":true,"destinationCreated":false,"userConfirmed":false,"cloudExecutionAuthorized":false});
