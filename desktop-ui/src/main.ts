@@ -1,5 +1,8 @@
-import { createApp } from 'vue'
-import App from './App.vue'
-import './style.css'
+import { createApp } from "vue";
+import App from "./App.vue";
+import "./style.css";
 
-createApp(App).mount('#app')
+const app = createApp(App);
+app.config.errorHandler = (error) =>
+  window.dispatchEvent(new CustomEvent("yingxu-error", { detail: error }));
+app.mount("#app");

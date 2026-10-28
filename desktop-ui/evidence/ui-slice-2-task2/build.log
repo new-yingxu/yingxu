@@ -1,0 +1,15 @@
+$ ./node_modules/.bin/vue-tsc -b
+exit=0
+
+$ ./node_modules/.bin/vite build
+vite v8.3.5 building client environment for production...
+transforming...
+✓ 39 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.46 kB │ gzip:  0.33 kB
+dist/assets/index-Dwnv_4WV.css   41.73 kB │ gzip:  9.16 kB
+dist/assets/index-FqFYCtE_.js   209.24 kB │ gzip: 72.74 kB
+
+✓ built in 489ms
+exit=0

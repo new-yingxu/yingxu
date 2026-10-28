@@ -30,6 +30,15 @@ const MAX_ALLOC: u64 = 256 * 1024 * 1024;
 const MAX_IFD_ENTRIES: usize = 4096;
 const MAX_IFD_DEPTH: u8 = 3;
 
+/// 哪些格式可以走 TIFF IFD 快路径，以及字节序。
+fn tiff_endian(format: &str) -> Option<bool> {
+    match format {
+        "tiff_le" | "orf_le" | "rw2" => Some(false),
+        "tiff_be" | "orf_be" => Some(true),
+        _ => None,
+    }
+}
+
 pub fn is_raw_extension(ext: &str) -> bool {
     RAW_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
 }
@@ -44,6 +53,10 @@ pub fn is_raw_path(path: &Path) -> bool {
 pub fn detect_format(head: &[u8]) -> &'static str {
     match head {
         [b'F', b'U', b'J', b'I', b'F', b'I', b'L', b'M', ..] => "fujifilm_raf",
+        // ORF：IIRO / IIRS / MMOR；RW2：IIU\0 —— 都是 TIFF 系，能走 IFD 快路径
+        [b'I', b'I', 0x52, 0x4f, ..] | [b'I', b'I', 0x52, 0x53, ..] => "orf_le",
+        [b'M', b'M', 0x4f, 0x52, ..] => "orf_be",
+        [b'I', b'I', 0x55, 0x00, ..] => "rw2",
         [b'I', b'I', 0x2a, 0x00, ..] => "tiff_le",
         [b'M', b'M', 0x00, 0x2a, ..] => "tiff_be",
         [b'I', b'I', 0x2b, 0x00, ..] => "bigtiff_le",
@@ -90,7 +103,7 @@ fn num(b: &[u8], be: bool, wide: bool) -> u32 {
     v
 }
 
-fn read_at(f: &mut File, offset: u64, len: usize, file_len: u64) -> Option<Vec<u8>> {
+fn read_at<R: Read + Seek>(f: &mut R, offset: u64, len: usize, file_len: u64) -> Option<Vec<u8>> {
     if len == 0 || offset.checked_add(len as u64)? > file_len {
         return None;
     }
@@ -101,7 +114,12 @@ fn read_at(f: &mut File, offset: u64, len: usize, file_len: u64) -> Option<Vec<u
 }
 
 /// 解析一个 IFD，返回条目与下一个 IFD 偏移。
-fn read_ifd(f: &mut File, be: bool, offset: u64, file_len: u64) -> Option<(Vec<Entry>, u64)> {
+fn read_ifd<R: Read + Seek>(
+    f: &mut R,
+    be: bool,
+    offset: u64,
+    file_len: u64,
+) -> Option<(Vec<Entry>, u64)> {
     if offset < 8 || offset + 2 > file_len {
         return None;
     }
@@ -307,8 +325,7 @@ pub fn extract_preview(file: &mut File, file_len: u64) -> CoreResult<RawPreview>
         ));
     }
     let mut routes: Vec<(&'static str, Vec<(u64, u64)>)> = vec![];
-    if matches!(format, "tiff_le" | "tiff_be") {
-        let be = format == "tiff_be";
+    if let Some(be) = tiff_endian(format) {
         let mut c = tiff_candidates(file, be, file_len);
         c.sort_by_key(|r| std::cmp::Reverse(r.1));
         routes.push(("tiff_ifd", c));
@@ -323,17 +340,30 @@ pub fn extract_preview(file: &mut File, file_len: u64) -> CoreResult<RawPreview>
     scanned.sort_by_key(|r| std::cmp::Reverse(r.1));
     routes.push(("jpeg_scan", scanned));
 
-    for (source, ranges) in routes {
-        for range in ranges.into_iter().take(12) {
-            if let Some((bytes, _)) = load_candidate(file, range, file_len) {
-                return Ok(RawPreview {
-                    format,
-                    bytes,
-                    offset: range.0,
-                    source,
-                });
+    // 候选可能有好几个（IFD 里的真预览 + 各处缩略图）。按解码后的像素面积取最大，
+    // 而不是「第一个能解开的」——否则会把 160×120 的缩略图当成主预览。
+    const GOOD_ENOUGH: u32 = 2_000_000; // 2MP 以上视为已拿到主预览
+    let mut best: Option<(Vec<u8>, u32, &'static str, u64)> = None;
+    'routes: for (source, ranges) in routes {
+        for range in ranges.into_iter().take(8) {
+            if let Some((bytes, image)) = load_candidate(file, range, file_len) {
+                let area = image.width().saturating_mul(image.height());
+                if best.as_ref().is_none_or(|b| area > b.1) {
+                    best = Some((bytes, area, source, range.0));
+                }
+                if area >= GOOD_ENOUGH {
+                    break 'routes;
+                }
             }
         }
+    }
+    if let Some((bytes, _, source, offset)) = best {
+        return Ok(RawPreview {
+            format,
+            bytes,
+            offset,
+            source,
+        });
     }
     Err(CoreError::new(
         "RAW_PREVIEW_NOT_FOUND",
@@ -398,6 +428,219 @@ pub fn exif_fields(exif: &exif::Exif) -> (Value, u32) {
         .and_then(|f| f.value.get_uint(0))
         .unwrap_or(1);
     (info, orientation)
+}
+
+/// TIFF 系容器（含 ORF/RW2 这类非标准魔数）的 EXIF：自己走 IFD0 + ExifIFD。
+/// `kamadak-exif` 不认 ORF/RW2 的魔数，所以这三类格式要独立读一遍。
+fn tiff_exif<R: Read + Seek>(f: &mut R, be: bool, file_len: u64) -> Option<(Value, u32)> {
+    fn text<R: Read + Seek>(f: &mut R, be: bool, e: &Entry, file_len: u64) -> Option<String> {
+        let raw = if e.count <= 4 {
+            let b = if be {
+                e.val.to_be_bytes()
+            } else {
+                e.val.to_le_bytes()
+            };
+            b.to_vec()
+        } else {
+            read_at(f, u64::from(e.val), e.count as usize, file_len)?
+        };
+        let s = String::from_utf8_lossy(&raw)
+            .trim_matches('\0')
+            .trim()
+            .to_string();
+        (!s.is_empty()).then_some(s)
+    }
+    fn rational<R: Read + Seek>(f: &mut R, be: bool, e: &Entry, file_len: u64) -> Option<f64> {
+        let raw = read_at(f, u64::from(e.val), 8, file_len)?;
+        let numerator = num(&raw[0..4], be, true);
+        let denominator = num(&raw[4..8], be, true);
+        (denominator > 0).then(|| f64::from(numerator) / f64::from(denominator))
+    }
+
+    let head = read_at(f, 0, 8, file_len)?;
+    let ifd0 = u64::from(num(&head[4..8], be, true));
+    let (entries, _) = read_ifd(f, be, ifd0, file_len)?;
+    let mut info = json!({});
+    let mut orientation = 1u32;
+    let mut exif_ifd = None;
+    let mut ifd_datetime: Option<String> = None;
+    for e in &entries {
+        match e.tag {
+            0x010f => {
+                if let Some(v) = text(f, be, e, file_len) {
+                    info["cameraMake"] = json!(v);
+                }
+            }
+            0x0110 => {
+                if let Some(v) = text(f, be, e, file_len) {
+                    info["cameraModel"] = json!(v);
+                }
+            }
+            0x0112 => orientation = entry_value(e, be) as u32,
+            0x0132 => {
+                if let Some(v) = text(f, be, e, file_len) {
+                    // 只在拿不到 DateTimeOriginal 时兜底用；CR3 的 CMT2 里只有这个
+                    ifd_datetime = Some(v);
+                }
+            }
+            0x8769 => exif_ifd = Some(entry_value(e, be)),
+            _ => {}
+        }
+    }
+    if let Some(off) = exif_ifd
+        && let Some((sub, _)) = read_ifd(f, be, off, file_len)
+    {
+        for e in &sub {
+            match e.tag {
+                0x9003 | 0x9004 => {
+                    if let Some(v) = text(f, be, e, file_len) {
+                        // EXIF 用 "YYYY:MM:DD HH:MM:SS"，统一成 ISO 风格
+                        let iso = v.replacen(':', "-", 1).replacen(':', "-", 1);
+                        info["capturedAt"] = json!(iso);
+                        info["timestampSource"] = json!("exif_tiff_ifd");
+                    }
+                }
+                0x8827 => info["iso"] = json!(entry_value(e, be)),
+                0x829d => {
+                    if let Some(v) = rational(f, be, e, file_len) {
+                        info["fNumber"] = json!(v);
+                    }
+                }
+                0x829a => {
+                    if let Some(v) = rational(f, be, e, file_len) {
+                        info["exposureTime"] = json!(v);
+                    }
+                }
+                0x920a => {
+                    if let Some(v) = rational(f, be, e, file_len) {
+                        info["focalLength"] = json!(v);
+                    }
+                }
+                0xa434 => {
+                    if let Some(v) = text(f, be, e, file_len) {
+                        info["lensModel"] = json!(v);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some(raw) = ifd_datetime {
+        let iso = raw.replacen(':', "-", 1).replacen(':', "-", 1);
+        info["ifdDateTime"] = json!(iso);
+        if info.get("capturedAt").is_none() {
+            // 明确标注来源，别让用户以为这是快门时间
+            info["capturedAt"] = json!(iso);
+            info["timestampSource"] = json!("tiff_datetime");
+        }
+    }
+    info.as_object().map(|o| o.len()).filter(|n| *n > 0)?;
+    Some((info, orientation))
+}
+
+/// Canon 在 BMFF 里放 EXIF 用的两个 `uuid` 盒标识。
+const CANON_CMT1: [u8; 16] = [
+    0xBE, 0x7A, 0xCF, 0xCB, 0x97, 0xA9, 0x42, 0xE8, 0x9C, 0x71, 0x99, 0x94, 0x91, 0xE3, 0xAF, 0xAC,
+];
+const CANON_CMT2: [u8; 16] = [
+    0x85, 0xC0, 0xB6, 0x87, 0x82, 0x0F, 0x11, 0xE0, 0x81, 0x11, 0xF4, 0xCE, 0x46, 0x2B, 0x6A, 0x48,
+];
+/// CMT1 一般几十 KB；给到 4 MiB 已经远超正常范围，防坏文件把内存吃满。
+const MAX_CMT: usize = 4 * 1024 * 1024;
+/// 只在文件前部找 uuid 盒：CR3 的 moov 在 mdat 之前，不必扫完整个文件。
+const CMT_SEARCH_LIMIT: u64 = 32 * 1024 * 1024;
+
+/// 从字节流里找 TIFF 头（`II*\0` 或 `MM\0*`），只在开头 4 KiB 内找。
+fn find_tiff_header(blob: &[u8]) -> Option<(usize, bool)> {
+    let end = blob.len().min(4096);
+    for i in 0..end.saturating_sub(4) {
+        let w = &blob[i..i + 4];
+        if w == b"II*\0" {
+            return Some((i, false));
+        }
+        if w == b"MM\0*" {
+            return Some((i, true));
+        }
+    }
+    None
+}
+
+/// 扫前 32 MiB，返回所有 Canon CMT `uuid` 盒的 (payload 起点, payload 长度)。
+fn canon_cmt_boxes(f: &mut File, file_len: u64) -> Vec<(u64, u64)> {
+    // 调用点之前已经读过大半文件，必须复位；否则 pos/base 和实际读到的字节错位。
+    if f.seek(SeekFrom::Start(0)).is_err() {
+        return vec![];
+    }
+    let limit = CMT_SEARCH_LIMIT.min(file_len);
+    let mut out = vec![];
+    let mut buf = vec![0u8; 512 * 1024];
+    let mut pos = 0u64;
+    let mut carry: Vec<u8> = vec![];
+    while pos < limit {
+        let want = buf.len().min((limit - pos) as usize);
+        let Ok(n) = f.read(&mut buf[..want]) else {
+            break;
+        };
+        if n == 0 {
+            break;
+        }
+        let mut chunk = std::mem::take(&mut carry);
+        let base = pos - chunk.len() as u64;
+        chunk.extend_from_slice(&buf[..n]);
+        for needle in [CANON_CMT1, CANON_CMT2] {
+            let mut from = 0usize;
+            while let Some(rel) = find_bytes(&chunk[from..], &needle) {
+                let at = from + rel;
+                // 盒头在 uuid 之前 8 字节：size(4) + "uuid"(4)
+                if at >= 8 {
+                    let header_at = base + at as u64 - 8;
+                    let type_at = base + at as u64 - 4;
+                    if let Some(h) = read_at(f, header_at, 8, file_len)
+                        && &h[4..8] == b"uuid"
+                    {
+                        let size = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) as u64;
+                        let payload_start = type_at + 20; // 4 字节 type 之后是 16 字节 uuid
+                        if size > 24 && payload_start + (size - 24) <= file_len {
+                            out.push((payload_start, size - 24));
+                        }
+                    }
+                }
+                from = at + 1;
+            }
+        }
+        // 保留尾部 16 字节，跨块匹配
+        let keep = chunk.len().saturating_sub(16);
+        carry = chunk[keep..].to_vec();
+        pos += n as u64;
+    }
+    out
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// CR3 的 EXIF：BMFF 的 `uuid`(CMT1/CMT2) 里是一段完整 TIFF，直接复用 IFD 读取器。
+/// `kamadak-exif` 不支持这种容器，所以只能自己定位。
+fn cr3_exif(f: &mut File, file_len: u64) -> Option<(Value, u32)> {
+    for (start, len) in canon_cmt_boxes(f, file_len) {
+        let take = usize::try_from(len).ok()?.min(MAX_CMT);
+        let Some(blob) = read_at(f, start, take, file_len) else {
+            continue;
+        };
+        let Some((tiff_at, be)) = find_tiff_header(&blob) else {
+            continue;
+        };
+        let slice = &blob[tiff_at..];
+        let mut cur = Cursor::new(slice);
+        if let Some(found) = tiff_exif(&mut cur, be, slice.len() as u64) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn orient(image: DynamicImage, n: u32) -> DynamicImage {
@@ -529,7 +772,29 @@ impl Engine {
             }
             info["exifStatus"] = json!("selected_fields_read");
         } else {
-            info["exifStatus"] = json!("unavailable");
+            // ORF/RW2 等非标准 TIFF 魔数，exif crate 读不了，自己按 IFD 读一遍
+            let manual = tiff_endian(preview.format)
+                .and_then(|be| tiff_exif(&mut file, be, file_len))
+                .or_else(|| {
+                    matches!(preview.format, "cr3" | "iso_bmff")
+                        .then(|| cr3_exif(&mut file, file_len))
+                        .flatten()
+                });
+            if let Some((fields, o)) = manual {
+                orientation = o;
+                if let Some(map) = fields.as_object() {
+                    for (k, v) in map {
+                        info[k] = v.clone();
+                    }
+                }
+                info["exifStatus"] = json!(if preview.format == "cr3" {
+                    "selected_fields_read_cmt"
+                } else {
+                    "selected_fields_read_tiff_ifd"
+                });
+            } else {
+                info["exifStatus"] = json!("unavailable");
+            }
         }
         if info.get("timestampSource").is_none() {
             info["timestampSource"] = json!("filesystem_modified");
@@ -657,6 +922,72 @@ mod tests {
         let mut f = std::fs::File::create(&p).unwrap();
         f.write_all(bytes).unwrap();
         p
+    }
+
+    /// 造一个 CR3 骨架：ftyp + 一个 CMT2 `uuid` 盒，盒里是完整 TIFF（Make/Model/0x0132）。
+    fn cr3_with_cmt(make: &str, model: &str, datetime: &str) -> Vec<u8> {
+        let entries = [(0x010fu16, make), (0x0110, model), (0x0132, datetime)];
+        let ifd_len = 2 + entries.len() * 12 + 4;
+        let data_start = 8 + ifd_len;
+        let mut data = vec![];
+        let mut body = vec![b'I', b'I', 0x2a, 0x00, 8, 0, 0, 0];
+        body.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, text) in entries {
+            let mut bytes = text.as_bytes().to_vec();
+            bytes.push(0);
+            body.extend_from_slice(&tag.to_le_bytes());
+            body.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+            body.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            body.extend_from_slice(&((data_start + data.len()) as u32).to_le_bytes());
+            data.extend_from_slice(&bytes);
+        }
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&data);
+
+        let mut payload = vec![0u8, 0, 0, 1]; // Canon 的 4 字节版本前缀
+        payload.extend_from_slice(&body);
+
+        let mut out = vec![];
+        out.extend_from_slice(&24u32.to_be_bytes());
+        out.extend_from_slice(b"ftypcrx ");
+        out.extend_from_slice(&[0u8; 16]);
+        out.extend_from_slice(&((24 + payload.len()) as u32).to_be_bytes());
+        out.extend_from_slice(b"uuid");
+        out.extend_from_slice(&CANON_CMT2);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    #[test]
+    fn cr3_exif_comes_from_cmt2_uuid_box() {
+        let raw = cr3_with_cmt("Canon", "Canon EOS R6", "2021:05:12 12:21:21");
+        let p = tmp("cmt.cr3", &raw);
+        let mut f = std::fs::File::open(&p).unwrap();
+        let len = f.metadata().unwrap().len();
+        // 关键回归：读之前先把指针挪开，验证内部会自己复位
+        f.seek(SeekFrom::Start(20)).unwrap();
+        let (info, _) = cr3_exif(&mut f, len).expect("应能从 CMT2 读出 EXIF");
+        assert_eq!(info["cameraMake"], json!("Canon"));
+        assert_eq!(info["cameraModel"], json!("Canon EOS R6"));
+        assert_eq!(info["timestampSource"], json!("tiff_datetime"));
+        assert!(
+            info["capturedAt"]
+                .as_str()
+                .unwrap()
+                .starts_with("2021-05-12")
+        );
+    }
+
+    #[test]
+    fn cr3_without_cmt_returns_none() {
+        let mut raw = vec![];
+        raw.extend_from_slice(&24u32.to_be_bytes());
+        raw.extend_from_slice(b"ftypcrx ");
+        raw.extend_from_slice(&[0u8; 512]);
+        let p = tmp("nocmt.cr3", &raw);
+        let mut f = std::fs::File::open(&p).unwrap();
+        let len = f.metadata().unwrap().len();
+        assert!(cr3_exif(&mut f, len).is_none());
     }
 
     #[test]

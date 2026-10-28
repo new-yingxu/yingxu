@@ -1,0 +1,39 @@
+{
+  "status": "packaged_app_launched_agent_ui_e2e_blocked",
+  "date": "2026-10-26",
+  "platform": "macOS arm64",
+  "artifact": {
+    "path": "backend/tauri-host/target/release/bundle/dmg/影序本地闭环测试版_0.2.0-localtest.1_aarch64.dmg",
+    "launchSource": "Finder-mounted DMG",
+    "mountPoint": "/Volumes/影序本地闭环测试版",
+    "bundleIdentifier": "app.yingxu.desktop.local-qa",
+    "bundleIdentifierIsolatedFromWorkBuddy": true
+  },
+  "uiAttempt": {
+    "appLaunch": "passed",
+    "visibleScreen": "Login page rendered in Tauri WebView",
+    "visibleState": "真实登录未连接；未生成可用微信二维码，不会创建演示账号。",
+    "localWorkspaceEntry": "not_present_in_production_build",
+    "webviewToHostToSidecarToSqlite": "not_verified",
+    "openItemConfirmationReceipt": "not_verified",
+    "reason": "The UI only exposes the local workspace entry when import.meta.env.DEV is true. The packaged production build therefore stopped at the login page. Computer Use then timed out while inspecting or closing the app."
+  },
+  "devUiAttempt": {
+    "defaultSdkBuild": "failed because the installed MacOSX27.0 SDK linker metadata uses architecture identifiers unsupported by the current linker",
+    "MacOSX15.4SdkBuild": "Rust dev build completed; app UI did not appear in Computer Use app inventory, so IPC was not exercised",
+    "temporaryVitePort": 5174,
+    "temporaryIdentifier": "app.yingxu.desktop.local-qa-dev",
+    "runnerStopped": true
+  },
+  "cleanup": {
+    "temporaryUiOverlayRestored": true,
+    "temporaryTauriConfigRestored": true,
+    "isolatedQaAppProcessExited": true,
+    "testDmgUnmounted": true,
+    "unrelatedWorkBuddyAppTouched": false,
+    "unrelatedFiveHourHostProcessTouched": false,
+    "worktreeClean": true
+  },
+  "userMediaAccessed": false,
+  "cloudRequests": false
+}

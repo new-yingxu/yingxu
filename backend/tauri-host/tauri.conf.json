@@ -24,6 +24,7 @@
   },
   "bundle": {
     "active": true,
+    "resources": ["agent-sidecar/yingxu-local-agent/"],
     "targets": [
       "dmg",
       "nsis"

@@ -1,0 +1,16 @@
+{
+  "slice": "ui-slice-1",
+  "checks": [
+    "job state maps to the 9-state UI flow",
+    "control matrix allows pause/resume/cancel only on active states",
+    "terminal states are success/partial/failed/cancelled",
+    "partial job renders per-destination results and failure reason",
+    "per-target retry guarded by task state and target state",
+    "terminal result summary with retry hints; running has none",
+    "runtime currentFile and speed only while running",
+    "wizard step guard requires scan then destination"
+  ],
+  "passed": 8,
+  "requiresTauri": false,
+  "requiresRustCli": false
+}

@@ -1,0 +1,12 @@
+$ node tests/agent-open.mjs
+{
+  "passed": 6,
+  "checks": [
+    "decline runs prepare then confirm(false) and never opens",
+    "accept calls confirm(true) only after the preview",
+    "proposals outside the 5 minute window fail before the host call",
+    "a preview that contradicts the request is rejected",
+    "a receipt that claims execution authorization is rejected",
+    "confirmation card shows file, source and expiry with 拒绝 focused by default"
+  ]
+}

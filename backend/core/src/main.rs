@@ -14,7 +14,42 @@ fn main() {
         std::process::exit(1)
     }
 }
+/// 装载 `.env`（键=值，# 注释）。只设当前进程环境，已存在的变量不覆盖。
+/// 查找顺序：$YINGXU_ENV → ./.env → ./backend/.env（后两个供开发联调）。
+fn load_dotenv() {
+    let candidates = [
+        std::env::var("YINGXU_ENV").ok().map(PathBuf::from),
+        Some(PathBuf::from(".env")),
+        Some(PathBuf::from("backend/.env")),
+    ];
+    for path in candidates.into_iter().flatten() {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in raw.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
+            let (k, v) = (k.trim(), v.trim());
+            if k.is_empty() || std::env::var_os(k).is_some() {
+                continue;
+            }
+            // 单线程启动阶段调用，无并发风险
+            #[allow(unsafe_op_in_unsafe_fn)]
+            unsafe {
+                std::env::set_var(k, v);
+            }
+        }
+        break;
+    }
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    load_dotenv();
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() != Some("--data-dir") {
         return Err(

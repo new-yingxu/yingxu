@@ -153,10 +153,25 @@ fn symlinks_cannot_escape_source_or_target() {
     let f = Fixture::new(1);
     f.file("a.jpg", b"a");
     symlink(f.root.join("outside"), f.source.join("escape")).unwrap();
-    assert_eq!(
-        f.engine.preview(f.request()).unwrap_err().code,
-        "SYMLINK_REJECTED"
+    // 符号链接不再让整次扫描/预览失败，而是被跳过——但绝不能跟随到来源之外
+    let p = f.engine.preview(f.request()).unwrap();
+    let report = fsops::scan_report(&f.source).unwrap();
+    assert_eq!(report.files.len(), 1, "只应收录真实文件");
+    assert!(
+        report
+            .skipped
+            .iter()
+            .any(|s| s.reason == "symlink" && s.relative == "escape"),
+        "符号链接必须出现在跳过清单里"
     );
+    assert!(
+        report
+            .files
+            .iter()
+            .all(|file| file.relative != std::path::Path::new("escape")),
+        "符号链接本身不能进入待复制清单"
+    );
+    assert!(!p.id.is_empty());
     fs::remove_file(f.source.join("escape")).unwrap();
     f.file("sub/b.jpg", b"b");
     let p = f.engine.preview(f.request()).unwrap();
@@ -477,6 +492,53 @@ fn search_settings_reports_and_history_are_persistent() {
     assert!(f.targets[0].join("海边日落.jpg").exists());
     assert!(!reopened.replicas().unwrap().is_empty());
     assert!(reopened.store.jobs().unwrap().is_empty());
+}
+
+#[test]
+fn paged_library_search_returns_all_items_without_duplicates() {
+    let f = Fixture::new(1);
+    for index in 0..501 {
+        f.file(&format!("DCIM/{index:04}.jpg"), b"photo");
+    }
+    let index = f.engine.index_source(&f.source).unwrap();
+    assert_eq!(index["files"], 501);
+
+    let first = f.engine.search_page("", "photo", "all", 200, 0).unwrap();
+    let second = f.engine.search_page("", "photo", "all", 200, 200).unwrap();
+    let third = f.engine.search_page("", "photo", "all", 200, 400).unwrap();
+    assert_eq!(first["total"], 501);
+    assert_eq!(first["items"].as_array().unwrap().len(), 200);
+    assert_eq!(first["hasMore"], true);
+    assert_eq!(second["items"].as_array().unwrap().len(), 200);
+    assert_eq!(second["hasMore"], true);
+    assert_eq!(third["items"].as_array().unwrap().len(), 101);
+    assert_eq!(third["hasMore"], false);
+
+    let ids: std::collections::HashSet<_> = first["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(second["items"].as_array().unwrap())
+        .chain(third["items"].as_array().unwrap())
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 501);
+
+    let reply = f.engine.dispatch(yingxu_core::api::Request {
+        request_id: "paged-search".into(),
+        version: 1,
+        method: "library.searchPage".into(),
+        params: json!({"query":"","kind":"photo","quality":"all","limit":50,"offset":450}),
+    });
+    assert!(reply.ok);
+    assert_eq!(reply.data.unwrap()["items"].as_array().unwrap().len(), 50);
+    assert_eq!(
+        f.engine
+            .search_page("", "photo", "all", 201, 0)
+            .unwrap_err()
+            .code,
+        "INVALID_PAGE"
+    );
 }
 #[test]
 fn outbox_defaults_do_not_include_paths() {

@@ -1,6 +1,7 @@
 //! File operations never overwrite an existing destination. Unix traversal uses
 //! directory descriptors and O_NOFOLLOW, including every parent component.
 use crate::model::*;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
@@ -17,8 +18,20 @@ pub fn fingerprint(m: &fs::Metadata) -> Fingerprint {
     };
     #[cfg(windows)]
     let identity = {
+        // Windows 上没有稳定的「卷序列号 + 文件索引」接口：
+        // `MetadataExt::volume_serial_number()/file_index()` 仍属不稳定特性
+        // `windows_by_handle`，直接用会让 Windows 目标编译失败。
+        // 这里退化为「创建时间 + 最后写时间 + 属性 + 大小」组合，仍能区分
+        // 「换了一块盘 / 换了一个文件」；真正的差异检测还有 bytes + modified_ns，
+        // 以及每次读写前的重新指纹比对，不单靠 identity。
         use std::os::windows::fs::MetadataExt;
-        format!("{:?}:{:?}", m.volume_serial_number(), m.file_index())
+        format!(
+            "{:?}:{:?}:{:?}:{}",
+            m.creation_time(),
+            m.last_write_time(),
+            m.file_attributes(),
+            m.len()
+        )
     };
     #[cfg(not(any(unix, windows)))]
     let identity = format!("{:?}", m.created().ok());
@@ -400,9 +413,45 @@ pub fn hash_at(
     Ok(value)
 }
 
-pub fn scan(root: &Path) -> CoreResult<Vec<ScannedFile>> {
+/// 扫描时被跳过的条目。**不中断整体扫描**，逐条报告给调用方。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedEntry {
+    /// 相对路径；可能是不可移植的名字（含 `:` 等），所以用字符串而不是 PathBuf
+    pub relative: String,
+    /// `unportable_name` / `symlink` / `unreadable`
+    pub reason: &'static str,
+    /// 给人看的补充说明，例如具体哪个字符、或底层错误
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanReport {
+    pub files: Vec<ScannedFile>,
+    pub skipped: Vec<SkippedEntry>,
+}
+
+/// 名字里出现不可移植字符（`\0`、`:`、`\`）时，这个文件只在当前系统可用。
+/// 我们**不再整批拒绝**：跳过一个文件，比让用户 3 万张照片一张都扫不进去要好。
+fn unportable_reason(name: &str) -> Option<&'static str> {
+    if name.contains('\0') {
+        Some("包含 NUL 字符")
+    } else if name.contains(':') {
+        Some("包含冒号（在 Windows 上无法创建同名文件）")
+    } else if name.contains('\\') {
+        Some("包含反斜杠（会被不同系统当作路径分隔符）")
+    } else {
+        None
+    }
+}
+
+/// 带跳过清单的扫描。目录里出现 `:` 文件名、符号链接、无权限子目录时，
+/// 只跳过该条目并在 `skipped` 里说明原因。
+pub fn scan_report(root: &Path) -> CoreResult<ScanReport> {
     let dir = SafeDir::open(root)?;
-    let mut result = vec![];
+    let mut files = vec![];
+    let mut skipped: Vec<SkippedEntry> = vec![];
     let iter = walkdir::WalkDir::new(&dir.path)
         .follow_links(false)
         .sort_by_file_name()
@@ -414,30 +463,103 @@ pub fn scan(root: &Path) -> CoreResult<Vec<ScannedFile>> {
                 && !n.starts_with(".yingxu-probe-")
         });
     for entry in iter {
-        let e = entry.map_err(|e| CoreError::new("SCAN_FAILED", e))?;
+        let e = match entry {
+            Ok(e) => e,
+            // 单个子目录不可读（权限、坏扇区）不该让整次扫描失败
+            Err(err) => {
+                let path = err
+                    .path()
+                    .map(|p| {
+                        p.strip_prefix(&dir.path)
+                            .unwrap_or(p)
+                            .to_string_lossy()
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                skipped.push(SkippedEntry {
+                    relative: path,
+                    reason: "unreadable",
+                    detail: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
         if e.depth() == 0 {
             continue;
         }
+        let shown = e
+            .path()
+            .strip_prefix(&dir.path)
+            .unwrap_or(e.path())
+            .to_string_lossy()
+            .to_string();
+        // 不跟随符号链接：链接目标可能在来源目录之外，跟进去等于越界读
         if e.file_type().is_symlink() {
-            return Err(CoreError::new("SYMLINK_REJECTED", e.path().display()));
+            skipped.push(SkippedEntry {
+                relative: shown,
+                reason: "symlink",
+                detail: Some("不跟随符号链接".into()),
+            });
+            continue;
         }
         if e.file_type().is_dir() {
             continue;
         }
-        let rel = e
-            .path()
-            .strip_prefix(&dir.path)
-            .map_err(|e| CoreError::new("UNSAFE_PATH", e))?
-            .to_path_buf();
-        let f = dir.read(&rel)?;
-        result.push(ScannedFile {
+        if let Some(detail) = unportable_reason(&shown) {
+            skipped.push(SkippedEntry {
+                relative: shown,
+                reason: "unportable_name",
+                detail: Some(detail.into()),
+            });
+            continue;
+        }
+        let rel = match e.path().strip_prefix(&dir.path) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(err) => {
+                skipped.push(SkippedEntry {
+                    relative: shown,
+                    reason: "unreadable",
+                    detail: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
+        let f = match dir.read(&rel) {
+            Ok(f) => f,
+            Err(err) => {
+                skipped.push(SkippedEntry {
+                    relative: rel.to_string_lossy().to_string(),
+                    reason: "unreadable",
+                    detail: Some(format!("{}: {}", err.code, err.message)),
+                });
+                continue;
+            }
+        };
+        let meta = match f.metadata() {
+            Ok(m) => m,
+            Err(err) => {
+                skipped.push(SkippedEntry {
+                    relative: rel.to_string_lossy().to_string(),
+                    reason: "unreadable",
+                    detail: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
+        files.push(ScannedFile {
             kind: kind(&rel),
             relative: rel,
-            fingerprint: fingerprint(&f.metadata()?),
+            fingerprint: fingerprint(&meta),
             expected_sha256: None,
         });
     }
-    Ok(result)
+    skipped.sort_by(|a, b| a.relative.cmp(&b.relative));
+    Ok(ScanReport { files, skipped })
+}
+
+/// 兼容旧调用：只要文件列表。要拿到跳过清单请用 [`scan_report`]。
+pub fn scan(root: &Path) -> CoreResult<Vec<ScannedFile>> {
+    Ok(scan_report(root)?.files)
 }
 fn numbered(path: &Path, n: usize) -> PathBuf {
     if n == 0 {
@@ -632,4 +754,56 @@ pub fn write_new(root: &SafeDir, path: &Path, bytes: &[u8]) -> CoreResult<()> {
     })();
     root.cleanup_temp(&tmp, &identity);
     r
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique(tag: &str) -> PathBuf {
+        let n = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("yingxu-scan-{tag}-{n}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn unportable_names_are_skipped_not_fatal() {
+        let dir = unique("colon");
+        std::fs::write(dir.join("ok.jpg"), b"x").unwrap();
+        std::fs::write(dir.join("weird 1:1.jpg"), b"x").unwrap();
+        let report = scan_report(&dir).unwrap();
+        assert_eq!(report.files.len(), 1, "正常文件应被收录");
+        assert_eq!(report.skipped.len(), 1, "含冒号的文件应进跳过清单");
+        assert_eq!(report.skipped[0].reason, "unportable_name");
+        assert!(report.skipped[0].relative.contains(':'));
+        // 旧接口保持"只给文件列表"的语义
+        assert_eq!(scan(&dir).unwrap().len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_skipped_not_fatal() {
+        let dir = unique("symlink");
+        std::fs::write(dir.join("real.jpg"), b"x").unwrap();
+        std::os::unix::fs::symlink(dir.join("real.jpg"), dir.join("link.jpg")).unwrap();
+        let report = scan_report(&dir).unwrap();
+        assert_eq!(report.files.len(), 1);
+        assert!(
+            report
+                .skipped
+                .iter()
+                .any(|s| s.reason == "symlink" && s.relative == "link.jpg"),
+            "符号链接应被跳过并说明原因"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

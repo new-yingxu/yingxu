@@ -97,7 +97,8 @@ impl Engine {
         if let Some(p) = &request.subdirectory {
             fsops::relative(p)?;
         }
-        let mut files = fsops::scan(&request.source)?;
+        let report = fsops::scan_report(&request.source)?;
+        let mut files = report.files;
         if !request.selected.is_empty() {
             for rel in &request.selected {
                 fsops::relative(rel)?;

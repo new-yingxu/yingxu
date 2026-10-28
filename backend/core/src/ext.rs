@@ -8,6 +8,12 @@ use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ScanArg {
+    source: std::path::PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct MediaArg {
     media_id: String,
 }
@@ -58,6 +64,12 @@ struct RunArg {
     /// 仅联调用：覆盖服务端地址（默认取 provider 配置）
     #[serde(default)]
     base_url: Option<String>,
+    /// 并发分片数 1–8；不传则读设置
+    #[serde(default)]
+    max_concurrency: Option<u8>,
+    /// 限速（兆比特/秒）；不传则读设置，0 表示不限速
+    #[serde(default)]
+    max_mbps: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +136,27 @@ impl Engine {
                 self.analyze_video(&a.media_id, a.extract_frames)
             }
             "capabilities.get" => Ok(self.capabilities()),
+            // 与 backup.scan 同样的入参，但会附带「被跳过的条目及原因」。
+            // 前端应该用这个：否则用户只会看到「3 万张只认出 2.9 万张」而不知道为什么。
+            "backup.scanReport" => {
+                const MAX_SKIPPED: usize = 200;
+                let a: ScanArg = decode(p)?;
+                let source = crate::fsops::local_directory(&a.source)?;
+                if self.store.root.starts_with(&source) || source.starts_with(&self.store.root) {
+                    return Err(CoreError::new("APP_DATA_OVERLAP", "不能扫描应用数据目录"));
+                }
+                let report = crate::fsops::scan_report(&source)?;
+                let scanned = report.files.len();
+                let skipped_total = report.skipped.len();
+                let skipped: Vec<_> = report.skipped.into_iter().take(MAX_SKIPPED).collect();
+                Ok(json!({
+                    "files": report.files,
+                    "skipped": skipped,
+                    "scanned": scanned,
+                    "skippedTotal": skipped_total,
+                    "skippedTruncated": skipped_total > MAX_SKIPPED,
+                }))
+            }
             "netdisk.providers" => Ok(self.netdisk_providers()),
             "netdisk.beginAuth" => {
                 let a: ProviderArg = decode(p)?;
@@ -144,7 +177,30 @@ impl Engine {
             "netdisk.tasks" => self.netdisk_tasks(),
             "netdisk.run" => {
                 let a: RunArg = decode(p)?;
-                self.netdisk_run(&a.task_id, a.base_url)
+                let options = match (a.max_concurrency, a.max_mbps) {
+                    (None, None) => None,
+                    (c, m) => {
+                        let mut o = crate::netdisk::UploadOptions::default();
+                        if let Some(c) = c {
+                            o.concurrency = c.clamp(1, 8);
+                        }
+                        if let Some(m) = m {
+                            if !m.is_finite() || m < 0.0 {
+                                return Err(CoreError::new(
+                                    "INVALID_PARAMS",
+                                    "maxMbps 必须是非负有限数",
+                                ));
+                            }
+                            o.max_mbps = m;
+                        }
+                        Some(o)
+                    }
+                };
+                self.netdisk_run(&a.task_id, a.base_url, options)
+            }
+            "netdisk.authPoll" => {
+                let a: ProviderArg = decode(p)?;
+                self.netdisk_auth_poll(&a.provider)
             }
             "netdisk.cancel" => {
                 let a: TaskArg = decode(p)?;

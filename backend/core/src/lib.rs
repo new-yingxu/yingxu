@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod api;
 pub mod db;
 pub mod delivery;
@@ -10,8 +11,10 @@ pub mod transfer;
 pub use engine::{Engine, Worker};
 pub use model::*;
 
-pub mod baidu;
+pub mod file_actions;
 pub mod media;
 pub mod netdisk;
+pub mod netdisk_baidu;
+pub mod quarantine;
 pub mod raw;
 pub mod video;

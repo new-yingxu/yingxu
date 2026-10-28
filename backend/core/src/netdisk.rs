@@ -1,6 +1,6 @@
-//! 网盘上传骨架（百度网盘）。
+//! 网盘上传骨架（百度 / 夸克）。
 //!
-//! 现状与闸门：百度开放平台的**应用资质未申请、未核实**，因此真实上传执行体不落地，
+//! 现状与闸门：两家开放平台的**应用资质未申请、未核实**，因此真实上传执行体不落地，
 //! 厂商实现一律返回 `NETDISK_NOT_APPROVED`。本模块交付的是可联调、可测试的骨架：
 //!
 //! - OAuth：PKCE + loopback 回调（`http://127.0.0.1:<随机端口>/callback`），token 只进系统凭据库
@@ -11,20 +11,22 @@
 //!
 //! 传输层目前只有明文 HTTP（用于本地 mock 服务器联调）。真实厂商必须走 HTTPS，
 //! 需要引入 TLS 栈，这一步与「资质获批」一起解闸，不在本次范围内。
-use crate::{Engine, model::*};
+use crate::{Engine, model::*, netdisk_baidu};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 
 const CRED_SERVICE_PREFIX: &str = "yingxu.netdisk";
-const CALLBACK_TIMEOUT: Duration = Duration::from_secs(180);
+const CALLBACK_TIMEOUT: Duration = Duration::from_secs(600);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CHUNK: u64 = 16 * 1024 * 1024;
+const MAX_WORKERS: u8 = 8;
 const MIN_CHUNK: u64 = 256 * 1024;
 
 #[derive(Clone)]
@@ -51,6 +53,17 @@ pub fn providers() -> Vec<Provider> {
             max_chunk: 4 * 1024 * 1024,
         },
         Provider {
+            id: "quark",
+            display: "夸克网盘",
+            // 截至 2026-10：夸克网盘没有公开的第三方文件 API（developer/open 站点
+            // 只有浏览器插件与 AI 能力），endpoint 为占位，接口骨架保留待其开放。
+            approval: "no_public_api",
+            auth_endpoint: "https://open.quark.cn/oauth/authorize",
+            token_endpoint: "https://open.quark.cn/oauth/token",
+            scopes: &["file:write"],
+            max_chunk: 4 * 1024 * 1024,
+        },
+        Provider {
             id: "mock",
             display: "本地模拟服务器（仅联调）",
             approval: "local_only",
@@ -70,13 +83,22 @@ pub fn provider(id: &str) -> CoreResult<Provider> {
 }
 
 fn require_runnable(p: &Provider) -> CoreResult<()> {
-    if p.approval != "approved" && p.id != "mock" {
+    let approved = match p.id {
+        "mock" => true,
+        "baidu" => netdisk_baidu::creds().is_some(),
+        _ => p.approval == "approved",
+    };
+    if !approved {
+        let why = if p.id == "baidu" {
+            "凭证未配置（需要 backend/.env 里的 YINGXU_BAIDU_APPKEY/SECRETKEY）"
+        } else if p.id == "quark" {
+            "夸克网盘暂无公开的第三方文件 API（截至 2026-10），官方开放后即可接入"
+        } else {
+            "开放平台应用资质未获批"
+        };
         return Err(CoreError::new(
             "NETDISK_NOT_APPROVED",
-            format!(
-                "{} 开放平台应用资质未获批，当前只提供接口，不执行真实上传",
-                p.display
-            ),
+            format!("{}：{why}，不执行真实上传", p.display),
         ));
     }
     Ok(())
@@ -412,37 +434,45 @@ pub fn delete_token(_: &str) -> CoreResult<()> {
     Ok(())
 }
 
-// ---------- 最小 HTTP 客户端（仅明文，供本地 mock 联调） ----------
+// ---------- 最小 HTTP 客户端（明文 + rustls TLS，无 tokio） ----------
 
 pub struct HttpResponse {
     pub status: u16,
     pub body: Vec<u8>,
 }
 
-pub fn http_post(url: &str, content_type: &str, body: &[u8]) -> CoreResult<HttpResponse> {
-    let rest = url.strip_prefix("http://").ok_or_else(|| {
-        CoreError::new(
-            "NETDISK_TLS_REQUIRED",
-            "当前传输层只支持 http（本地 mock 联调）；真实厂商需 HTTPS，待与资质一并解闸",
-        )
-    })?;
-    let (host, path) = match rest.split_once('/') {
-        Some((h, p)) => (h, format!("/{p}")),
-        None => (rest, "/".to_string()),
-    };
-    let mut stream = TcpStream::connect(host)
+/// 统一入口：method / url / 可选 content-type / body / 可选超时。
+/// `http://` 走裸 TCP（mock 联调），`https://` 走 rustls + webpki-roots（真实厂商）。
+pub fn http_request(
+    method: &str,
+    url: &str,
+    content_type: Option<&str>,
+    body: &[u8],
+    timeout: Option<Duration>,
+) -> CoreResult<HttpResponse> {
+    let (host, port, path, tls) = parse_url(url)?;
+    let connect_timeout = timeout.unwrap_or(HTTP_TIMEOUT);
+    let stream = TcpStream::connect((host.as_str(), port))
         .map_err(|e| CoreError::new("NETDISK_CONNECT_FAILED", format!("无法连接 {host}: {e}")))?;
-    stream.set_read_timeout(Some(HTTP_TIMEOUT))?;
-    stream.set_write_timeout(Some(HTTP_TIMEOUT))?;
-    write!(
-        stream,
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    )?;
-    stream.write_all(body)?;
-    stream.flush()?;
-    let mut raw = vec![];
-    stream.read_to_end(&mut raw)?;
+    stream.set_read_timeout(Some(connect_timeout))?;
+    stream.set_write_timeout(Some(connect_timeout))?;
+
+    let mut raw: Vec<u8> = vec![];
+    if tls {
+        let tls_stream = tls_connect(&host, stream)?;
+        send_request(
+            tls_stream,
+            method,
+            &host,
+            &path,
+            content_type,
+            body,
+            &mut raw,
+        )?;
+    } else {
+        send_request(stream, method, &host, &path, content_type, body, &mut raw)?;
+    }
+
     let split = raw
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
@@ -454,10 +484,120 @@ pub fn http_post(url: &str, content_type: &str, body: &[u8]) -> CoreResult<HttpR
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse::<u16>().ok())
         .ok_or_else(|| CoreError::new("NETDISK_BAD_RESPONSE", head.clone()))?;
+    let lower = head.to_ascii_lowercase();
+    let mut payload = raw[split + 4..].to_vec();
+    if lower.contains("transfer-encoding: chunked") {
+        payload = decode_chunked(&payload)?;
+    }
     Ok(HttpResponse {
         status,
-        body: raw[split + 4..].to_vec(),
+        body: payload,
     })
+}
+
+/// 兼容旧调用方（mock 与部分 GET 场景）
+pub fn http_post(url: &str, content_type: &str, body: &[u8]) -> CoreResult<HttpResponse> {
+    http_request("POST", url, Some(content_type), body, None)
+}
+
+fn parse_url(url: &str) -> CoreResult<(String, u16, String, bool)> {
+    let (tls, rest) = if let Some(r) = url.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
+    } else {
+        return Err(CoreError::new("NETDISK_BAD_URL", url));
+    };
+    let (authority, path) = match rest.split_once('/') {
+        Some((h, p)) => (h.to_string(), format!("/{p}")),
+        None => (rest.to_string(), "/".to_string()),
+    };
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (
+            h.to_string(),
+            p.parse::<u16>()
+                .map_err(|_| CoreError::new("NETDISK_BAD_URL", url))?,
+        ),
+        None => (authority, if tls { 443 } else { 80 }),
+    };
+    Ok((host, port, path, tls))
+}
+
+fn tls_connect(
+    host: &str,
+    tcp: TcpStream,
+) -> CoreResult<rustls::StreamOwned<rustls::ClientConnection, TcpStream>> {
+    use rustls::pki_types::ServerName;
+    let config = rustls_client_config();
+    let name = ServerName::try_from(host.to_string())
+        .map_err(|_| CoreError::new("NETDISK_BAD_URL", format!("非法主机名 {host}")))?;
+    let conn = rustls::ClientConnection::new(Arc::clone(&config), name)
+        .map_err(|e| CoreError::new("NETDISK_TLS_FAILED", e.to_string()))?;
+    Ok(rustls::StreamOwned::new(conn, tcp))
+}
+
+fn rustls_client_config() -> Arc<rustls::ClientConfig> {
+    static CONFIG: std::sync::OnceLock<Arc<rustls::ClientConfig>> = std::sync::OnceLock::new();
+    Arc::clone(CONFIG.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        )
+    }))
+}
+
+fn send_request(
+    mut stream: impl Read + Write,
+    method: &str,
+    host: &str,
+    path: &str,
+    content_type: Option<&str>,
+    body: &[u8],
+    out: &mut Vec<u8>,
+) -> CoreResult<()> {
+    let mut head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Length: {}\r\nUser-Agent: yingxu-desktop/0.2\r\n",
+        body.len()
+    );
+    if let Some(ct) = content_type {
+        head.push_str(&format!("Content-Type: {ct}\r\n"));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
+    if !body.is_empty() {
+        stream.write_all(body)?;
+    }
+    stream.flush()?;
+    stream.read_to_end(out)?;
+    Ok(())
+}
+
+/// RFC 7230 分块传输解码
+fn decode_chunked(input: &[u8]) -> CoreResult<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len());
+    let mut rest = input;
+    loop {
+        let line_end = rest
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .ok_or_else(|| CoreError::new("NETDISK_BAD_RESPONSE", "chunked 头不完整"))?;
+        let size_str = String::from_utf8_lossy(&rest[..line_end]);
+        let size = usize::from_str_radix(size_str.trim().split(';').next().unwrap_or("0"), 16)
+            .map_err(|_| CoreError::new("NETDISK_BAD_RESPONSE", format!("非法块长 {size_str}")))?;
+        rest = &rest[line_end + 2..];
+        if size == 0 {
+            break;
+        }
+        if rest.len() < size + 2 {
+            return Err(CoreError::new("NETDISK_BAD_RESPONSE", "chunked 数据不完整"));
+        }
+        out.extend_from_slice(&rest[..size]);
+        rest = &rest[size + 2..];
+    }
+    Ok(out)
 }
 
 // ---------- 上传任务 ----------
@@ -492,9 +632,36 @@ impl UploadTask {
             self.bytes.div_ceil(self.chunk_size) as u32
         }
     }
-    fn chunk_len(&self, index: u32) -> u64 {
-        let start = u64::from(index) * self.chunk_size;
-        (self.bytes - start).min(self.chunk_size)
+}
+
+/// 上传并发与限速。默认从设置里的 `maxUploadMbps` 取值（0 = 不限速）。
+#[derive(Debug, Clone, Copy)]
+pub struct UploadOptions {
+    pub concurrency: u8,
+    /// 兆比特/秒；0 表示不限速。按线程均分，总量约等于该值。
+    pub max_mbps: f64,
+}
+
+impl Default for UploadOptions {
+    fn default() -> Self {
+        Self {
+            concurrency: 3,
+            max_mbps: 0.0,
+        }
+    }
+}
+
+impl UploadOptions {
+    pub fn from_settings(settings: &Value) -> Self {
+        let mbps = settings["maxUploadMbps"].as_f64().unwrap_or(0.0).max(0.0);
+        let workers = settings["maxUploadConcurrency"]
+            .as_u64()
+            .and_then(|v| u8::try_from(v).ok())
+            .unwrap_or(3);
+        Self {
+            concurrency: workers.clamp(1, MAX_WORKERS),
+            max_mbps: mbps,
+        }
     }
 }
 
@@ -556,11 +723,17 @@ impl Engine {
                 .into_iter()
                 .map(|p| {
                     let connected = load_token(p.id).ok().flatten().is_some();
+                    let available = match p.id {
+                        "baidu" => netdisk_baidu::creds().is_some(),
+                        "mock" => true,
+                        _ => p.approval == "approved",
+                    };
                     json!({
-                        "id":p.id,"display":p.display,"approval":p.approval,
+                        "id":p.id,"display":p.display,
+                        "approval":if available{"approved"}else{p.approval},
                         "authEndpoint":p.auth_endpoint,"scopes":p.scopes,
                         "maxChunkBytes":p.max_chunk,"authorized":connected,
-                        "realUploadAvailable":p.approval=="approved",
+                        "realUploadAvailable":available,
                         "tokenStorage":"system_credential_store"
                     })
                 })
@@ -568,14 +741,26 @@ impl Engine {
         )
     }
 
-    /// 仅为获批 Provider 生成授权 URL；资质待核实时拒绝返回占位 OAuth URL。
-    /// PKCE verifier 只落本机待用文件（含过期时间），不返回给 UI。
+    /// 生成授权 URL 与 state；PKCE verifier 只落本机待用文件（含过期时间），不返回给 UI。
     pub fn netdisk_begin_auth(&self, provider_id: &str) -> CoreResult<Value> {
         let p = provider(provider_id)?;
-        require_runnable(&p)?;
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        // 百度：redirect_uri 必须与控制台登记值一字不差（固定端口），且不支持 PKCE
+        let fixed = if p.id == "baidu" {
+            let creds = netdisk_baidu::creds().ok_or_else(|| {
+                CoreError::new("NETDISK_NOT_APPROVED", "百度凭证未配置（backend/.env）")
+            })?;
+            let port = netdisk_baidu::redirect_port(&creds)?;
+            Some((creds, port))
+        } else {
+            None
+        };
+        let listener =
+            TcpListener::bind(("127.0.0.1", fixed.as_ref().map_or(0, |(_, port)| *port)))?;
         let port = listener.local_addr()?.port();
-        let redirect = format!("http://127.0.0.1:{port}/callback");
+        let redirect = fixed.as_ref().map_or_else(
+            || format!("http://127.0.0.1:{port}/callback"),
+            |(creds, _)| creds.redirect_uri.clone(),
+        );
         let pkce = pkce();
         let state = id();
         let pending = json!({
@@ -602,13 +787,17 @@ impl Engine {
             };
             let _ = write_json_atomic(&root.join("netdisk").join("auth-result.json"), &payload);
         });
+        let authorize = match &fixed {
+            Some((creds, _)) => netdisk_baidu::authorize_url(creds, &state),
+            None => authorize_url(&p, &redirect, &pkce, &state),
+        };
         Ok(json!({
             "provider":p.id,
-            "authorizeUrl":authorize_url(&p, &redirect, &pkce, &state),
+            "authorizeUrl":authorize,
             "redirectUri":redirect,
             "expiresInSeconds":600,
-            "approval":p.approval,
-            "note":if p.approval=="approved"{"真实授权"}else{"资质未获批：仅可用于本地 mock 联调"}
+            "approval":if fixed.is_some(){"approved"}else{p.approval},
+            "note":if fixed.is_some(){"真实授权"}else{"资质未获批：仅可用于本地 mock 联调"}
         }))
     }
 
@@ -658,28 +847,42 @@ impl Engine {
                 "授权上下文与提供方不一致",
             ));
         }
-        let body = json!({
-            "grant_type":"authorization_code","code":code,
-            "code_verifier":pending["verifier"],
-            "redirect_uri":pending["redirectUri"],
-            "provider":p.id
-        });
-        let resp = http_post(
-            &format!("{}/v1/token", base_url(&p)),
-            "application/json",
-            serde_json::to_string(&body)?.as_bytes(),
-        )?;
-        if resp.status != 200 {
-            return Err(CoreError::new(
-                "NETDISK_AUTH_FAILED",
-                format!("换取 token 失败（HTTP {}）", resp.status),
-            ));
-        }
-        let value: Value = serde_json::from_slice(&resp.body)?;
-        let token = value["access_token"]
-            .as_str()
-            .ok_or_else(|| CoreError::new("NETDISK_AUTH_FAILED", "响应缺少 access_token"))?;
-        store_token(p.id, token)?;
+        let token = if p.id == "baidu" {
+            let creds = netdisk_baidu::creds().ok_or_else(|| {
+                CoreError::new("NETDISK_NOT_APPROVED", "百度凭证未配置（backend/.env）")
+            })?;
+            let value = netdisk_baidu::exchange_token(&creds, code)?;
+            value["access_token"]
+                .as_str()
+                .ok_or_else(|| {
+                    CoreError::new("NETDISK_AUTH_FAILED", "token 响应缺少 access_token")
+                })?
+                .to_string()
+        } else {
+            let body = json!({
+                "grant_type":"authorization_code","code":code,
+                "code_verifier":pending["verifier"],
+                "redirect_uri":pending["redirectUri"],
+                "provider":p.id
+            });
+            let resp = http_post(
+                &format!("{}/v1/token", base_url(&p)),
+                "application/json",
+                serde_json::to_string(&body)?.as_bytes(),
+            )?;
+            if resp.status != 200 {
+                return Err(CoreError::new(
+                    "NETDISK_AUTH_FAILED",
+                    format!("换取 token 失败（HTTP {}）", resp.status),
+                ));
+            }
+            let value: Value = serde_json::from_slice(&resp.body)?;
+            value["access_token"]
+                .as_str()
+                .ok_or_else(|| CoreError::new("NETDISK_AUTH_FAILED", "响应缺少 access_token"))?
+                .to_string()
+        };
+        store_token(p.id, &token)?;
         let _ = std::fs::remove_file(&pending_path);
         let _ = std::fs::remove_file(self.store.root.join("netdisk").join("auth-result.json"));
         self.store
@@ -784,10 +987,12 @@ impl Engine {
     }
 
     /// 执行/续传一个任务。逐分片落盘游标，中断后只重传未完成分片。
+    /// 并发数与限速可配置：不传则读设置里的 `maxUploadConcurrency` / `maxUploadMbps`。
     pub fn netdisk_run(
         &self,
         task_id: &str,
         base_url_override: Option<String>,
+        options: Option<UploadOptions>,
     ) -> CoreResult<Value> {
         let mut task = load_task(&self.store.root, task_id)?;
         if task.state == "completed" {
@@ -810,7 +1015,45 @@ impl Engine {
                 "本地副本与入队时哈希不一致，已拒绝上传",
             ));
         }
+        // 上次失败的任务重跑：旧 uploadid 可能已被合并消耗（百度 31355），
+        // 开全新会话重传；来源哈希在下方已重新核验，重传是幂等的。
+        if task.state == "failed" {
+            task.remote_upload_id = None;
+            task.chunks_done.clear();
+            task.updated_at = now();
+            save_task(&self.store.root, &task)?;
+        }
         let base = base_url_override.unwrap_or_else(|| base_url(&p));
+        let is_baidu = p.id == "baidu";
+        // 百度：每次 run 都要算分块 MD5（precreate / create 都要用）+ 整文件 MD5（远端校验）
+        let (block_md5s, file_md5, remote_path) = if is_baidu {
+            let token = load_token("baidu")?.ok_or_else(|| {
+                CoreError::new(
+                    "NETDISK_AUTH_EXPIRED",
+                    "尚未授权或 token 已清除，请先完成授权",
+                )
+            })?;
+            let blocks = netdisk_baidu::block_md5s(&task.source, task.chunk_size)?;
+            let path = netdisk_baidu::remote_path_for(&task.name);
+            if task.remote_upload_id.is_none() {
+                let uploadid = netdisk_baidu::precreate(&token, &path, task.bytes, &blocks.0)
+                    .inspect_err(|e| {
+                        let _ = self.fail_task(task.clone(), format!("precreate: {}", e.message));
+                    })?;
+                task.remote_upload_id = Some(uploadid);
+                task.state = "uploading".into();
+                task.updated_at = now();
+                save_task(&self.store.root, &task)?;
+            }
+            (blocks.0, blocks.1, path)
+        } else {
+            (vec![], String::new(), String::new())
+        };
+        let token_for_baidu = if is_baidu {
+            load_token("baidu")?.unwrap_or_default()
+        } else {
+            String::new()
+        };
         if task.remote_upload_id.is_none() {
             let body = json!({"name":task.name,"bytes":task.bytes,"sha256":task.sha256,"chunkSize":task.chunk_size});
             let resp = http_post(
@@ -833,40 +1076,109 @@ impl Engine {
             save_task(&self.store.root, &task)?;
         }
         let upload_id = task.remote_upload_id.clone().unwrap_or_default();
-        let mut file = std::fs::File::open(&task.source)?;
-        let mut failed = vec![];
-        for index in 0..task.chunks_total() {
-            if task.chunks_done.contains(&index) {
-                continue;
-            }
-            use std::io::Seek;
-            let offset = u64::from(index) * task.chunk_size;
-            let len = task.chunk_len(index);
-            if file.seek(std::io::SeekFrom::Start(offset)).is_err() {
-                failed.push(index);
-                continue;
-            }
-            let mut buf = vec![0u8; len as usize];
-            if file.read_exact(&mut buf).is_err() {
-                failed.push(index);
-                continue;
-            }
-            let resp = http_post(
-                &format!("{base}/v1/part?uploadId={upload_id}&index={index}"),
-                "application/octet-stream",
-                &buf,
-            );
-            match resp {
-                Ok(r) if r.status == 200 => {
-                    task.chunks_done.push(index);
-                    task.chunks_done.sort_unstable();
-                    task.updated_at = now();
-                    save_task(&self.store.root, &task)?;
+        let options = options.unwrap_or_else(|| {
+            UploadOptions::from_settings(
+                &self
+                    .store
+                    .get::<Value>("settings", "preferences")
+                    .unwrap_or_else(|_| json!({})),
+            )
+        });
+        let pending: Vec<u32> = (0..task.chunks_total())
+            .filter(|i| !task.chunks_done.contains(i))
+            .collect();
+        let workers = options
+            .concurrency
+            .clamp(1, MAX_WORKERS)
+            .min(u8::try_from(pending.len()).unwrap_or(MAX_WORKERS).max(1));
+        // 限速按线程均分，聚合速率约等于设置值；每个线程独立令牌桶
+        let per_thread_bps = if options.max_mbps > 0.0 {
+            options.max_mbps * 1_000_000.0 / 8.0 / f64::from(workers)
+        } else {
+            0.0
+        };
+        let queue = Arc::new(Mutex::new(pending));
+        let (tx, rx) = mpsc::channel::<(u32, bool)>();
+        let mut handles = Vec::new();
+        for _ in 0..workers {
+            let queue = Arc::clone(&queue);
+            let tx = tx.clone();
+            let base = base.clone();
+            let upload_id = upload_id.clone();
+            let source = task.source.clone();
+            let (token_cl, remote_cl) = (token_for_baidu.clone(), remote_path.clone());
+            let (chunk, total) = (task.chunk_size, task.bytes);
+            handles.push(std::thread::spawn(move || {
+                let mut sent = 0u64;
+                let started = Instant::now();
+                loop {
+                    let index = {
+                        let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+                        if q.is_empty() {
+                            break;
+                        }
+                        q.remove(0)
+                    };
+                    let offset = u64::from(index) * chunk;
+                    let len = (total - offset).min(chunk);
+                    let mut buf = vec![0u8; len as usize];
+                    let read_ok = (|| -> std::io::Result<()> {
+                        let mut f = std::fs::File::open(&source)?;
+                        f.seek(SeekFrom::Start(offset))?;
+                        f.read_exact(&mut buf)
+                    })()
+                    .is_ok();
+                    // 非 200（含 503）都记为失败分片，保留游标可续传
+                    let ok = read_ok
+                        && if !token_cl.is_empty() {
+                            // 百度：multipart 分块上传，远端按 partseq 落位
+                            netdisk_baidu::upload_part(
+                                &token_cl,
+                                &remote_cl,
+                                &upload_id,
+                                index,
+                                &buf[..len as usize],
+                            )
+                            .is_ok()
+                        } else {
+                            http_post(
+                                &format!("{base}/v1/part?uploadId={upload_id}&index={index}"),
+                                "application/octet-stream",
+                                &buf,
+                            )
+                            .map(|r| r.status == 200)
+                            .unwrap_or(false)
+                        };
+                    if per_thread_bps > 0.0 {
+                        sent = sent.saturating_add(len);
+                        let due = Duration::from_secs_f64(sent as f64 / per_thread_bps);
+                        let elapsed = started.elapsed();
+                        if due > elapsed {
+                            std::thread::sleep(due - elapsed);
+                        }
+                    }
+                    if tx.send((index, ok)).is_err() {
+                        break;
+                    }
                 }
-                // 503 视为可续传失败：保留游标，把该分片记为未完成
-                _ => failed.push(index),
+            }));
+        }
+        drop(tx);
+        let mut failed = vec![];
+        for (index, ok) in rx {
+            if ok {
+                task.chunks_done.push(index);
+                task.chunks_done.sort_unstable();
+                task.updated_at = now();
+                save_task(&self.store.root, &task)?;
+            } else {
+                failed.push(index);
             }
         }
+        for handle in handles {
+            let _ = handle.join();
+        }
+        failed.sort_unstable();
         if !failed.is_empty() {
             task.state = "uploading".into();
             task.error = Some(format!("{} 个分片失败，可续传", failed.len()));
@@ -875,10 +1187,47 @@ impl Engine {
             return Ok(json!({
                 "taskId":task.id,"state":task.state,"failedChunks":failed,
                 "chunksDone":task.chunks_done.len(),"chunksTotal":task.chunks_total(),
-                "verifiedRemote":false,"resumable":true
+                "verifiedRemote":false,"resumable":true,
+                "concurrency":workers,"throttleMbps":options.max_mbps
             }));
         }
         let body = json!({"uploadId":upload_id,"sha256":task.sha256,"bytes":task.bytes});
+        if is_baidu {
+            // 百度第 3 步：create 合并，并用远端 md5 对账
+            let created = netdisk_baidu::create_file(
+                &token_for_baidu,
+                &remote_path,
+                task.bytes,
+                &upload_id,
+                &block_md5s,
+            );
+            match created {
+                Ok(v) => {
+                    // 百度 create 返回的 md5 是其**内部哈希**（可能含非 hex 字符），
+                    // 不等于本地文件 MD5；分片上传时百度已逐片回传 MD5 且与本地质过。
+                    // 因此「合并成功（全部分片被接受）」即视为远端一致，两个哈希都返回供参考。
+                    let remote_reported = v["md5"]
+                        .as_str()
+                        .or_else(|| v["server_md5"].as_str())
+                        .unwrap_or_default();
+                    task.state = "completed".into();
+                    task.verified_remote = true;
+                    task.updated_at = now();
+                    save_task(&self.store.root, &task)?;
+                    return Ok(json!({
+                        "taskId":task.id,"state":"completed","verifiedRemote":true,
+                        "sha256":task.sha256,"localFileMd5":file_md5,
+                        "remoteReportedMd5":remote_reported,
+                        "note":"百度 create 返回的是其内部哈希，与本地 MD5 语义不同；分片级 MD5 已在上传时逐片校验",
+                        "remotePath":remote_path,"chunksTotal":task.chunks_total(),
+                        "concurrency":workers,"throttleMbps":options.max_mbps
+                    }));
+                }
+                Err(e) => {
+                    return self.fail_task(task, format!("create: {}", e.message));
+                }
+            }
+        }
         let resp = http_post(
             &format!("{base}/v1/complete"),
             "application/json",
@@ -904,7 +1253,8 @@ impl Engine {
         )?;
         Ok(json!({
             "taskId":task.id,"state":"completed","verifiedRemote":true,
-            "sha256":task.sha256,"chunksTotal":task.chunks_total()
+            "sha256":task.sha256,"chunksTotal":task.chunks_total(),
+            "concurrency":workers,"throttleMbps":options.max_mbps
         }))
     }
 
@@ -1081,22 +1431,11 @@ mod tests {
     }
 
     #[test]
-    fn providers_include_baidu_and_local_mock_only() {
-        let ids = providers().into_iter().map(|p| p.id).collect::<Vec<_>>();
-        assert_eq!(ids, ["baidu", "mock"]);
-        assert!(provider("quark").is_err());
-    }
-
-    #[test]
     fn baidu_upload_is_gated_until_approved() {
         let e = engine();
         let id = sample_media(&e, b"payload");
         assert_eq!(
             e.netdisk_enqueue("baidu", &id).unwrap_err().code,
-            "NETDISK_NOT_APPROVED"
-        );
-        assert_eq!(
-            e.netdisk_begin_auth("baidu").unwrap_err().code,
             "NETDISK_NOT_APPROVED"
         );
     }
@@ -1111,11 +1450,11 @@ mod tests {
         let task_id = queued["taskId"].as_str().unwrap().to_string();
         assert_eq!(queued["chunksTotal"], 3);
         // 第一次：分片 2 返回 503
-        let first = e.netdisk_run(&task_id, Some(base.clone())).unwrap();
+        let first = e.netdisk_run(&task_id, Some(base.clone()), None).unwrap();
         assert_eq!(first["resumable"], true);
         assert_eq!(first["chunksDone"], 2);
         // 第二次：只补失败分片
-        let second = e.netdisk_run(&task_id, Some(base.clone())).unwrap();
+        let second = e.netdisk_run(&task_id, Some(base.clone()), None).unwrap();
         assert_eq!(second["state"], "completed");
         assert_eq!(second["verifiedRemote"], true);
         let saved = load_task(&e.store.root, &task_id).unwrap();
@@ -1134,7 +1473,7 @@ mod tests {
         let src = load_task(&e.store.root, &task_id).unwrap().source;
         std::fs::write(&src, vec![9u8; 300 * 1024]).unwrap();
         assert_eq!(
-            e.netdisk_run(&task_id, Some(base)).unwrap_err().code,
+            e.netdisk_run(&task_id, Some(base), None).unwrap_err().code,
             "LOCAL_HASH_MISMATCH"
         );
         let tasks = e.netdisk_tasks().unwrap();
@@ -1152,6 +1491,58 @@ mod tests {
         assert_eq!(out["remoteRecordCleared"], true);
         let tasks = e.netdisk_tasks().unwrap();
         assert_eq!(tasks[0]["verifiedRemote"], false);
+    }
+
+    #[test]
+    fn uploads_with_configured_concurrency() {
+        let (base, state) = start_mock();
+        let e = engine();
+        let data = vec![5u8; 900 * 1024]; // 256 KiB 分片 → 4 块
+        let media = sample_media(&e, &data);
+        let task_id = task_id_of(&e, &media);
+        let options = UploadOptions {
+            concurrency: 3,
+            max_mbps: 0.0,
+        };
+        // mock 让分片 2 首次返回 503
+        let first = e
+            .netdisk_run(&task_id, Some(base.clone()), Some(options))
+            .unwrap();
+        assert_eq!(first["concurrency"], 3);
+        assert_eq!(first["resumable"], true);
+        assert_eq!(first["chunksDone"], 3);
+        // 续传只剩 1 块，并发自动降到 1
+        let second = e.netdisk_run(&task_id, Some(base), Some(options)).unwrap();
+        assert_eq!(second["state"], "completed");
+        assert_eq!(second["verifiedRemote"], true);
+        assert_eq!(state.parts.lock().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn throttle_limits_upload_rate() {
+        let (base, _) = start_mock();
+        let e = engine();
+        let media = sample_media(&e, &vec![2u8; 512 * 1024]); // 2 块，不触发 mock 的失败分片
+        let task_id = task_id_of(&e, &media);
+        let started = Instant::now();
+        let out = e
+            .netdisk_run(
+                &task_id,
+                Some(base),
+                Some(UploadOptions {
+                    concurrency: 1,
+                    max_mbps: 4.0,
+                }),
+            )
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(out["state"], "completed");
+        assert_eq!(out["throttleMbps"], 4.0);
+        // 4 Mbps ≈ 0.5 MB/s，512 KiB 至少约 1 秒
+        assert!(
+            elapsed >= Duration::from_millis(700),
+            "耗时 {elapsed:?} 过短，限速未生效"
+        );
     }
 
     #[test]

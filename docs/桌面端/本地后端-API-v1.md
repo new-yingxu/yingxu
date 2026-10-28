@@ -95,3 +95,20 @@ Tauri 主窗口通过 `backend_request` 调用；目录须先通过原生 `selec
 约束：`netdisk.*` 中百度/夸克在资质获批前恒返回 `NETDISK_NOT_APPROVED`（`mock` 仅供本地联调用）；
 视频抽帧依赖本机 ffmpeg，缺失只出元数据；RAW 只做内嵌预览，不做显影。
 前端 `DesktopApi` 与 Mock 尚未接这些方法，仍由桌面集成会话决定接入节奏。
+
+## 追加方法（2026-10-26，与上节同一分支）
+
+| 方法 | 参数 / 返回 |
+|---|---|
+| `backup.scanReport` | `{source}` → `{files, skipped[], scanned, skippedTotal, skippedTruncated}`；`skipped[].reason` 为 `unportable_name` / `symlink` / `unreadable`。与 `backup.scan` 同入参，**推荐前端改用这个** |
+
+行为变更（2026-10-26）：
+
+- `backup.scan` / `library.index` / 预览不再因为「目录里存在一个含 `:` 的文件名」或「存在符号链接」
+  而整体失败：这些条目改为**跳过并逐条报告**，其余文件照常处理。
+  `library.index` 的返回值新增 `skippedCount` 与 `skipped`（最多 20 条）。
+- `video.analyze` 的 `frameSource` 可能是 `ffmpeg_keyframe_seek`（全部落在关键帧）/
+  `ffmpeg_keyframe_then_nearest`（部分回退）/ `ffmpeg_stream_seek`（全部回退）；
+  每帧信号新增 `frameMode: keyframe | nearest | embedded_cover`。
+- `library.analyzeRaw` 的 `exifStatus` 新增 `selected_fields_read_cmt`（CR3 的 CMT1/CMT2 盒）；
+  CR3 样本常见 `timestampSource=tiff_datetime`（来自 IFD0 0x0132，非快门时间），另有 `ifdDateTime` 字段。

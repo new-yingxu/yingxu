@@ -18,7 +18,10 @@ impl Engine {
         if source.starts_with(&self.store.root) || self.store.root.starts_with(&source) {
             return Err(CoreError::new("APP_DATA_OVERLAP", "不能索引应用数据目录"));
         }
-        let files = fsops::scan(&source)?;
+        let report = fsops::scan_report(&source)?;
+        let skipped_count = report.skipped.len();
+        let skipped_sample: Vec<_> = report.skipped.iter().take(20).cloned().collect();
+        let files = report.files;
         let mut c = self.store.connect()?;
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut changed = 0;
@@ -50,7 +53,14 @@ impl Engine {
             tx.execute("DELETE FROM media_derivatives WHERE media_id=?1", [key])?;
         }
         tx.commit()?;
-        Ok(json!({"files":files.len(),"changed":changed,"sourceReadOnly":true,"copyStarted":false}))
+        Ok(json!({
+            "files":files.len(),
+            "changed":changed,
+            "sourceReadOnly":true,
+            "copyStarted":false,
+            "skippedCount":skipped_count,
+            "skipped":skipped_sample
+        }))
     }
     pub fn analyze_photo(&self, media_id: &str) -> CoreResult<Value> {
         let c = self.store.connect()?;

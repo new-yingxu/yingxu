@@ -38,3 +38,24 @@
 
 - `desktop-ui-v1/`：保留的 V1 草稿源码快照，供回看和比较。
 - `desktop-ui/`：V2 草稿预览，后续修改以此目录为准。
+
+## V2 联调 R1（2026-10-26）
+
+- 原生窗口使用 `createTauriApi`，统一通过 `backend_request` 和 `select_directory`；IPC 失败保持真实失败，不能退成 mock。
+- 普通浏览器仍是明确标识的 MockDesktopApi 预览，不读取真实磁盘。
+- 已接入来源扫描/索引、预检后确认、任务轮询/事件、历史/设置/预设、照片/RAW 分派与视频分析、缩略图、报告、审计/恢复、交付任务。
+- 云端登录/Agent/账号未连接时明确报错。真实登录门禁保留；原生开发模式有独立的“本地联调工作区”，不创建云端会话，生产构建没有此入口。
+- 网盘资质未获批时不显示真实连接按钮；排队不等同完成。
+
+验证：
+
+```sh
+pnpm build
+pnpm verify:adapter
+```
+
+`verify:adapter` 使用现有 `../backend/target/debug/yingxu-core`，不构建/修改后端。当前验证脚本使用 Mac 上的 `/opt/homebrew/bin/ffmpeg` 生成隔离 PNG/MP4 样本，输出保留在本地 `evidence/`（已忽略）。目录选择使用注入的固定临时路径，**不代表原生目录选择器/真实 IPC 已验收**。
+
+`tests/browser-harness.html` 与 `browser-fixture-server.mjs` 是开发专用隔离联调工具，不在生产 HTML 入口中打包。测试服务仅监听 loopback、限定来源和临时文件夹，并使用短时随机令牌；测试结束应关闭服务、移除会话令牌文件。
+
+详细证据、原生验收限制和给后端负责人的具体需求见 `../docs/桌面端/前后端联调-R1-2026-10-26.md`。

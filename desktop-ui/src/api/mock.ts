@@ -1,4 +1,5 @@
-import type { AppSettings, ArchiveTask, AuditResult, AgentReply, DeliveryPackage, DesktopApi, Device, MediaFile, NamePreset, TaskState, UserSession } from './contracts'
+import type { AppSettings, ArchiveTask, AuditResult, AgentReply, DeliveryPackage, DesktopApi, Device, MediaFile, NamePreset, TaskState, UserSession, QuarantineItem } from './contracts'
+import type { LocalFileActionPreview, LocalFileActionReceipt } from './local-file-actions'
 
 const delay = (ms = 140) => new Promise(resolve => setTimeout(resolve, ms))
 const fileData: MediaFile[] = [
@@ -11,8 +12,8 @@ const fileData: MediaFile[] = [
 ]
 const taskData: ArchiveTask[] = [
   { id: 'YX-20250422-014', name: '春日人像 · 本地备份', state: 'running', createdAt: '今天 09:41', files: 1248, size: '42.8 GB', progress: 72, speed: '186 MB/s', phase: 'SHA-256 校验', source: 'SD_CARD/DCIM', destinations: [{ id: 'local', name: 'Mac Studio / 摄影归档', state: 'running', progress: 72 }] },
-  { id: 'YX-20250421-009', name: '山野纪行 · 年度整理', state: 'success', createdAt: '昨天 16:28', files: 842, size: '28.4 GB', progress: 100, speed: '—', phase: '已完成', source: 'CFexpress/PRIVATE', destinations: [{ id: 'local', name: '本机硬盘', state: 'success', progress: 100 }] },
-  { id: 'YX-20250419-003', name: '城市漫步 · 副本同步', state: 'partial', createdAt: '4 月 19 日', files: 324, size: '12.1 GB', progress: 100, speed: '—', phase: '部分完成', source: '移动硬盘/DCIM', destinations: [{ id: 'local', name: '本机硬盘', state: 'success', progress: 100 }, { id: 'baidu', name: '百度网盘', state: 'failed', progress: 46, error: '开放平台应用权限待完成' }] },
+  { id: 'YX-20250421-009', name: '山野纪行 · 年度整理', state: 'success', createdAt: '昨天 16:28', files: 842, size: '28.4 GB', progress: 100, speed: '—', phase: '已完成', source: 'CFexpress/PRIVATE', destinations: [{ id: 'local', name: '本机硬盘', state: 'success', progress: 100 }, { id: 'baidu', name: '百度网盘', state: 'success', progress: 100 }] },
+  { id: 'YX-20250419-003', name: '城市漫步 · 副本同步', state: 'partial', createdAt: '4 月 19 日', files: 324, size: '12.1 GB', progress: 100, speed: '—', phase: '部分完成', source: '移动硬盘/DCIM', destinations: [{ id: 'local', name: '本机硬盘', state: 'success', progress: 100 }, { id: 'quark', name: '夸克网盘', state: 'failed', progress: 46, error: '授权已过期' }] },
 ]
 const devices: Device[] = [
   { id: 'mac-1', name: 'Mac Studio · 影序桌面', platform: 'macOS', online: true, lastSeen: '当前设备', current: true },
@@ -30,7 +31,60 @@ let presets: NamePreset[] = [
 let packages: DeliveryPackage[] = []
 
 export function createMockApi(): DesktopApi {
+  const demoQuarantine: QuarantineItem[] = []
+  const pendingActions = new Map<string, LocalFileActionPreview>()
+  let actionSequence = 0
   return {
+    fileActions: {
+      async selectDirectory() { await delay(80); return { path: '/演示目标目录', purpose: 'destination', grantId: 'demo-directory-grant' } },
+      async prepare(request) {
+        await delay(60)
+        const actionId = `demo-action-${++actionSequence}`
+        const media = 'mediaId' in request ? fileData.find((item) => item.id === request.mediaId) : undefined
+        const quarantineItem = request.tool === 'cleanup_quarantine' ? demoQuarantine.find((item) => item.id === request.quarantineId) : undefined
+        if ((request.tool !== 'cleanup_quarantine' && !media) || (request.tool === 'cleanup_quarantine' && !quarantineItem)) throw new Error('演示数据中找不到该素材')
+        const name = request.tool === 'cleanup_quarantine' ? quarantineItem!.name : media!.name
+        const sourcePath = request.tool === 'cleanup_quarantine' ? `演示隔离目录/${name}` : media!.path
+        const targetName = request.tool === 'rename_item' ? request.newName : name
+        const targetPath = request.tool === 'move_item' ? `/演示目标目录/${name}` : request.tool === 'rename_item' ? `${media!.path.slice(0, media!.path.lastIndexOf('/') + 1)}${targetName}` : '系统废纸篓中的演示隔离副本'
+        const preview: LocalFileActionPreview = {
+          actionId, tool: request.tool, ...(media ? { mediaId: media.id } : {}), objectName: name,
+          ...(request.tool !== 'cleanup_quarantine' ? { sourcePath: media!.path } : {}),
+          ...(request.tool === 'rename_item' ? { targetName } : {}), targetPath,
+          sha256: '演示摘要 · 非真实文件哈希', effect: request.tool === 'cleanup_quarantine' ? '仅演示将隔离副本移入系统废纸篓；原片不变' : request.tool === 'rename_item' ? '仅演示在原目录重命名' : '仅演示移动到选定目录',
+          requiresConfirmation: true, expiresAtMs: Date.now() + 5 * 60_000,
+        }
+        pendingActions.set(actionId, preview)
+        return preview
+      },
+      async confirm(actionId, accepted) {
+        await delay(80)
+        const preview = pendingActions.get(actionId)
+        if (!preview) throw new Error('演示操作不存在或已处理')
+        pendingActions.delete(actionId)
+        const status = accepted ? 'succeeded' : 'declined'
+        const receipt: LocalFileActionReceipt = {
+          actionId, tool: preview.tool, status, ...(preview.mediaId ? { mediaId: preview.mediaId } : {}),
+          ...(preview.sourcePath ? { sourcePath: preview.sourcePath } : {}), targetPath: preview.targetPath,
+          ...(preview.sha256 ? { sha256: preview.sha256 } : {}), sourcePreserved: true,
+          destinationCreated: accepted, userConfirmed: accepted, cloudExecutionAuthorized: false,
+        }
+        if (accepted && preview.tool === 'cleanup_quarantine') {
+          const item = demoQuarantine.find((entry) => entry.name === preview.objectName)
+          if (item) { item.state = 'trashed'; item.restoreViaSystemTrash = true }
+        }
+        return receipt
+      },
+      async stageCandidate(mediaId) {
+        await delay(80)
+        const media = fileData.find((item) => item.id === mediaId)
+        if (!media || media.qualityState !== 'review') throw new Error('只有待复核演示素材可以复制到隔离目录')
+        const item: QuarantineItem = { id: `demo-quarantine-${++actionSequence}`, mediaId, name: media.name, bytes: 0, sha256: '演示摘要 · 非真实文件哈希', state: 'isolated', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), restoreViaSystemTrash: false, originalPreserved: true }
+        demoQuarantine.unshift(item)
+        return { id: item.id, name: item.name, state: item.state, originalPreserved: true }
+      },
+      async listQuarantine() { await delay(40); return demoQuarantine.map((item) => ({ ...item })) },
+    },
     auth: {
       async restore() { await delay(80); return lastSession },
       async login(method, identifier) {
@@ -46,7 +100,7 @@ export function createMockApi(): DesktopApi {
       async scan() { await delay(340); return { sources: [{ id: 'sd-1', name: 'SD_CARD', path: '/Volumes/SD_CARD/DCIM', files: 1248, size: '42.8 GB', free: '84.6 GB' }] } },
       async start(payload) {
         await delay(220)
-        const task: ArchiveTask = { id: `YX-DEMO-${Date.now().toString().slice(-6)}`, name: '新建备份任务', state: 'running', createdAt: '刚刚', files: 1248, size: '42.8 GB', progress: 0, speed: '0 MB/s', phase: '准备复制', source: payload.sourceId, destinations: payload.destinations.map(id => ({ id, name: id === 'local' ? '本机硬盘' : '百度网盘', state: 'queued', progress: 0 })) }
+        const task: ArchiveTask = { id: `YX-DEMO-${Date.now().toString().slice(-6)}`, name: '新建备份任务', state: 'running', createdAt: '刚刚', files: 1248, size: '42.8 GB', progress: 0, speed: '0 MB/s', phase: '准备复制', source: payload.sourceId, destinations: payload.destinations.map(id => ({ id, name: id === 'local' ? '本机硬盘' : id === 'baidu' ? '百度网盘' : '夸克网盘', state: 'queued', progress: 0 })) }
         tasks = [task, ...tasks]; return task
       },
       async control(id, action) {
@@ -64,7 +118,15 @@ export function createMockApi(): DesktopApi {
         return { id: `YX-MOVE-${Date.now().toString().slice(-5)}`, name: '老内容转移演示', state: confirmSourceRemoval ? 'running' : 'failed', createdAt: '刚刚', files: ids.length, size: '12.4 GB', progress: 0, speed: '0 MB/s', phase: confirmSourceRemoval ? '复制并校验目标' : '等待来源移除确认', source: '旧素材目录', destinations: [{ id: 'local', name: target, state: 'queued', progress: 0 }] }
       },
     },
-    library: { async search(query, kind, quality) { await delay(100); return fileData.filter(file => (!query || `${file.name} ${file.device} ${file.location} ${file.path}`.toLowerCase().includes(query.toLowerCase())) && (kind === 'all' || file.kind === kind) && (quality === 'all' || file.qualityState === quality)) } },
+    library: {
+      async searchPage(query, kind, quality, limit = 200, offset = 0) {
+        await delay(80);
+        const filtered = fileData.filter(file => (!query || `${file.name} ${file.device} ${file.location} ${file.path}`.toLowerCase().includes(query.toLowerCase())) && (kind === 'all' || file.kind === kind) && (quality === 'all' || file.qualityState === quality));
+        const items = filtered.slice(offset, offset + limit);
+        return { items, total: filtered.length, offset, limit, hasMore: offset + items.length < filtered.length };
+      },
+      async search(query, kind, quality) { await delay(100); return fileData.filter(file => (!query || `${file.name} ${file.device} ${file.location} ${file.path}`.toLowerCase().includes(query.toLowerCase())) && (kind === 'all' || file.kind === kind) && (quality === 'all' || file.qualityState === quality)) },
+    },
     history: {
       async list(query, state) { await delay(90); return tasks.filter(task => (!query || `${task.name} ${task.id}`.toLowerCase().includes(query.toLowerCase())) && (state === 'all' || task.state === state)) },
       async detail(id) { await delay(80); return tasks.find(task => task.id === id) || tasks[0] },
@@ -77,7 +139,7 @@ export function createMockApi(): DesktopApi {
         await delay(240)
         const matches = fileData.filter(file => `${file.name} ${file.location}`.toLowerCase().includes(text.toLowerCase().includes('海边') ? '海边' : ''))
         const proposedAction = /(改名|移动|上传|清理|整理)/.test(text) ? { kind: text.includes('上传') ? 'upload' as const : text.includes('移动') ? 'move' as const : text.includes('清理') ? 'cleanup' as const : 'rename' as const, label: text, target: text.includes('上传') ? '百度网盘 / 摄影归档' : '摄影归档 / 待确认', objects: matches.length ? matches.map(file => file.name) : [text.includes('清理') ? '待处理废片目录中的 2 个候选副本' : '所选的 3 个影像文件'] } : undefined
-        return { text: proposedAction ? '我先列出操作对象和目标。确认后才会执行；本次为演示，不会修改文件。' : matches.length ? `演示检索到 ${matches.length} 个匹配素材。真实检索会返回文件 ID、匹配原因与本地元数据。` : '我可以按文件名、日期、设备、地点和归档记录检索。当前结果为演示数据。', matches, proposedAction }
+        return { text: proposedAction ? '我先列出操作对象和目标。确认后才会执行；本次为演示，不会修改文件。' : matches.length ? `演示检索到 ${matches.length} 个匹配素材。真实检索会返回文件 ID、匹配原因与本地元数据。` : '我可以按文件名、日期、设备、地点和归档记录检索。当前结果为演示数据。', matches: matches.map(media => ({ kind: "media" as const, media })), proposedAction }
       },
       async confirm(_id, accepted) { await delay(180); return accepted ? '演示操作已确认；真实文件操作尚未接入。' : '已取消演示操作，文件未变更。' },
     },
@@ -90,7 +152,7 @@ export function createMockApi(): DesktopApi {
       async get() { await delay(70); return { ...settings } },
       async update(next) { settings = { ...settings, ...next }; await delay(80); return { ...settings } },
       async reset() { settings = { ...defaultSettings }; await delay(100); return { ...settings } },
-      async connectProvider() { await delay(120); return '百度网盘应用已上线（个人场景）。桌面端仍是演示适配器；API 权限、OAuth 和真实上传尚未验收。' },
+      async connectProvider(provider) { await delay(260); return `${provider === 'baidu' ? '百度网盘' : '夸克网盘'}授权入口由后端接入后开放。` },
     },
     presets: {
       async list() { await delay(60); return presets },

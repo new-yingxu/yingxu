@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-26",
+  "status": "banner_false_positive_confirmed",
+  "observedBuild": {
+    "kind": "isolated macOS arm64 Tauri app",
+    "bundleIdentifier": "app.yingxu.desktop.qa.codex20261026",
+    "syntheticMediaOnly": true
+  },
+  "observedUi": {
+    "oldBanner": "Agent 服务和本地执行桥未连接，不会模拟执行。",
+    "modelStatus": "已就绪 · qwen2.5:7b",
+    "modelDetail": "本机 Agent 与 Ollama 可用。每次运行前仍需你确认。",
+    "onboardingStatus": "本机模型已就绪",
+    "evidenceSource": "Live Tauri WebView accessibility tree"
+  },
+  "conclusion": "The generic banner was unconditional for every native runtime and contradicted model.status() as observed in the same UI. This proves the banner was false for the observed build; it does not prove that a model tool call completed through the full WebView-to-SQLite loop.",
+  "change": {
+    "bannerCondition": "native runtime AND missing api.model adapter",
+    "runtimeHealthSource": "ModelConsent calls api.model.status() and renders ready/unavailable states",
+    "localWorkspaceGate": "api.local local-data integration only; independent of Agent model availability"
+  },
+  "verification": {
+    "npmRunBuild": "passed; vue-tsc and Vite production build, 44 modules",
+    "localAgentAdapterChecks": "9 passed, including banner visibility and missing-adapter cases",
+    "nativeAdapterChecks": "18 passed",
+    "localModeChecks": "10 passed",
+    "backupFlowChecks": "8 passed",
+    "libraryPagingChecks": "8 passed",
+    "agentOpenChecks": "6 passed",
+    "ollamaOnboardingChecks": "5 passed",
+    "noDirectOpenChecks": "4 passed"
+  },
+  "notVerified": [
+    "The new banner condition has not yet been observed in a newly rebuilt Tauri app.",
+    "The earlier synthetic Agent request produced a tool-call display but no final answer; a complete WebView-to-host-to-sidecar-to-SQLite-to-model round trip remains open.",
+    "No user media or cloud service was accessed."
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "sourceType": "user-authorized removable volume",
+  "videoFileCount": 44,
+  "containerFormats": {
+    ".mp4": 44
+  },
+  "videoBytes": 11895451081,
+  "ffmpegAvailableOnTestHost": true,
+  "privatePathsIncluded": false,
+  "networkUsed": false,
+  "index": {
+    "changed": 929,
+    "copyStarted": false,
+    "files": 929,
+    "skipped": [],
+    "skippedCount": 0,
+    "sourceReadOnly": true
+  },
+  "probedVideoCount": 44,
+  "probeResults": {
+    "metadata_read": 44
+  },
+  "durationMs": {
+    "min": 2635,
+    "max": 35452
+  },
+  "resolutionCounts": {
+    "3840x2160": 44
+  },
+  "frameAnalysisResults": {
+    "frames_sampled": 44
+  },
+  "frameSources": {
+    "embedded_cover+ffmpeg_keyframe_seek": 43,
+    "embedded_cover+ffmpeg_keyframe_then_nearest": 1
+  },
+  "framesAnalyzedPerVideo": {
+    "4": 44
+  },
+  "qualityStates": {
+    "unanalyzed": 37,
+    "review": 7
+  },
+  "candidateSignals": {
+    "deep_shadow_candidate": 15
+  },
+  "analysisErrors": {},
+  "qualityAccuracy": "not_established_no_ground_truth_labels",
+  "sourceMetadataUnchanged": true,
+  "elapsedSeconds": 82.69
+}

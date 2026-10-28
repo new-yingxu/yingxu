@@ -392,7 +392,53 @@ fn wait_with_timeout(child: &mut Child, limit: Duration) -> bool {
 }
 
 /// 在 10%/50%/90% 位置各抽一帧（scaled 到 512 宽）。超时或缺失都返回空列表，不 panic。
-pub fn extract_frames(file: &Path, duration_ms: u64) -> (Vec<(String, Vec<u8>)>, String) {
+/// 单帧抓取。`keyframe_only=true` 时只解关键帧（快，但落到的是最近的关键帧）。
+fn grab_frame(bin: &str, file: &Path, at: f64, keyframe_only: bool) -> Option<Vec<u8>> {
+    let tmp = std::env::temp_dir().join(format!("yingxu-frame-{}.jpg", id()));
+    let mut cmd = Command::new(bin);
+    cmd.args(["-v", "error", "-nostdin"]);
+    if keyframe_only {
+        // 只解 I 帧：定位到 seek 点之后的第一帧关键帧，避免逐帧解码
+        cmd.args(["-skip_frame", "nokey"]);
+    }
+    cmd.args(["-ss", &format!("{at:.3}"), "-i"])
+        .arg(file)
+        .args([
+            "-frames:v",
+            "1",
+            "-an",
+            "-vf",
+            "scale=512:-2",
+            "-q:v",
+            "4",
+            "-f",
+            "image2",
+            "-y",
+        ])
+        .arg(&tmp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = cmd.spawn().ok()?;
+    let mut child = child;
+    let ok = wait_with_timeout(&mut child, FFMPEG_TIMEOUT);
+    let bytes = if ok {
+        std::fs::read(&tmp)
+            .ok()
+            .filter(|b| !b.is_empty() && b.len() <= 4 * 1024 * 1024)
+    } else {
+        None
+    };
+    let _ = std::fs::remove_file(&tmp);
+    bytes
+}
+
+/// 一帧抽出来的结果：标签、JPEG 字节、来源（`keyframe` / `nearest` / `embedded_cover`）。
+pub type Frame = (String, Vec<u8>, &'static str);
+
+/// 抽 10%/50%/90% 三帧，**关键帧优先**：先只解 I 帧，拿不到（例如关键帧间隔很大或
+/// 片尾没有关键帧）再退回精确时间戳解码。每帧都带来源标记，便于排查。
+pub fn extract_frames_with_modes(file: &Path, duration_ms: u64) -> (Vec<Frame>, String) {
     if duration_ms < 400 {
         return (vec![], "duration_too_short".into());
     }
@@ -403,49 +449,41 @@ pub fn extract_frames(file: &Path, duration_ms: u64) -> (Vec<(String, Vec<u8>)>,
         return (vec![], "frame_extractor_unavailable".into());
     };
     let mut out = vec![];
+    let (mut keyframes, mut exact) = (0usize, 0usize);
     for pct in [10u64, 50, 90] {
         let at = (duration_ms * pct / 100) as f64 / 1000.0;
-        let tmp = std::env::temp_dir().join(format!("yingxu-frame-{}-{}.jpg", id(), pct));
-        let mut cmd = Command::new(&bin);
-        cmd.args(["-v", "error", "-nostdin", "-ss", &format!("{at:.3}"), "-i"])
-            .arg(file)
-            .args([
-                "-frames:v",
-                "1",
-                "-vf",
-                "scale=512:-2",
-                "-q:v",
-                "4",
-                "-f",
-                "image2",
-                "-y",
-            ])
-            .arg(&tmp)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let Ok(mut child) = cmd.spawn() else {
-            return (out, "frame_extractor_failed".into());
-        };
-        let ok = wait_with_timeout(&mut child, FFMPEG_TIMEOUT);
-        if ok
-            && let Ok(bytes) = std::fs::read(&tmp)
-            && !bytes.is_empty()
-            && bytes.len() <= 4 * 1024 * 1024
-        {
-            out.push((format!("p{pct}"), bytes));
+        let label = format!("p{pct}");
+        if let Some(bytes) = grab_frame(&bin, file, at, true) {
+            keyframes += 1;
+            out.push((label, bytes, "keyframe"));
+            continue;
         }
-        let _ = std::fs::remove_file(&tmp);
-        if !ok {
-            return (out, "frame_extractor_timeout".into());
+        match grab_frame(&bin, file, at, false) {
+            Some(bytes) => {
+                exact += 1;
+                out.push((label, bytes, "nearest"));
+            }
+            // 单帧失败不整体放弃：三帧里能出几帧算几帧
+            None => {
+                if out.is_empty() && pct == 90 {
+                    return (out, "frame_extractor_failed".into());
+                }
+            }
         }
     }
-    let source = if out.is_empty() {
-        "frame_extractor_failed"
-    } else {
-        "ffmpeg_stream_seek"
+    let source = match (keyframes, exact) {
+        (0, 0) => "frame_extractor_failed",
+        (_, 0) => "ffmpeg_keyframe_seek",
+        (0, _) => "ffmpeg_stream_seek",
+        _ => "ffmpeg_keyframe_then_nearest",
     };
     (out, source.into())
+}
+
+/// 兼容旧接口：只要帧字节，不要来源标记。
+pub fn extract_frames(file: &Path, duration_ms: u64) -> (Vec<(String, Vec<u8>)>, String) {
+    let (frames, source) = extract_frames_with_modes(file, duration_ms);
+    (frames.into_iter().map(|(l, b, _)| (l, b)).collect(), source)
 }
 
 impl Engine {
@@ -500,25 +538,38 @@ impl Engine {
         let mut file = File::open(&path)?;
         let len = file.metadata()?.len();
         let meta = probe(&mut file, len)?;
-        let mut frames: Vec<(String, Vec<u8>)> = vec![];
+        let mut frames: Vec<Frame> = vec![];
         let mut frame_source = String::from("disabled");
         if let Some(cover) = cover_art(&mut file, len) {
-            frames.push(("cover".into(), cover));
+            frames.push(("cover".into(), cover, "embedded_cover"));
             frame_source = "embedded_cover".into();
         }
-        if extract && frames.is_empty() {
-            let (extracted, source) = extract_frames(&path, meta.duration_ms);
-            frames = extracted;
-            if frames.is_empty() {
+        if extract {
+            // An embedded cover is only a poster image; it must not suppress
+            // sampling actual footage for video quality analysis.
+            let (extracted, source) = extract_frames_with_modes(&path, meta.duration_ms);
+            if extracted.is_empty() {
                 info["frameExtraction"] = json!(source);
+                if frames.is_empty() {
+                    frame_source = source;
+                }
+            } else {
+                frames.extend(extracted);
+                frame_source = if frames
+                    .iter()
+                    .any(|(_, _, frame_mode)| *frame_mode == "embedded_cover")
+                {
+                    format!("embedded_cover+{source}")
+                } else {
+                    source
+                };
             }
-            frame_source = source;
         }
         let mut quality = json!({"status":"unanalyzed","automaticCleanupAllowed":false});
         let mut state = "unanalyzed";
         let mut thumbs = vec![];
         let mut signals = vec![];
-        for (label, bytes) in &frames {
+        for (label, bytes, frame_mode) in &frames {
             let Ok(image) = image::load_from_memory(bytes) else {
                 continue;
             };
@@ -533,9 +584,10 @@ impl Engine {
             }
             let name =
                 PathBuf::from("thumbnails").join(format!("video-{}-{}.jpg", media_id, label));
-            if fsops::write_new(&SafeDir::open(&self.store.root)?, &name, &jpeg).is_ok() {
-                signals.push(json!({"frame":label,"width":sig["width"],"height":sig["height"],"highlightRatio":sig["highlightRatio"],"shadowRatio":sig["shadowRatio"],"laplacianVarianceAt512":sig["laplacianVarianceAt512"],"candidates":sig["candidates"]}));
-            }
+            // 分析统计由成功解码并计算出的帧决定；缓存只尝试安全的新建，既存派生图不覆盖。
+            // 不能因 write_new 在重复分析时遇到已有文件，就把本次有效信号丢掉。
+            let _ = fsops::write_new(&SafeDir::open(&self.store.root)?, &name, &jpeg);
+            signals.push(json!({"frame":label,"frameMode":frame_mode,"width":sig["width"],"height":sig["height"],"highlightRatio":sig["highlightRatio"],"shadowRatio":sig["shadowRatio"],"laplacianVarianceAt512":sig["laplacianVarianceAt512"],"candidates":sig["candidates"]}));
         }
         if !signals.is_empty() {
             quality = json!({"status":"needs_human_review","model":"local-signals-v1","calibrated":false,"confidence":null,"frameSignals":signals,"candidates":signals.iter().flat_map(|s| s["candidates"].as_array().cloned().unwrap_or_default()).collect::<Vec<_>>(),"automaticCleanupAllowed":false});
@@ -764,6 +816,92 @@ mod tests {
         let mut f = std::fs::File::open(&p).unwrap();
         let len = f.metadata().unwrap().len();
         assert_eq!(probe(&mut f, len).unwrap_err().code, "VIDEO_MOOV_MISSING");
+    }
+
+    fn sample_mov_with_embedded_cover() -> (Vec<u8>, Vec<u8>) {
+        let mut jpeg = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(16, 16)
+            .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = jpeg.into_inner();
+        let mut data_payload = vec![0, 0, 0, 13, 0, 0, 0, 0]; // JPEG cover type + locale
+        data_payload.extend_from_slice(&jpeg);
+        let cover = bx(b"covr", &bx(b"data", &data_payload));
+        let ilst = bx(b"ilst", &cover);
+        let meta = bx(b"meta", &[vec![0u8; 4], ilst].concat());
+        let udta = bx(b"udta", &meta);
+
+        let base = sample_mov();
+        let ftyp = base[..20].to_vec();
+        let moov_payload = &base[28..];
+        let moov = bx(b"moov", &[moov_payload, udta.as_slice()].concat());
+        ([ftyp, moov].concat(), jpeg)
+    }
+
+    #[test]
+    fn repeated_video_analysis_keeps_frame_signals_when_cache_exists() {
+        let (bytes, _) = sample_mov_with_embedded_cover();
+        let source_dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("yingxu-video-repeat-source-{}", id()));
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source = source_dir.join("clip.mov");
+        std::fs::write(&source, &bytes).unwrap();
+        let before_modified = std::fs::metadata(&source).unwrap().modified().unwrap();
+
+        let engine = Engine::open(
+            std::env::temp_dir()
+                .canonicalize()
+                .unwrap()
+                .join(format!("yingxu-video-repeat-store-{}", id())),
+        )
+        .unwrap();
+        engine.index_source(&source_dir).unwrap();
+        let media_id: String = engine
+            .store
+            .connect()
+            .unwrap()
+            .query_row(
+                "SELECT id FROM media_items WHERE name='clip.mov'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let mut fixed_thumbnail = None;
+        for _ in 0..3 {
+            let out = engine.analyze_video(&media_id, false).unwrap();
+            let metadata = &out["metadata"];
+            assert_eq!(metadata["framesAnalyzed"], 1);
+            assert_eq!(
+                metadata["quality"]["frameSignals"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(metadata["decodeStatus"], "frames_sampled");
+            assert_eq!(metadata["frameSource"], "embedded_cover");
+            assert_eq!(metadata["framesUploaded"], false);
+            assert_eq!(out["framesUploaded"], false);
+
+            let thumb = engine
+                .store
+                .root
+                .join("thumbnails")
+                .join(format!("video-{media_id}-cover.jpg"));
+            if let Some(original) = &fixed_thumbnail {
+                assert_eq!(std::fs::read(&thumb).unwrap(), *original);
+            } else {
+                fixed_thumbnail = Some(std::fs::read(thumb).unwrap());
+            }
+            assert_eq!(std::fs::read(&source).unwrap(), bytes);
+            assert_eq!(
+                std::fs::metadata(&source).unwrap().modified().unwrap(),
+                before_modified
+            );
+        }
     }
 
     #[test]
