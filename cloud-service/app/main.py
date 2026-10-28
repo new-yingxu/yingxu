@@ -11,10 +11,13 @@ from fastapi import Path as PathParam
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import BaseModel, ConfigDict, Field, field_validator, ValidationError
 
 from .auth import Principal, require_principal, bearer
+from . import baidu_oauth
 from .agent_tools import ReadOnlyToolRegistry,ToolNotAllowed,tool_catalog
 from .agent_graph import run_turn_graph, build_turn_graph
 from .graph_checkpoints import PrincipalCheckpointSaver
@@ -79,7 +82,7 @@ async def request_id_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid4())
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
-    if request.url.path.startswith("/v1/auth/"):
+    if request.url.path.startswith(("/v1/auth/", "/v1/netdisk/baidu/")):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
     return response
@@ -176,6 +179,51 @@ def _device(db: Any, principal: Principal) -> Device:
         raise HTTPException(status_code=403, detail={"code": "DEVICE_REVOKED_OR_UNREGISTERED"})
     db.touch_device(device)
     return device
+
+
+class BaiduTokenRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    grant_type: Literal['authorization_code', 'refresh_token']
+    credential: str = Field(min_length=1, max_length=16384, repr=False)
+
+    @field_validator('credential')
+    @classmethod
+    def valid_credential(cls, value):
+        if any(c.isspace() for c in value):
+            raise ValueError('invalid credential')
+        return value
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith('/v1/netdisk/baidu/'):
+        # FastAPI's default details echo invalid request values, including codes
+        # and refresh tokens. Return no input, exception text, or upstream URL.
+        return JSONResponse(status_code=422, content={'detail': {'code': 'BAIDU_INVALID_REQUEST'}},
+                            headers={'Cache-Control': 'no-store'})
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(baidu_oauth.BaiduOAuthError)
+async def baidu_oauth_error(request: Request, exc: baidu_oauth.BaiduOAuthError):
+    return JSONResponse(status_code=exc.status, content={'detail': {'code': exc.code}},
+                        headers={'Cache-Control': 'no-store', 'Pragma': 'no-cache'})
+
+
+@app.get('/v1/netdisk/baidu/config')
+def baidu_configuration(request: Request, principal: Principal = Depends(require_principal), db=Depends(get_db)):
+    if principal.origin != 'desktop':
+        raise HTTPException(403, detail={'code': 'DESKTOP_REQUIRED'})
+    _device(db, principal)
+    return baidu_oauth.configuration(request.app.state.settings)
+
+
+@app.post('/v1/netdisk/baidu/token')
+def baidu_token(body: BaiduTokenRequest, request: Request, principal: Principal = Depends(require_principal), db=Depends(get_db)):
+    if principal.origin != 'desktop':
+        raise HTTPException(403, detail={'code': 'DESKTOP_REQUIRED'})
+    _device(db, principal)
+    return baidu_oauth.exchange(request.app.state.settings, body.grant_type, body.credential)
 
 
 class DeviceRegistration(BaseModel):

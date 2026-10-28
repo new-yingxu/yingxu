@@ -15,6 +15,8 @@ fs2 = "0.4"
 libc = "0.2"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "webp", "bmp"] }
 kamadak-exif = "0.6"
+md-5 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 
 [dev-dependencies]
 tempfile = "3"

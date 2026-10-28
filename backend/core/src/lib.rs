@@ -10,6 +10,7 @@ pub mod transfer;
 pub use engine::{Engine, Worker};
 pub use model::*;
 
+pub mod baidu;
 pub mod media;
 pub mod netdisk;
 pub mod raw;

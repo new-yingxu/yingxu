@@ -19,8 +19,44 @@ use yingxu_core::{
 };
 use zeroize::Zeroizing;
 
+mod baidu;
 mod cloud_api;
 mod cloud_auth;
+
+#[tauri::command]
+async fn baidu_request(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action: String,
+    replica_id: Option<String>,
+    task_id: Option<String>,
+    confirmed: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    if window.label() != "main" {
+        return Err("PERMISSION_DENIED".into());
+    }
+    let state = app.state::<HostState>();
+    let engine = state.engine.clone();
+    let grants = state
+        .targets
+        .lock()
+        .map_err(|_| "备份目录授权状态不可用。")?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    tauri::async_runtime::spawn_blocking(move || {
+        baidu::handle(
+            &engine,
+            &grants,
+            &action,
+            replica_id.as_deref(),
+            task_id.as_deref(),
+            confirmed.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(|_| "百度网盘后台操作未完成。".to_string())?
+}
 
 fn exchange_cloudbase_session(
     client: &cloud_auth::CloudBaseAuthClient,
@@ -456,6 +492,7 @@ fn main() {
             cloudbase_sign_out,
             cloud_session_current,
             cloud_api_request,
+            baidu_request,
             cloud_sync_backup_records
         ])
         .plugin(

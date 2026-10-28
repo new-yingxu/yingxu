@@ -158,6 +158,38 @@ pub struct CloudApiClient {
 }
 
 impl CloudApiClient {
+    // Native-only provider bridge. Deliberately excluded from request_url's IPC
+    // allowlist so codes and provider tokens never pass through WebView JS.
+    pub(crate) fn baidu_broker(
+        &self,
+        operation: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, CloudApiError> {
+        if self.current_session()?.is_none() {
+            return Err(CloudApiError::Unauthenticated);
+        }
+        let session = self
+            .session_store
+            .load()?
+            .ok_or(CloudApiError::Unauthenticated)?;
+        let (method, path) = match operation {
+            "config" => ("GET", "/v1/netdisk/baidu/config"),
+            "token" => ("POST", "/v1/netdisk/baidu/token"),
+            _ => return Err(CloudApiError::InvalidEndpoint),
+        };
+        let url = self
+            .config
+            .origin
+            .join(path)
+            .map_err(|_| CloudApiError::InvalidEndpoint)?;
+        let bytes = Zeroizing::new(
+            serde_json::to_vec(&body.unwrap_or(&serde_json::json!({})))
+                .map_err(|_| CloudApiError::InvalidRequest)?,
+        );
+        self.transport
+            .request_json(method, &url, &bytes, Some(&session.access_token))
+    }
+
     pub fn from_embedded_config() -> Result<Self, CloudApiError> {
         let config = CloudApiConfig::from_embedded_config()?;
         let client = Client::builder()
@@ -587,6 +619,35 @@ mod tests {
         ] {
             assert!(CloudApiConfig::new(value).is_err(), "{value}");
         }
+    }
+    #[test]
+    fn baidu_token_bridge_is_native_only_and_requires_active_device_session() {
+        let store = Arc::new(FakeStore(Mutex::new(None)));
+        let transport = Arc::new(FakeTransport {
+            requests: Mutex::new(Vec::new()),
+        });
+        let api = CloudApiClient::new(
+            CloudApiConfig::new("https://api.example.test").unwrap(),
+            transport.clone(),
+            store,
+        );
+        assert!(api.baidu_broker("config", None).is_err());
+        assert!(transport.requests.lock().unwrap().is_empty());
+        assert!(api.request_url("POST", "/v1/netdisk/baidu/token").is_err());
+        assert!(api.request_url("GET", "/v1/netdisk/baidu/config").is_err());
+        api.exchange("synthetic-cloudbase", "Fixture").unwrap();
+        api.baidu_broker("config", None).unwrap();
+        api.baidu_broker("token",Some(&serde_json::json!({"grant_type":"authorization_code","credential":"synthetic-code"}))).unwrap();
+        assert!(api.baidu_broker("https://attacker.invalid", None).is_err());
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(
+            requests[1],
+            ("/v1/netdisk/baidu/config".into(), Some("secret".into()))
+        );
+        assert_eq!(
+            requests[2],
+            ("/v1/netdisk/baidu/token".into(), Some("secret".into()))
+        );
     }
     #[test]
     fn exchange_stores_short_session_without_exposing_token_and_logout_revokes_it() {

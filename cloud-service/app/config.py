@@ -51,6 +51,9 @@ class Settings:
     session_private_key: str | None = field(default=None, repr=False)
     session_key_id: str | None = None
     session_verification_jwks: str | None = None
+    baidu_client_id: str | None = None
+    baidu_client_secret: str | None = field(default=None, repr=False)
+    baidu_app_folder: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -75,6 +78,9 @@ class Settings:
             session_private_key=os.getenv("SESSION_PRIVATE_KEY"),
             session_key_id=os.getenv("SESSION_KEY_ID"),
             session_verification_jwks=os.getenv("SESSION_VERIFICATION_JWKS"),
+            baidu_client_id=os.getenv("BAIDU_CLIENT_ID"),
+            baidu_client_secret=os.getenv("BAIDU_CLIENT_SECRET"),
+            baidu_app_folder=os.getenv("BAIDU_APP_FOLDER"),
         )
         return settings
 
