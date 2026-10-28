@@ -26,8 +26,8 @@ class SessionExchangeHTTP(unittest.TestCase):
     def tearDown(self):
         self.client.__exit__(None,None,None);self.env.stop();self.temp.cleanup()
     def exchange(self,owner='owner',client='desktop-client',**changes):
-        profiles=[{'sub':owner,'status':'ACTIVE','type':'external','internal_user_type':'generalUser','providers':[{'id':'email'}]},
-                  {'sub':owner,'token_type':'Bearer','client_id':client,'scope':'user'}]
+        profiles=[{'sub':owner,'token_type':'Bearer','client_id':client,'scope':'user'},
+                  {'sub':owner,'status':'ACTIVE','type':'external','internal_user_type':'generalUser','providers':[{'id':'email'}]}]
         opener=MagicMock()
         responses=[]
         for profile in profiles:
@@ -88,13 +88,13 @@ class SessionExchangeHTTP(unittest.TestCase):
         self.assertEqual(len(self.client.get('/.well-known/jwks.json').json()['keys']),1)
 
     def renew(self,session,owner='owner',client='desktop-client',before_introspection=None,**body):
-        profiles=[{'sub':owner,'status':'ACTIVE','type':'external','internal_user_type':'generalUser','providers':[{'id':'email'}]},
-                  {'sub':owner,'token_type':'Bearer','client_id':client}]
+        profiles=[{'sub':owner,'token_type':'Bearer','client_id':client},
+                  {'sub':owner,'status':'ACTIVE','type':'external','internal_user_type':'generalUser','providers':[{'id':'email'}]}]
         opener=MagicMock();index=0
         def open_request(request,timeout):
             nonlocal index
             self.assertEqual(app.state.engine.pool.checkedout(),0,'renew held a SQL connection during provider I/O')
-            if index==1 and before_introspection is not None:before_introspection()
+            if index==0 and before_introspection is not None:before_introspection()
             response=MagicMock();response.__enter__.return_value.read.return_value=json.dumps(profiles[index]).encode()
             index+=1
             return response

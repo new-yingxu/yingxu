@@ -17,7 +17,7 @@ class AccountChannel(unittest.TestCase):
         self.clients={'server-desktop':'desktop','server-mobile':'mobile'}
     def call(self,info=None,profile=None):
         opener=MagicMock()
-        queue=[json.dumps(self.profile if profile is None else profile).encode(),json.dumps(self.introspection if info is None else info).encode()]
+        queue=[json.dumps(self.introspection if info is None else info).encode(),json.dumps(self.profile if profile is None else profile).encode()]
         def open_request(request,timeout):
             self.assertEqual(timeout,5)
             transport=MagicMock();transport.__enter__.return_value.read.return_value=queue.pop(0)
@@ -33,14 +33,31 @@ class AccountChannel(unittest.TestCase):
         self.assertEqual(set(value.__dict__),{'owner_id','origin','client_id'})
         self.assertNotIn('synthetic-provider-token',repr(value));self.assertNotIn('private-profile',repr(value))
         calls=opener.open.call_args_list
-        self.assertEqual([c.args[0].full_url for c in calls],['https://env-fixture.api.tcloudbasegateway.com/auth/v1/user/me',
-                                                                          'https://env-fixture.api.tcloudbasegateway.com/auth/v1/token/introspect'])
+        self.assertEqual([c.args[0].full_url for c in calls],['https://env-fixture.api.tcloudbasegateway.com/auth/v1/token/introspect',
+                                                                 'https://env-fixture.api.tcloudbasegateway.com/auth/v1/user/me?client_id=server-desktop'])
         for call in calls:
             self.assertEqual(call.args[0].get_method(),'GET')
             self.assertEqual(set(call.args[0].headers),{'Authorization','Accept'})
         self.assertTrue(all(isinstance(c.args[0],NoIdentityRedirect) for c in factory.call_args_list))
         mobile,_,_=self.call({**self.introspection,'client_id':'server-mobile'})
         self.assertEqual(mobile.origin,'mobile')
+
+    def test_profile_request_is_scoped_to_token_client_and_omitted_fields_fail_closed(self):
+        # 实测 external 账户（邮箱注册）不带 status/internal_user_type/providers。
+        _,opener,_=self.call()
+        self.assertEqual(opener.open.call_args_list[-1].args[0].full_url,
+                         'https://env-fixture.api.tcloudbasegateway.com/auth/v1/user/me?client_id=server-desktop')
+        email_signup={k:v for k,v in self.profile.items() if k not in ('status','internal_user_type','providers')}
+        value,_,_=self.call(profile=email_signup)
+        self.assertEqual(value.client_id,'server-desktop')
+        # 缺 status 且没有任何可验证凭据时必须拒绝；缺 type 一律拒绝。
+        no_credential={'sub':'owner','type':'external'}
+        with self.assertRaises(InvalidCloudBaseIdentity): self.call(profile=no_credential)
+        with self.assertRaises(InvalidCloudBaseIdentity): self.call(profile={k:v for k,v in email_signup.items() if k!='type'})
+        # 明示状态时以状态为准。
+        with self.assertRaises(InvalidCloudBaseIdentity): self.call(profile={**self.profile,'status':'BLOCKED'})
+        with self.assertRaises(InvalidCloudBaseIdentity): self.call(profile={**email_signup,'internal_user_type':'administrator'})
+        with self.assertRaises(InvalidCloudBaseIdentity): self.call(profile={**email_signup,'type':'internal'})
 
     def test_mismatch_unlisted_bad_token_type_and_inactive_rejected(self):
         for changes in ({'sub':'victim'},{'sub':None},{'client_id':'unlisted'},{'client_id':[]},{'token_type':'bearer'},
@@ -57,7 +74,7 @@ class AccountChannel(unittest.TestCase):
                                (HTTPError('https://ignored.invalid',503,'private',{},None),CloudBaseIdentityUnavailable)]:
             with self.subTest(value=type(value).__name__):
                 opener=MagicMock()
-                first=MagicMock();first.__enter__.return_value.read.return_value=json.dumps(self.profile).encode()
+                first=MagicMock();first.__enter__.return_value.read.return_value=json.dumps(self.introspection).encode()
                 second=MagicMock();second.__enter__.return_value.read.return_value=value if isinstance(value,bytes) else b''
                 opener.open.side_effect=[first,value if isinstance(value,Exception) else second]
                 with patch('app.cloudbase_identity.build_opener',return_value=opener),self.assertRaises(expected) as error:
