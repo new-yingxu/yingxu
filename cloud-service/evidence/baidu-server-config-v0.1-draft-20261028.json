@@ -1,0 +1,17 @@
+{
+  "environment": "yingxu-dev-d8gowpye17ee27a61",
+  "function": "yingxu-agent-api",
+  "status": "Updating",
+  "mergeSelected": true,
+  "cliExit": 0,
+  "previousVariablesRetained": true,
+  "addedValuesMatch": true,
+  "addedKeysPresent": [
+    "BAIDU_CLIENT_ID",
+    "BAIDU_CLIENT_SECRET",
+    "BAIDU_APP_FOLDER"
+  ],
+  "credentialsPrinted": false,
+  "deployed": false,
+  "observationPhase": "configuration merge before code deployment"
+}
