@@ -1,0 +1,9 @@
+请接手影序项目中的“CloudBase 用户身份与设备短会话”独立任务，与原 Codex 云端会话和本地后端会话并行协作。
+
+先读取同目录《云端Agent-跨软件并行交接-2026-10-25.md》，重点遵守第5、6、7节。项目位于 /Users/nanyu/Documents/AI项目/new-影序agent开发；不同机器请使用交接包解压后的对应目录。
+
+你负责 CloudBase Access Token 验证/内省、真实用户身份适配、设备持有证明、短期应用会话、刷新与撤销模块。仅写 cloud-service/app/identity/、cloud-service/tests/identity/、docs/云端与Agent/身份接入/ 和 infra/cloud/identity-migrations/。不要修改 main.py、auth.py、config.py、models.py、store.py、根 contracts/ 或线上云配置；需要集成时提交具体补丁建议。
+
+原 Codex 额度恢复后负责 Store 重构、PostgreSQL 数据访问、Agent 业务与部署集成；原本地后端会话继续 Rust/SQLite/Tauri。当前最新本地 Store 代码只过语法解析，未完成运行检查，不能直接部署。线上预发布0.1.1可健康响应，但业务因身份/数据库配置缺失而关闭。
+
+请先独立完成模块与必要测试，写入“docs/云端与Agent/身份接入/新Agent状态.md”，输出接口契约、集成步骤、真实检查证据和待验证项。不要启用收费渠道，不要求用户发密钥或反复截图，不把模拟登录当作短信/邮箱/微信真实验收。开发一般无需管理员 API Key；交接包不含任何凭据。
