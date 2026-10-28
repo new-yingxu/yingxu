@@ -1956,7 +1956,6 @@ function taskStateLabel(state: TaskState) {
               <div class="panel-heading">
                 <div>
                   <h3>转移候选</h3>
-                  <p>可按照片、视频、其他文件筛选；疑似废片只做标记。</p>
                 </div>
                 <button
                   class="secondary-button"
@@ -1994,8 +1993,7 @@ function taskStateLabel(state: TaskState) {
                 >
               </div>
               <div v-else class="empty-state compact-empty">
-                <Folder :size="25" /><b>先扫描来源</b
-                ><span>扫描不会移动或删除文件。</span>
+                <Folder :size="25" /><b>先扫描来源</b>
               </div>
               <label class="check-row danger-check"
                 ><input
@@ -2005,9 +2003,7 @@ function taskStateLabel(state: TaskState) {
                 校验成功且来源未变化后，移除已转移来源文件</label
               >
               <div class="panel-actions">
-                <span class="demo-label"
-                  >候选删除只进入待确认目录，不会自动清理</span
-                ><button
+                <button
                   class="primary-button"
                   @click="beginTransfer"
                   :disabled="!selectedTransfer.length"
