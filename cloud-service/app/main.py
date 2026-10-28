@@ -356,7 +356,9 @@ def exchange_account_session(payload: DeviceRegistration, request: Request, cred
     from .session_tokens import issue_device_session
     try:
         account=verify_account_channel(settings.cloudbase_env_id,credentials.credentials,json.loads(settings.cloudbase_client_origins))
-    except InvalidCloudBaseIdentity:
+    except InvalidCloudBaseIdentity as exc:
+        # Static reason only: no token, secret or profile value is logged.
+        request.app.state.logger.warning('account session rejected: %s',exc)
         raise HTTPException(status_code=401,detail={"code":"INVALID_ACCOUNT_SESSION"}) from None
     except CloudBaseIdentityUnavailable:
         raise HTTPException(status_code=503,detail={"code":"IDENTITY_PROVIDER_UNAVAILABLE"}) from None
@@ -396,7 +398,9 @@ def renew_account_session(payload: SessionRenewRequest, request: Request,
         _device(store,principal)
     try:
         account=verify_account_channel(settings.cloudbase_env_id,credentials.credentials,json.loads(settings.cloudbase_client_origins))
-    except InvalidCloudBaseIdentity:
+    except InvalidCloudBaseIdentity as exc:
+        # Static reason only: no token, secret or profile value is logged.
+        request.app.state.logger.warning('account session rejected: %s',exc)
         raise HTTPException(status_code=401,detail={"code":"INVALID_ACCOUNT_SESSION"}) from None
     except CloudBaseIdentityUnavailable:
         raise HTTPException(status_code=503,detail={"code":"IDENTITY_PROVIDER_UNAVAILABLE"}) from None
