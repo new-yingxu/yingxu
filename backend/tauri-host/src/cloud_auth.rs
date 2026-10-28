@@ -12,6 +12,7 @@ const SIGNUP_PATH: &str = "/auth/v1/signup";
 const KEYRING_SERVICE: &str = "app.yingxu.desktop.cloudbase";
 const KEYRING_ACCOUNT: &str = "user-session-v1";
 const MAX_RESPONSE_BYTES: u64 = 64 * 1024;
+const MAX_VERIFICATION_ID_BYTES: usize = 8192;
 
 #[derive(Clone)]
 pub struct AuthConfig {
@@ -295,7 +296,7 @@ impl CloudBaseAuthClient {
         let challenge: EmailCodeResponse =
             serde_json::from_value(response).map_err(|_| AuthError::InvalidResponse)?;
         if challenge.verification_id.is_empty()
-            || challenge.verification_id.len() > 500
+            || challenge.verification_id.len() > MAX_VERIFICATION_ID_BYTES
             || challenge.expires_in == 0
         {
             return Err(AuthError::InvalidResponse);
@@ -452,7 +453,7 @@ fn valid_email(email: &str) -> bool {
 
 fn valid_verification_input(verification_id: &str, code: &str) -> bool {
     !verification_id.trim().is_empty()
-        && verification_id.len() <= 500
+        && verification_id.len() <= MAX_VERIFICATION_ID_BYTES
         && code.len() == 6
         && code.bytes().all(|byte| byte.is_ascii_digit())
 }
@@ -768,6 +769,33 @@ mod tests {
         assert_eq!(
             requests[1].1,
             json!({"email":"new@example.com","target":"ANY"})
+        );
+    }
+
+    #[test]
+    fn email_verification_accepts_long_provider_ids_but_limits_size() {
+        let long_id = "v".repeat(639);
+        let (client, _, _) = sequence_client([Ok(json!({
+            "verification_id": long_id, "expires_in": 600
+        }))]);
+        let challenge = client.request_email_code("new@example.com", true).unwrap();
+        assert_eq!(challenge.verification_id.len(), 639);
+        assert!(valid_verification_input(
+            &challenge.verification_id,
+            "123456"
+        ));
+        assert!(!valid_verification_input(
+            &"v".repeat(MAX_VERIFICATION_ID_BYTES + 1),
+            "123456"
+        ));
+        let (client, _, _) = sequence_client([Ok(json!({
+            "verification_id": "v".repeat(MAX_VERIFICATION_ID_BYTES + 1), "expires_in": 600
+        }))]);
+        assert_eq!(
+            client
+                .request_email_code("new@example.com", true)
+                .unwrap_err(),
+            AuthError::InvalidResponse
         );
     }
 
