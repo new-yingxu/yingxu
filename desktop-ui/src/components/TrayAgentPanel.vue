@@ -154,9 +154,8 @@ onUnmounted(() => {
       <p v-else>{{ jobError || "当前没有进行中的备份或传输任务。" }}</p>
     </section>
     <section class="tray-chat-card">
-      <div class="tray-section-title"><b>Agent 助手</b><span>逐次确认后运行</span></div>
+      <div class="tray-section-title"><b>Agent 助手</b></div>
       <div class="tray-message-list" aria-live="polite">
-        <p v-if="messages.length === 0" class="tray-chat-empty">可以查询本机素材和备份任务。照片、完整路径不会自动发到云端。</p>
         <article v-for="(message, index) in messages" :key="index" :class="['tray-message', message.role]">
           <small>{{ message.role === 'user' ? '你' : 'Agent' }}</small>
           <p>{{ message.text }}</p>
