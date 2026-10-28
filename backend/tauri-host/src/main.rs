@@ -24,6 +24,7 @@ use yingxu_core::{
     CoreError, Engine,
     api::{PROTOCOL_VERSION, Reply, Request},
 };
+use zeroize::{Zeroize, Zeroizing};
 
 struct HostState {
     engine: Engine,
@@ -80,6 +81,134 @@ fn local_agent_unavailable() -> serde_json::Value {
         "executionAuthorized": false,
         "cloudFallback": false
     })
+}
+
+const MODEL_CREDENTIAL_SERVICE: &str = "app.yingxu.desktop.next.agent-model";
+const MODEL_CREDENTIAL_ACCOUNT: &str = "byok-profile";
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelProviderProfile {
+    provider: String,
+    model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    api_key: String,
+}
+
+impl Drop for ModelProviderProfile {
+    fn drop(&mut self) {
+        self.api_key.zeroize();
+    }
+}
+
+fn read_model_provider_profile() -> Result<Option<ModelProviderProfile>, CoreError> {
+    let entry = keyring::Entry::new(MODEL_CREDENTIAL_SERVICE, MODEL_CREDENTIAL_ACCOUNT)
+        .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
+    let raw = match entry.get_password() {
+        Ok(value) => Zeroizing::new(value),
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(_) => {
+            return Err(CoreError::new(
+                "MODEL_KEYSTORE_UNAVAILABLE",
+                "无法读取系统凭据库",
+            ));
+        }
+    };
+    let profile: ModelProviderProfile = serde_json::from_str(&raw)
+        .map_err(|_| CoreError::new("MODEL_CONFIGURATION_INVALID", "模型配置无效"))?;
+    Ok(Some(profile))
+}
+
+fn validate_model_provider_profile(
+    provider: &str,
+    model: &str,
+    api_key: &str,
+) -> Result<(), CoreError> {
+    let safe_id = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 100
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
+    };
+    if !["dashscope", "deepseek"].contains(&provider)
+        || !safe_id(model)
+        || api_key.trim().is_empty()
+        || api_key.len() > 4096
+        || api_key
+            .bytes()
+            .any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+    {
+        return Err(CoreError::new(
+            "INVALID_MODEL_CONFIGURATION",
+            "供应商、模型名称或 API Key 格式无效",
+        ));
+    }
+    Ok(())
+}
+
+fn restart_local_agent_if_running(state: &HostState) -> Result<(), CoreError> {
+    let mut runtime = state
+        .local_agent
+        .lock()
+        .map_err(|_| CoreError::new("LOCAL_AGENT_STATE_UNAVAILABLE", "本机 Agent 状态不可用"))?;
+    if let Some(mut process) = runtime.take() {
+        stop_local_agent_process(&mut process);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn agent_model_provider_config(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    action: String,
+    provider: Option<String>,
+    model: Option<String>,
+    api_key: Option<String>,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可管理模型配置",
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = keyring::Entry::new(MODEL_CREDENTIAL_SERVICE, MODEL_CREDENTIAL_ACCOUNT)
+            .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
+        let state = app.state::<HostState>();
+        match action.as_str() {
+            "status" => {
+                let profile = read_model_provider_profile()?;
+                Ok(profile.map_or_else(
+                    || serde_json::json!({"configured": false, "provider": "ollama", "model": "qwen2.5:7b", "secretStorage": "os_keychain"}),
+                    |value| serde_json::json!({"configured": true, "provider": &value.provider, "model": &value.model, "secretStorage": "os_keychain"}),
+                ))
+            }
+            "save" => {
+                let provider = provider.as_deref().unwrap_or_default();
+                let model = model.as_deref().unwrap_or_default();
+                let api_key = Zeroizing::new(api_key.unwrap_or_default());
+                validate_model_provider_profile(provider, model, &api_key)?;
+                let value = ModelProviderProfile { provider: provider.to_string(), model: model.to_string(), api_key: api_key.to_string() };
+                let serialized = Zeroizing::new(serde_json::to_string(&value)
+                    .map_err(|_| CoreError::new("MODEL_CONFIGURATION_INVALID", "模型配置无法保存"))?);
+                entry.set_password(&serialized)
+                    .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "无法保存到系统凭据库"))?;
+                restart_local_agent_if_running(&state)?;
+                Ok(serde_json::json!({"configured": true, "provider": provider, "model": model, "secretStorage": "os_keychain"}))
+            }
+            "remove" => {
+                match entry.delete_credential() {
+                    Ok(()) | Err(keyring::Error::NoEntry) => {},
+                    Err(_) => return Err(CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "无法从系统凭据库移除模型密钥")),
+                }
+                restart_local_agent_if_running(&state)?;
+                Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": "qwen2.5:7b", "secretStorage": "os_keychain"}))
+            }
+            _ => Err(CoreError::new("INVALID_MODEL_ACTION", "模型配置操作无效")),
+        }
+    }).await.map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "模型配置操作失败"))?
 }
 
 fn local_agent_executable(app: &tauri::AppHandle) -> Result<PathBuf, CoreError> {
@@ -149,10 +278,12 @@ fn start_local_agent(
     app_data_dir: &std::path::Path,
 ) -> Result<LocalAgentProcess, CoreError> {
     let executable = local_agent_executable(app)?;
-    spawn_local_agent(
+    spawn_local_agent_with_profile(
         &executable,
         &app_data_dir.join("agent.sqlite"),
         &stable_agent_signing_key()?,
+        Duration::from_secs(15),
+        read_model_provider_profile()?,
     )
 }
 
@@ -175,6 +306,22 @@ fn spawn_local_agent_with_timeout(
     signing_key: &str,
     startup_timeout: Duration,
 ) -> Result<LocalAgentProcess, CoreError> {
+    spawn_local_agent_with_profile(
+        executable,
+        database_path,
+        signing_key,
+        startup_timeout,
+        None,
+    )
+}
+
+fn spawn_local_agent_with_profile(
+    executable: &std::path::Path,
+    database_path: &std::path::Path,
+    signing_key: &str,
+    startup_timeout: Duration,
+    provider_profile: Option<ModelProviderProfile>,
+) -> Result<LocalAgentProcess, CoreError> {
     let database_path = database_path
         .to_str()
         .ok_or_else(|| CoreError::new("INVALID_PATH_ENCODING", "本机 Agent 数据目录无法读取"))?;
@@ -195,7 +342,7 @@ fn spawn_local_agent_with_timeout(
         )
         .env("YINGXU_LOCAL_AGENT_SIGNING_KEY", &signing_key)
         .env("YINGXU_LOCAL_AGENT_KEY_ID", "local-agent-rsa-v1")
-        .env("YINGXU_LOCAL_AGENT_MODEL", "qwen2.5:7b")
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     for name in [
@@ -219,6 +366,33 @@ fn spawn_local_agent_with_timeout(
     let mut child = command
         .spawn()
         .map_err(|_| CoreError::new("LOCAL_AGENT_START_FAILED", "本机 Agent 未能启动"))?;
+    let profile = provider_profile.unwrap_or(ModelProviderProfile {
+        provider: "ollama".into(),
+        model: "qwen2.5:7b".into(),
+        api_key: String::new(),
+    });
+    let mut stdin = child.stdin.take().ok_or_else(|| {
+        let _ = child.kill();
+        let _ = child.wait();
+        CoreError::new(
+            "LOCAL_AGENT_START_FAILED",
+            "无法安全传递本机 Agent 启动配置",
+        )
+    })?;
+    let mut startup_profile = Zeroizing::new(
+        serde_json::to_vec(&profile)
+            .map_err(|_| CoreError::new("LOCAL_AGENT_START_FAILED", "本机 Agent 配置编码失败"))?,
+    );
+    startup_profile.push(b'\n');
+    if stdin.write_all(&startup_profile).is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(CoreError::new(
+            "LOCAL_AGENT_START_FAILED",
+            "无法安全传递本机 Agent 启动配置",
+        ));
+    }
+    drop(stdin);
     let stdout = child.stdout.take().ok_or_else(|| {
         let _ = child.kill();
         let _ = child.wait();
@@ -1410,6 +1584,7 @@ fn main() {
             select_directory,
             backend_request,
             agent_local_status,
+            agent_model_provider_config,
             agent_local_turn,
             agent_local_turn_results,
             agent_prepare_action,
@@ -1524,21 +1699,13 @@ fn main() {
             let open = MenuItem::with_id(app, "open", "打开影序", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出影序", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &quit])?;
-            let mut pixels = vec![0u8; 24 * 24 * 4];
-            for y in 0..24 {
-                for x in 0..24 {
-                    let i = (y * 24 + x) * 4;
-                    let light = (5..10).contains(&x) || (14..19).contains(&x);
-                    let light = light && ((5..10).contains(&y) || (14..19).contains(&y));
-                    pixels[i..i + 4].copy_from_slice(if light {
-                        &[244, 242, 237, 255]
-                    } else {
-                        &[39, 61, 49, 255]
-                    });
-                }
-            }
+            let tray_icon = tauri::image::Image::new_owned(
+                include_bytes!("../icons/tray-icon.rgba").to_vec(),
+                32,
+                32,
+            );
             TrayIconBuilder::with_id("main")
-                .icon(tauri::image::Image::new_owned(pixels, 24, 24))
+                .icon(tray_icon)
                 .title("")
                 .tooltip("影序 YINGXU")
                 .menu(&menu)

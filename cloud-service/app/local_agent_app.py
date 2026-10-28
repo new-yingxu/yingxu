@@ -51,7 +51,7 @@ def _development_signing_key() -> str:
     ).decode("ascii")
 
 
-def _local_settings(settings: Settings | None, token: str | None) -> tuple[Settings, str]:
+def _local_settings(settings: Settings | None, token: str | None, provider_profile: dict[str, str] | None = None) -> tuple[Settings, str]:
     source = settings or Settings.from_env()
     runtime_token = token or os.getenv("YINGXU_LOCAL_AGENT_TOKEN")
     if os.getenv("YINGXU_LOCAL_AGENT_MODE") != "1":
@@ -68,13 +68,18 @@ def _local_settings(settings: Settings | None, token: str | None) -> tuple[Setti
     local_signing_key = os.getenv("YINGXU_LOCAL_AGENT_SIGNING_KEY")
     if source.app_env != "development" and not local_signing_key:
         raise RuntimeError("packaged local Agent requires a signing key from the OS credential store")
-    model = os.getenv("YINGXU_LOCAL_AGENT_MODEL", "qwen2.5:7b")
-    credentials = json.dumps({LOCAL_OWNER: {"provider": "ollama", "model": model}})
+    provider = (provider_profile or {}).get("provider", os.getenv("YINGXU_LOCAL_AGENT_PROVIDER", "ollama"))
+    model = (provider_profile or {}).get("model", os.getenv("YINGXU_LOCAL_AGENT_MODEL", "qwen2.5:7b" if provider == "ollama" else "qwen-plus" if provider == "dashscope" else "deepseek-flash"))
+    profile = {"provider": provider, "model": model}
+    if provider in {"dashscope", "deepseek"}:
+        profile["apiKey"] = (provider_profile or {}).get("apiKey", os.getenv("YINGXU_LOCAL_AGENT_PROVIDER_KEY", ""))
+        profile["region"] = "beijing" if provider == "dashscope" else "global"
+    credentials = json.dumps({LOCAL_OWNER: profile})
     try:
         from .model_provider import credential_for_owner
         credential_for_owner(credentials, LOCAL_OWNER, allow_local=True)
     except ValueError:
-        raise RuntimeError("local Agent model must be a supported Ollama model name") from None
+        raise RuntimeError("local Agent provider configuration is invalid") from None
     resolved = replace(
         source,
         app_env="development",  # isolated local runtime; never enables cloud app routes
@@ -94,13 +99,13 @@ def _local_settings(settings: Settings | None, token: str | None) -> tuple[Setti
     return resolved, runtime_token
 
 
-def create_local_agent_app(*, settings: Settings | None = None, token: str | None = None) -> FastAPI:
+def create_local_agent_app(*, settings: Settings | None = None, token: str | None = None, provider_profile: dict[str, str] | None = None) -> FastAPI:
     """Create the desktop-only Agent API; it refuses production/CloudBase mode."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         try:
-            resolved, runtime_token = _local_settings(settings, token)
+            resolved, runtime_token = _local_settings(settings, token, provider_profile)
         except RuntimeError as exc:
             app.state.startup_error = str(exc)
             raise
@@ -181,9 +186,9 @@ def create_local_agent_app(*, settings: Settings | None = None, token: str | Non
         _check_local_runtime(request, principal)
         from .model_provider import credential_for_owner, local_ollama_model_state
         credential = credential_for_owner(request.app.state.settings.model_owner_credentials, LOCAL_OWNER, allow_local=True)
-        availability = local_ollama_model_state(credential)
+        availability = local_ollama_model_state(credential) if credential.provider == "ollama" else "configured"
         return {
-            "configured": availability == "ready",
+            "configured": availability in {"ready", "configured"},
             "provider": credential.provider,
             "model": credential.model,
             "region": credential.region,

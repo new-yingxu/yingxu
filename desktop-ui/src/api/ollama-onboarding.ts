@@ -1,6 +1,6 @@
 import type { ModelStatus } from './contracts'
 
-export type OllamaSetupState = 'ready' | 'ollama_unavailable' | 'model_not_installed' | 'sidecar_unavailable' | 'unknown'
+export type OllamaSetupState = 'ready' | 'configured' | 'ollama_unavailable' | 'model_not_installed' | 'sidecar_unavailable' | 'unknown'
 
 export interface OllamaSetupView {
   state: OllamaSetupState
@@ -19,6 +19,8 @@ export function ollamaSetupView(status: ModelStatus | null, connected = true): O
   }
 
   switch (status.availability) {
+    case 'configured':
+      return { state: 'configured', title: '云端模型已配置', detail: `本机 Agent 使用 ${status.configured ? status.provider : '所选供应商'} 云端模型；请求逐次确认。需要完全离线时，可另行安装并启动 Ollama。` }
     case 'ready':
       return {
         state: 'ready',

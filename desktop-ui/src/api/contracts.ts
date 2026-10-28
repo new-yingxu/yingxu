@@ -145,7 +145,7 @@ export interface ConfiguredModelStatus {
   availability?: LocalAgentAvailability;
   cloudFallback?: false;
 }
-export type LocalAgentAvailability = "ready" | "ollama_unavailable" | "model_not_installed" | "sidecar_unavailable";
+export type LocalAgentAvailability = "ready" | "configured" | "ollama_unavailable" | "model_not_installed" | "sidecar_unavailable";
 export interface DeliveryPackage {
   id: string;
   name: string;
@@ -356,10 +356,22 @@ export interface ModelService {
   /** Explicitly resumes the same persisted model turn. Never invoked as a retry fallback. */
   resume?(query: string, identity: { sessionId: string; turnId: string }, consent: { explicitConsent: true }): Promise<AgentReply>;
 }
+export interface ModelProviderConfig {
+  configured: boolean;
+  provider: "ollama" | "dashscope" | "deepseek";
+  model: string;
+  secretStorage: "os_keychain";
+}
+export interface ModelProviderConfigService {
+  status(): Promise<ModelProviderConfig>;
+  save(provider: "dashscope" | "deepseek", model: string, apiKey: string): Promise<ModelProviderConfig>;
+  remove(): Promise<ModelProviderConfig>;
+}
 export type AppApi = DesktopApi & {
   mode: "native" | "mock";
   local?: LocalIntegration;
   model?: ModelService;
+  modelProviderConfig?: ModelProviderConfigService;
   netdisk?: NetdiskApi;
 };
 

@@ -11,6 +11,11 @@ const statusTimedOut=ref(false)
 const statusView=computed(()=>statusTimedOut.value
  ? { label:'本机 Agent 检查超时', detail:'macOS 系统凭据库没有返回。模型请求尚未发送；为避免重复访问，本次不再自动重试。处理系统提示后重启应用再检查。', ready:false, availability:'sidecar_unavailable' as const }
  : localAgentStatusView(status.value,!!controller))
+const activeProvider=computed(()=>status.value?.configured ? status.value.provider : 'ollama')
+const providerName=(value:string)=>value==='deepseek'?'DeepSeek':value==='dashscope'?'通义千问':'本机 Ollama'
+const modelDestination=computed(()=>activeProvider.value==='ollama'
+ ? '本机 LangGraph Agent、本机 SQLite 与本机 Ollama；不会向云端发送查询。'
+ : `本机 LangGraph Agent 和 SQLite；模型请求直接发送给你配置的 ${providerName(activeProvider.value)}，无需影序账号。`)
 const failure=ref<ReturnType<typeof modelFailure>|null>(null)
 const recoveryRequired=ref(false)
 const recoveryAvailable=ref(false), recoveryReview=ref<ModelPlan|null>(null)
@@ -85,19 +90,19 @@ defineExpose({
 })
 </script>
 <template>
- <section class="model-consent-panel" aria-label="模型服务状态">
-  <div class="model-status-row"><strong>本机 Agent</strong><span :data-availability="statusView.availability" :class="{ 'status-ready': statusView.ready, 'status-unavailable': !statusView.ready }">{{ statusView.label }}</span><button class="text-button" :disabled="!controller||busy||statusTimedOut" @click="refresh">刷新状态</button></div>
+  <section class="model-consent-panel" aria-label="模型服务状态">
+  <div class="model-status-row"><strong>Agent 执行环境</strong><span :data-availability="statusView.availability" :class="{ 'status-ready': statusView.ready, 'status-unavailable': !statusView.ready }">{{ statusView.label }}</span><button class="text-button" :disabled="!controller||busy||statusTimedOut" @click="refresh">刷新状态</button></div>
   <p>{{ statusView.detail }}</p>
-  <p v-if="statusView.ready">Agent 与 LangGraph 编排运行在本机，Ollama 只通过本机 sidecar 调用。本轮最多 3 次模型请求、10 条脱敏摘要；不连接 CloudBase 模型接口，也不会静默切换云端。</p>
+  <p v-if="statusView.ready">{{ modelDestination }} 每轮最多 3 次模型请求、10 条脱敏摘要；不连接影序 CloudBase 模型接口，也不会静默切换供应商。</p>
   <button ref="review" class="secondary-button compact" :disabled="!controller||!statusView.ready||busy||recoveryRequired||!query.trim()" @click="prepare()">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '新建模型轮次并查看发送内容' }}</button>
   <button v-if="recoveryAvailable" class="secondary-button compact" :disabled="busy" @click="openRecovery">{{ busy ? '处理中…' : '查看并恢复本轮' }}</button>
   <p v-if="failure" role="alert" class="model-failure">{{ failure.message }}</p>
  </section>
  <div v-if="plan" class="model-consent-overlay" @keydown="keyboard">
   <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="model-consent-title" class="model-consent-dialog">
-   <h2 id="model-consent-title">确认在本机运行 Agent</h2>
-   <dl><dt>Agent / 模型</dt><dd>本机 LangGraph / {{ plan.model }} ({{ plan.provider }})</dd><dt>数据目的地</dt><dd>本机 sidecar 与本机 Ollama；不连接云端 Agent</dd><dt>本次查询</dt><dd class="model-query">{{ plan.query }}</dd><dt>本机工具与调用上限</dt><dd>最多 3 次模型请求、10 条脱敏查询摘要。不发送照片内容、完整路径或 GPS。素材打开会单独显示文件名并再次确认。</dd><dt>权限</dt><dd>本轮仅允许本机索引素材、脱敏元数据和备份任务查询。文件打开由桌面本机授权检查；不授权改名、移动、删除或上传。取消、超时和失败不会静默重发或切换云端。</dd></dl>
-   <div class="model-consent-actions"><button ref="cancel" class="secondary-button" :disabled="busy" @click="confirm(false)">取消，本机不运行</button><button class="primary-button" :disabled="busy" @click="confirm(true)">{{ busy ? '等待本机结果…' : '确认本机运行' }}</button></div>
+   <h2 id="model-consent-title">{{ plan.provider === 'ollama' ? '确认在本机运行 Agent' : '确认使用自带 Key 的云端模型' }}</h2>
+   <dl><dt>Agent / 模型</dt><dd>本机 LangGraph / {{ plan.model }} ({{ providerName(plan.provider) }})</dd><dt>数据目的地</dt><dd>{{ plan.provider === 'ollama' ? '本机 sidecar、本机 SQLite 与本机 Ollama；查询不发到云端。' : `本机 sidecar 与 SQLite；查询文字及最多 10 条脱敏索引摘要将直接发送给 ${providerName(plan.provider)}。不经过影序 CloudBase，也无需影序账号。` }}</dd><dt>本次查询</dt><dd class="model-query">{{ plan.query }}</dd><dt>本机工具与调用上限</dt><dd>最多 3 次模型请求、10 条脱敏查询摘要。不发送照片原片、完整路径或 GPS。素材打开会单独显示文件名并再次确认。</dd><dt>权限</dt><dd>本轮只允许本机索引素材、脱敏元数据和备份任务查询。文件打开由桌面本机授权检查；不授权改名、移动、删除或上传。取消、超时和失败不会静默重发或切换供应商。</dd></dl>
+   <div class="model-consent-actions"><button ref="cancel" class="secondary-button" :disabled="busy" @click="confirm(false)">取消</button><button class="primary-button" :disabled="busy" @click="confirm(true)">{{ busy ? '等待模型结果…' : plan.provider === 'ollama' ? '确认本机运行' : '确认发送到云端' }}</button></div>
   </section>
  </div>
  <div v-if="recoveryReview" class="model-consent-overlay" @keydown="keyboard">

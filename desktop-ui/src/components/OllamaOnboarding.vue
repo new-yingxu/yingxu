@@ -43,9 +43,9 @@ onUnmounted(() => { mounted = false })
   <section class="ollama-onboarding" aria-labelledby="ollama-onboarding-title">
     <header class="onboarding-heading">
       <div>
-        <p class="eyebrow">本机模型 · 首次设置</p>
+        <p class="eyebrow">本机模型 · 可选离线模式</p>
         <h3 id="ollama-onboarding-title">准备 Ollama</h3>
-        <p>影序桌面 Agent 只连接本机 Ollama。素材和查询不会上传到云端，也不会自动下载模型。</p>
+        <p>启用后可让 Agent 完全在本机运行。也可在上方配置 DeepSeek 或通义千问 Key，使用云端模型。</p>
       </div>
       <span class="state-pill" :data-state="view.state" role="status">{{ busy ? '正在检查…' : view.title }}</span>
     </header>

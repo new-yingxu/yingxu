@@ -149,6 +149,7 @@ export function localAgentStatusView(status: ModelStatus | null, connected = tru
   if (!connected || !status) return { label: '状态待确认', detail: '无法读取本机 Agent 状态。刷新后再试；不会切换到云端模型。', ready: false, availability: 'unknown' }
   switch (status.availability) {
     case 'ready': return { label: `已就绪${status.configured ? ` · ${status.model}` : ''}`, detail: '本机 Agent 与 Ollama 可用。每次运行前仍需你确认。', ready: status.configured, availability: 'ready' }
+    case 'configured': return { label: `云端模型已配置${status.configured ? ` · ${status.model}` : ''}`, detail: `本机 Agent 已连接 ${status.configured ? status.provider : '用户选择的供应商'}。模型密钥保存在系统钥匙串；发送查询前会展示数据范围并逐次确认。`, ready: status.configured, availability: 'configured' }
     case 'model_not_installed': return { label: '模型未安装', detail: `本机 Ollama 正在运行，但没有找到所需模型${status.configured ? `：${status.model}` : ''}。安装模型后刷新状态。`, ready: false, availability: 'model_not_installed' }
     case 'ollama_unavailable': return { label: 'Ollama 未运行', detail: '未检测到本机 Ollama 服务。启动 Ollama 后刷新状态。不会自动改用云端模型。', ready: false, availability: 'ollama_unavailable' }
     case 'sidecar_unavailable': return { label: '本机 Agent 服务不可用', detail: '影序本机 Agent 未连接。请重启应用后刷新状态；不会自动改用云端模型。', ready: false, availability: 'sidecar_unavailable' }
@@ -272,11 +273,11 @@ export function createLocalAgentService(options: {
   async function status(): Promise<ModelStatus> {
     const value = await options.transport.status()
     if (value.requiresExplicitConsent !== true || value.executionAuthorized !== false) throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机模型状态缺少逐次确认边界', 0, false)
-    if (!['ready', 'ollama_unavailable', 'model_not_installed', 'sidecar_unavailable'].includes(String(value.availability)) || value.cloudFallback !== false)
+    if (!['ready', 'configured', 'ollama_unavailable', 'model_not_installed', 'sidecar_unavailable'].includes(String(value.availability)) || value.cloudFallback !== false)
       throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 状态缺少可用性或云端回退边界', 0, false)
-    if (value.configured !== (value.availability === 'ready'))
+    if (value.configured !== ['ready', 'configured'].includes(String(value.availability)))
       throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机 Agent 可用性与配置状态不一致', 0, false)
-    if (value.configured && (value.provider !== 'ollama' || value.region !== 'local')) throw new CloudError('LOCAL_PROVIDER_NOT_ALLOWED', '桌面 Agent 当前只允许使用本机 Ollama，不会切换到远端模型', 0, false)
+    if (value.configured && !((value.provider === 'ollama' && value.region === 'local') || (value.provider === 'dashscope' && value.region === 'beijing') || (value.provider === 'deepseek' && value.region === 'global'))) throw new CloudError('LOCAL_PROVIDER_NOT_ALLOWED', '桌面 Agent 模型供应商配置无效；不会改用其他服务', 0, false)
     return value
   }
 
@@ -310,10 +311,12 @@ export function createLocalAgentService(options: {
     const key = JSON.stringify([sessionId, turnId])
     if (attempted.has(key)) throw new CloudError('MODEL_REQUEST_ALREADY_SENT', '本轮已提交，不能重复派发', 0, false)
     const configured = await status()
-    if (!configured.configured) throw new CloudError('LOCAL_AGENT_UNAVAILABLE', '本机 Agent 或 Ollama 模型不可用；不会切换到云端', 0, false)
-    if (!alreadyConsented && !(await options.confirmModelUse({ title: '确认在本机运行 Agent', description: '本次查询只交给本机 LangGraph Agent 与本机 Ollama。云端不接收查询；照片内容、完整路径和 GPS 不会发送。本轮最多 3 次模型请求、10 条本地摘要。', rows: [{ label: '本机模型', value: configured.model }, { label: '查询', value: query.trim() }, { label: '本地工具', value: '影像检索、脱敏元数据、备份任务；打开素材需另行确认' }], confirmLabel: '确认本机运行' }))) throw new CloudError('USER_CANCELLED', '已取消，本机 Agent 未收到查询', 0, false)
+    if (!configured.configured) throw new CloudError('LOCAL_AGENT_UNAVAILABLE', 'Agent 模型未配置；不会切换到其他服务', 503, false)
+    const localModel = configured.provider === 'ollama'
+    const destination = localModel ? '本机 LangGraph Agent 与本机 Ollama；查询不会发到云端。' : `本机 LangGraph Agent 与 ${configured.provider} 云端模型；查询文字及最多 10 条脱敏索引摘要会发送给该供应商。`
+    if (!alreadyConsented && !(await options.confirmModelUse({ title: localModel ? '确认在本机运行 Agent' : '确认发送到自带 Key 云端模型', description: `${destination}照片/视频原片、完整路径和 GPS 不会发送；文件操作仍由本机执行并单独确认。本轮最多 3 次模型请求。`, rows: [{ label: '模型', value: `${configured.provider} · ${configured.model}` }, { label: '查询', value: query.trim() }, { label: '本地工具', value: '影像检索、脱敏元数据、备份任务；打开素材需另行确认' }], confirmLabel: localModel ? '确认本机运行' : '确认发送' }))) throw new CloudError('USER_CANCELLED', '已取消，本机 Agent 未收到查询', 0, false)
     const current = await status()
-    if (!current.configured) throw new CloudError('LOCAL_AGENT_UNAVAILABLE', '本机 Agent 或 Ollama 模型已不可用；本轮未发送', 0, false)
+    if (!current.configured) throw new CloudError('LOCAL_AGENT_UNAVAILABLE', 'Agent 模型已不可用；本轮未发送', 0, false)
     if (current.provider !== configured.provider || current.model !== configured.model || current.region !== configured.region) throw new CloudError('MODEL_CONFIGURATION_CHANGED', '本机模型配置在确认期间发生变化；本轮未发送，请重新核对', 0, false)
     attempted.add(key)
     const request: LocalTurnRequest = { query: query.trim(), sessionId, turnId, useModel: true, capabilities: CAPABILITIES, destinationGrantIds: [] }

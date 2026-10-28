@@ -143,8 +143,10 @@ def verify(bundle: Path, *, with_ollama: bool) -> dict:
             "CLOUDBASE_API_KEY": "ignored-cloud-secret-fixture",
             "MODEL_OWNER_CREDENTIALS": json.dumps({"local-desktop-owner": {"provider": "openai", "apiKey": "ignored-model-secret-fixture"}}),
         }
-        process = subprocess.Popen([str(executable)], env=env, stdout=subprocess.PIPE,
+        process = subprocess.Popen([str(executable)], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        process.stdin.write(json.dumps({"provider": "ollama", "model": "qwen2.5:7b"}) + "\n")
+        process.stdin.close()
         shutdown_ok = False
         model_requests = 0
         try:
@@ -227,12 +229,83 @@ def verify(bundle: Path, *, with_ollama: bool) -> dict:
                     process.wait(timeout=5)
 
 
+def verify_accountless_byok_status(bundle: Path) -> dict:
+    """Verify a synthetic provider profile reaches the local sidecar without a cloud account."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    manifest = verify_manifest(bundle)
+    executable = bundle.resolve() / manifest["entrypoint"]
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    signing_key = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("ascii")
+    token = secrets.token_urlsafe(48)
+    profile = {"provider": "deepseek", "model": "deepseek-flash", "apiKey": "synthetic-verification-key"}
+    with tempfile.TemporaryDirectory(prefix="yingxu-local-agent-byok-verify-") as temp:
+        env = {
+            **os.environ,
+            "APP_ENV": "production",
+            "YINGXU_LOCAL_AGENT_MODE": "1",
+            "YINGXU_LOCAL_AGENT_TOKEN": token,
+            "YINGXU_LOCAL_AGENT_DATABASE_URL": "sqlite:///" + str(Path(temp) / "private.sqlite"),
+            "YINGXU_LOCAL_AGENT_SIGNING_KEY": signing_key,
+            "YINGXU_LOCAL_AGENT_KEY_ID": "packaged-byok-verification-key",
+            # Deliberate decoys: only the one-shot local profile may configure the provider.
+            "CLOUDBASE_API_KEY": "ignored-cloud-secret-fixture",
+            "MODEL_OWNER_CREDENTIALS": "{}",
+        }
+        process = subprocess.Popen([str(executable)], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        try:
+            process.stdin.write(json.dumps(profile) + "\n")
+            process.stdin.close()
+            selector = selectors.DefaultSelector()
+            selector.register(process.stdout, selectors.EVENT_READ)
+            if not selector.select(timeout=45):
+                raise RuntimeError("BYOK sidecar did not announce readiness within 45 seconds")
+            ready = json.loads(process.stdout.readline())
+            if ready.get("event") != "ready" or ready.get("host") != "127.0.0.1":
+                raise RuntimeError("BYOK sidecar returned an invalid readiness message")
+            base = f"http://127.0.0.1:{ready['port']}"
+            health = _request(base + "/healthz", token)
+            status = _request(base + "/v1/agent/local-status", token)
+            if health.get("ok") is not True or status != {
+                "configured": True,
+                "provider": "deepseek",
+                "model": "deepseek-flash",
+                "region": "global",
+                "availability": "configured",
+                "requiresExplicitConsent": True,
+                "executionAuthorized": False,
+                "cloudFallback": False,
+            }:
+                raise RuntimeError("accountless BYOK sidecar status check failed")
+            stopped = _request(base + "/_host/shutdown", token, {})
+            if stopped.get("stopping") is not True or process.wait(timeout=20) != 0:
+                raise RuntimeError("BYOK sidecar did not shut down gracefully")
+            return {"status": "passed", "provider": "deepseek", "profile": "synthetic key; no provider request",
+                    "cloudAccount": "not required", "cloudFallback": False, "gracefulShutdown": "passed"}
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle-dir", type=Path, required=True)
     parser.add_argument("--with-ollama", action="store_true", help="use the configured local Ollama model")
     args = parser.parse_args()
-    print(json.dumps(verify(args.bundle_dir, with_ollama=args.with_ollama), separators=(",", ":")))
+    result = verify(args.bundle_dir, with_ollama=args.with_ollama)
+    result["accountlessByokStatus"] = verify_accountless_byok_status(args.bundle_dir)
+    print(json.dumps(result, separators=(",", ":")))
 
 
 if __name__ == "__main__":

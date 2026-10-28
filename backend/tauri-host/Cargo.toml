@@ -16,6 +16,7 @@ tauri-plugin-single-instance = "2.5.4"
 keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native"] }
 rand = "0.8.5"
 rsa = { version = "0.9.9", features = ["pem"] }
+zeroize = "1.9.1"
 
 [dev-dependencies]
 rusqlite = "0.41.0"

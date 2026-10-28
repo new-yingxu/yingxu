@@ -8,6 +8,7 @@ import type {
   LocalCapabilities,
   MediaFile,
   ModelStatus,
+  ModelProviderConfig,
   NamePreset,
   ScanReport, IndexResult, NetdiskProvider, NetdiskTask,
   QuarantineItem,
@@ -362,6 +363,11 @@ export function createTauriApi(options: Options = {}): AppApi {
       listQuarantine: () => rpc<QuarantineItem[]>("quarantine.list", {}),
     },
     model: localAgent.model,
+    modelProviderConfig: {
+      status: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "status" }),
+      save: (provider, model, apiKey) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "save", provider, model, apiKey }),
+      remove: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "remove" }),
+    },
     auth: {
       restore: () => rpc("auth.restore"),
       login: () =>

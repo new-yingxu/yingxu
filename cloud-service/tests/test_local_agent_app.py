@@ -77,6 +77,32 @@ class LocalAgentApp(unittest.TestCase):
         self.assertFalse(missing.json()["configured"])
         self.assertEqual(missing.json()["availability"], "model_not_installed")
 
+    def test_desktop_byok_status_is_ready_without_ollama_or_cloud_account(self):
+        from app.local_agent_app import _local_settings
+        env = {
+            "YINGXU_LOCAL_AGENT_MODE": "1",
+            "YINGXU_LOCAL_AGENT_PROVIDER": "deepseek",
+            "YINGXU_LOCAL_AGENT_MODEL": "deepseek-flash",
+            "YINGXU_LOCAL_AGENT_PROVIDER_KEY": "synthetic-provider-key",
+        }
+        with patch.dict(os.environ, env):
+            resolved, _ = _local_settings(self.settings, self.token)
+            credential = credential_for_owner(resolved.model_owner_credentials, LOCAL_OWNER, allow_local=True)
+            self.assertEqual((credential.provider, credential.model, credential.region), ("deepseek", "deepseek-flash", "global"))
+            self.assertIsNone(resolved.cloudbase_env_id)
+            self.assertIsNone(resolved.cloudbase_api_key)
+            self.assertNotIn("synthetic-provider-key", repr(credential))
+            app = create_local_agent_app(settings=self.settings, token=self.token)
+            with patch("app.model_provider.local_ollama_model_state", side_effect=AssertionError("must not probe Ollama")):
+                with TestClient(app) as client:
+                    response = client.get("/v1/agent/local-status", headers={"Authorization": "Bearer " + self.token})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {
+            "configured": True, "provider": "deepseek", "model": "deepseek-flash", "region": "global",
+            "availability": "configured", "requiresExplicitConsent": True,
+            "executionAuthorized": False, "cloudFallback": False,
+        })
+
     def test_local_model_turn_replay_does_not_call_provider_twice(self):
         model = {"choices": [{"message": {"content": "我会先在本机影像索引中查找。"}}],
                  "usage": {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9}}

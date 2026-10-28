@@ -4,6 +4,7 @@ import NetdiskPanel from "./components/NetdiskPanel.vue";
 import ModelConsent from "./components/ModelConsent.vue";
 import AgentLocalFileActions from "./components/AgentLocalFileActions.vue";
 import OllamaOnboarding from "./components/OllamaOnboarding.vue";
+import CloudModelSettings from "./components/CloudModelSettings.vue";
 import AgentActionCard from "./components/AgentActionCard.vue";
 import { canEnterNativeLocalMode, canShowDevDiagnostics, canUseCloudFeatures, enterNativeLocalMode, runCloudAction } from "./api/local-mode";
 import { shouldShowLocalAgentAdapterNotice } from "./api/local-agent";
@@ -2512,6 +2513,7 @@ function taskStateLabel(state: TaskState) {
                     </div>
                   </div>
                 </div>
+                <CloudModelSettings :service="api.modelProviderConfig" />
                 <OllamaOnboarding :service="api.model" />
                 <p v-if="agentHasArchivedUnresolvedTurn" role="status" class="safety-callout">
                   上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。

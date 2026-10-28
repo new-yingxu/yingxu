@@ -5,7 +5,7 @@ import sys
 import unittest
 from unittest.mock import patch,MagicMock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from app.model_provider import credential_for_owner,generate_answer,local_ollama_model_state,ModelNotConfigured,ModelUnavailable,NoRedirect
+from app.model_provider import credential_for_owner,generate_answer,local_ollama_model_state,_tool_provider_request,ModelNotConfigured,ModelUnavailable,NoRedirect
 from urllib.error import HTTPError,URLError
 from urllib.request import Request
 
@@ -35,6 +35,44 @@ class ModelProvider(unittest.TestCase):
         self.assertNotIn('Authorization',request.headers)
         # Fixed loopback requests must never inherit a system HTTP proxy.
         with self.assertRaises(ModelNotConfigured):credential_for_owner(json.dumps({'owner-a':{'provider':'ollama','model':'qwen:cloud'}}),'owner-a',allow_local=True)
+
+    def test_accountless_deepseek_byok_uses_fixed_official_endpoint(self):
+        credential=credential_for_owner(json.dumps({'local-desktop-owner':{'provider':'deepseek','model':'deepseek-flash','region':'global','apiKey':'synthetic-deepseek-key'}}),'local-desktop-owner',allow_local=True)
+        opener=MagicMock()
+        opener.open.return_value.__enter__.return_value.read.return_value=json.dumps({'choices':[{'message':{'content':'synthetic'}}]}).encode()
+        with patch('app.model_provider.build_opener',return_value=opener):
+            result=generate_answer(credential,'synthetic query',[])
+        request=opener.open.call_args.args[0]
+        self.assertEqual(request.full_url,'https://api.deepseek.com/chat/completions')
+        self.assertEqual(request.get_header('Authorization'),'Bearer synthetic-deepseek-key')
+        self.assertEqual(json.loads(request.data)['model'],'deepseek-flash')
+        self.assertEqual(json.loads(request.data)['thinking'],{'type':'disabled'})
+        self.assertEqual(result['provider'],'deepseek')
+        self.assertNotIn('synthetic-deepseek-key',repr(credential))
+
+    def test_tool_request_uses_provider_specific_non_reasoning_options(self):
+        deepseek=credential_for_owner(json.dumps({'local-desktop-owner':{'provider':'deepseek','model':'deepseek-flash','apiKey':'synthetic-key'}}),'local-desktop-owner',allow_local=True)
+        opener=MagicMock()
+        opener.open.return_value.__enter__.return_value.read.return_value=b'{"choices":[]}'
+        with patch('app.model_provider.build_opener',return_value=opener):
+            _tool_provider_request(deepseek,[{'role':'user','content':'synthetic'}])
+        payload=json.loads(opener.open.call_args.args[0].data)
+        self.assertEqual(payload['thinking'],{'type':'disabled'})
+        self.assertNotIn('enable_thinking',payload)
+
+        with patch('app.model_provider.build_opener',return_value=opener):
+            _tool_provider_request(self.credential,[{'role':'user','content':'synthetic'}])
+        payload=json.loads(opener.open.call_args.args[0].data)
+        self.assertIs(payload['enable_thinking'],False)
+        self.assertNotIn('thinking',payload)
+
+    def test_desktop_byok_rejects_custom_endpoints_and_unknown_provider(self):
+        for value in (
+            {'provider':'deepseek','model':'deepseek-flash','region':'https://attacker.invalid','apiKey':'fixture'},
+            {'provider':'custom','model':'model','apiKey':'fixture'},
+            {'provider':'dashscope','model':'../bad','apiKey':'fixture'},
+        ):
+            with self.assertRaises(ModelNotConfigured):credential_for_owner(json.dumps({'owner':value}),'owner',allow_local=True)
 
     def test_local_model_status_probes_only_fixed_loopback_catalog(self):
         credential=credential_for_owner(json.dumps({'owner-a':{'provider':'ollama','model':'qwen2.5:7b'}}),'owner-a',allow_local=True)
