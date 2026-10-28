@@ -14,10 +14,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    Emitter, Manager,
+    Emitter, Manager, WebviewUrl,
     menu::{Menu, MenuItem},
     path::BaseDirectory,
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    webview::WebviewWindowBuilder,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use yingxu_core::{
@@ -1016,6 +1017,17 @@ async fn backend_request(
     let state = app.state::<HostState>();
     let access = if window.label() == "main" {
         check_paths(&state, &request)
+    } else if window.label() == "tray-agent"
+        && request.method == "agent.executeTool"
+        && [
+            "search_media",
+            "get_metadata",
+            "get_backup_job",
+            "open_item",
+        ]
+        .contains(&request.params["tool"].as_str().unwrap_or_default())
+    {
+        Ok(())
     } else {
         Err(CoreError::new(
             "PERMISSION_DENIED",
@@ -1057,7 +1069,7 @@ async fn agent_local_status(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, CoreError> {
-    if window.label() != "main" {
+    if !["main", "tray-agent"].contains(&window.label()) {
         return Err(CoreError::new(
             "PERMISSION_DENIED",
             "仅主窗口可查询本机 Agent 状态",
@@ -1182,7 +1194,7 @@ async fn agent_local_turn(
     app: tauri::AppHandle,
     request: serde_json::Value,
 ) -> Result<serde_json::Value, CoreError> {
-    if window.label() != "main" {
+    if !["main", "tray-agent"].contains(&window.label()) {
         return Err(CoreError::new(
             "PERMISSION_DENIED",
             "仅主窗口可调用本机 Agent",
@@ -1220,7 +1232,7 @@ async fn agent_local_turn_results(
     turn_id: String,
     request: serde_json::Value,
 ) -> Result<serde_json::Value, CoreError> {
-    if window.label() != "main" {
+    if !["main", "tray-agent"].contains(&window.label()) {
         return Err(CoreError::new(
             "PERMISSION_DENIED",
             "仅主窗口可续交本机 Agent 结果",
@@ -1269,7 +1281,7 @@ async fn agent_prepare_action(
     file_id: String,
     expires_at_ms: u64,
 ) -> Result<serde_json::Value, CoreError> {
-    if window.label() != "main" || tool != "open_item" {
+    if !["main", "tray-agent"].contains(&window.label()) || tool != "open_item" {
         return Err(CoreError::new(
             "PERMISSION_DENIED",
             "仅主窗口可预览打开素材操作",
@@ -1341,7 +1353,7 @@ async fn agent_confirm_action(
     action_id: String,
     accepted: bool,
 ) -> Result<serde_json::Value, CoreError> {
-    if window.label() != "main" {
+    if !["main", "tray-agent"].contains(&window.label()) {
         return Err(CoreError::new(
             "PERMISSION_DENIED",
             "仅主窗口可确认本机操作",
@@ -1681,6 +1693,120 @@ fn tray_progress(job: &yingxu_core::Job) -> (String, String) {
     )
 }
 
+fn active_tray_job(state: &HostState) -> Option<yingxu_core::Job> {
+    state.engine.store.jobs().ok().and_then(|jobs| {
+        jobs.into_iter()
+            .filter_map(|job| {
+                let priority = match job.state.as_str() {
+                    "running" => 3,
+                    "paused" => 2,
+                    "queued" => 1,
+                    _ => return None,
+                };
+                Some((job, priority))
+            })
+            .max_by_key(|(_, priority)| *priority)
+            .map(|(job, _)| job)
+    })
+}
+
+#[tauri::command]
+fn tray_job_snapshot(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "tray-agent" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅菜单栏窗口可查询传输状态",
+        ));
+    }
+    let state = app.state::<HostState>();
+    let Some(job) = active_tray_job(&state) else {
+        return Ok(serde_json::json!({ "active": false }));
+    };
+    let speed = job.runtime["speedBytesPerSecond"].as_u64().unwrap_or(0);
+    let total = job.total_bytes.saturating_mul(job.targets.len() as u64);
+    let remaining = (total as f64 * (100.0 - job.progress.clamp(0.0, 100.0)) / 100.0) as u64;
+    Ok(serde_json::json!({
+        "active": true,
+        "state": job.state,
+        "progress": job.progress.clamp(0.0, 100.0),
+        "speedBytesPerSecond": speed,
+        "remainingSeconds": (speed > 0).then_some(remaining / speed)
+    }))
+}
+
+#[tauri::command]
+fn tray_open_main(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), CoreError> {
+    if window.label() != "tray-agent" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅菜单栏窗口可打开主界面",
+        ));
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        main.show()
+            .map_err(|_| CoreError::new("WINDOW_UNAVAILABLE", "主界面无法显示"))?;
+        main.set_focus()
+            .map_err(|_| CoreError::new("WINDOW_UNAVAILABLE", "主界面无法聚焦"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn tray_quit(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), CoreError> {
+    if window.label() != "tray-agent" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅菜单栏窗口可退出影序",
+        ));
+    }
+    request_quit(app);
+    Ok(())
+}
+
+fn show_tray_agent_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("tray-agent") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        return;
+    }
+    let (x, y) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|monitor| {
+            let scale = monitor.scale_factor();
+            let size = monitor.size();
+            let origin = monitor.position();
+            (
+                origin.x as f64 / scale + size.width as f64 / scale - 416.0,
+                origin.y as f64 / scale + 38.0,
+            )
+        })
+        .unwrap_or((900.0, 40.0));
+    let _ = WebviewWindowBuilder::new(
+        app,
+        "tray-agent",
+        WebviewUrl::App("index.html?window=tray-agent".into()),
+    )
+    .title("影序 · Agent 助手")
+    .inner_size(400.0, 680.0)
+    .min_inner_size(340.0, 520.0)
+    .max_inner_size(520.0, 820.0)
+    .position(x.max(8.0), y.max(8.0))
+    .resizable(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(true)
+    .build();
+}
+
 /// 首次关窗缩托盘的一次性提示（测试反馈 §9 P1）。Windows 原生气泡需要签名/AUMID，
 /// 这里用一次性原生对话框兜底，并发前端事件供后续做 toast。
 fn tray_hint_once(app: &tauri::AppHandle, state: &HostState) {
@@ -1737,7 +1863,10 @@ fn main() {
             agent_confirm_action,
             agent_prepare_file_action,
             agent_confirm_file_action,
-            open_system_trash
+            open_system_trash,
+            tray_job_snapshot,
+            tray_open_main,
+            tray_quit
         ])
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
@@ -1795,31 +1924,43 @@ fn main() {
                 }
                 running.store(false, Ordering::Release);
             });
+            let tray_progress_item = Arc::new(Mutex::new(None::<MenuItem<tauri::Wry>>));
+            let progress_menu = tray_progress_item.clone();
             let progress_stop = shutdown_flag.clone();
             let progress_engine = engine.clone();
             let progress_handle = app.handle().clone();
             std::thread::spawn(move || {
                 while !progress_stop.load(Ordering::Acquire) {
-                    let active = progress_engine.store.jobs().ok().and_then(|jobs| {
-                        jobs.into_iter()
-                            .filter_map(|job| {
-                                let priority = match job.state.as_str() {
-                                    "running" => 3,
-                                    "paused" => 2,
-                                    "queued" => 1,
-                                    _ => return None,
-                                };
-                                Some((job, priority))
-                            })
-                            .max_by_key(|(_, priority)| *priority)
-                            .map(|(job, _)| job)
-                    });
+                    let jobs = progress_engine.store.jobs().ok().unwrap_or_default();
+                    let active = jobs
+                        .into_iter()
+                        .filter_map(|job| {
+                            let priority = match job.state.as_str() {
+                                "running" => 3,
+                                "paused" => 2,
+                                "queued" => 1,
+                                _ => return None,
+                            };
+                            Some((job, priority))
+                        })
+                        .max_by_key(|(_, priority)| *priority)
+                        .map(|(job, _)| job);
                     if let Some(job) = active.as_ref() {
                         let _ = progress_handle.emit("local-job-updated", job);
                     }
                     let (title, tooltip) = active
                         .as_ref()
                         .map_or_else(|| (String::new(), "影序 YINGXU".to_string()), tray_progress);
+                    if let Ok(item) = progress_menu.lock() {
+                        if let Some(item) = item.as_ref() {
+                            let text = if title.is_empty() {
+                                "传输进度：当前无任务".to_string()
+                            } else {
+                                format!("传输进度：{title}")
+                            };
+                            let _ = item.set_text(text);
+                        }
+                    }
                     let main_thread_handle = progress_handle.clone();
                     let _ = progress_handle.run_on_main_thread(move || {
                         if let Some(tray) = main_thread_handle.tray_by_id("main") {
@@ -1842,9 +1983,15 @@ fn main() {
                 app_data_dir: root,
                 local_agent: Mutex::new(None),
             });
-            let open = MenuItem::with_id(app, "open", "打开影序", true, None::<&str>)?;
+            let progress_item =
+                MenuItem::with_id(app, "progress", "传输进度：当前无任务", false, None::<&str>)?;
+            *tray_progress_item
+                .lock()
+                .map_err(|_| "托盘菜单状态不可用")? = Some(progress_item.clone());
+            let agent = MenuItem::with_id(app, "agent", "打开 Agent 助手小窗", true, None::<&str>)?;
+            let open = MenuItem::with_id(app, "open", "打开影序主界面", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出影序", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let menu = Menu::with_items(app, &[&progress_item, &agent, &open, &quit])?;
             let tray_icon = tauri::image::Image::new_owned(
                 include_bytes!("../icons/tray-icon.rgba").to_vec(),
                 32,
@@ -1855,6 +2002,17 @@ fn main() {
                 .title("")
                 .tooltip("影序 YINGXU")
                 .menu(&menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_tray_agent_window(tray.app_handle());
+                    }
+                })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
                         if let Some(w) = app.get_webview_window("main") {
@@ -1862,6 +2020,7 @@ fn main() {
                             let _ = w.set_focus();
                         }
                     }
+                    "agent" => show_tray_agent_window(app),
                     "quit" => request_quit(app.clone()),
                     _ => {}
                 })
@@ -1870,6 +2029,11 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "tray-agent" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
                 let state = window.state::<HostState>();
                 let background = state
                     .engine

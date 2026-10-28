@@ -1,1 +1,1 @@
-{"main-window":{"identifier":"main-window","description":"","local":true,"windows":["main"],"permissions":["core:default"]}}
+{"main-window":{"identifier":"main-window","description":"","local":true,"windows":["main"],"permissions":["core:default"]},"tray-agent-window":{"identifier":"tray-agent-window","description":"","local":true,"windows":["tray-agent"],"permissions":["core:default","core:window:allow-hide"]}}

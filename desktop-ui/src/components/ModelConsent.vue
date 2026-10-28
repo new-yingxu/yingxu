@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import type { AgentReply, ModelService, ModelStatus } from '../api/contracts'
 import { createModelConsent, modelFailure, type ModelPlan } from '../api/model-consent'
 import { localAgentStatusView, withLocalAgentStatusTimeout } from '../api/local-agent'
-const props=defineProps<{ service?: ModelService; query: string }>()
+const props=defineProps<{ service?: ModelService; query: string; hideStatus?: boolean }>()
 const emit=defineEmits<{ reply: [value: { query: string; reply: AgentReply }] }>()
 const controller=props.service ? createModelConsent(props.service) : null
 const status=ref<ModelStatus|null>(null), busy=ref(false), plan=ref<ModelPlan|null>(null)
@@ -90,7 +90,7 @@ defineExpose({
 })
 </script>
 <template>
-  <section class="model-consent-panel" aria-label="模型服务状态">
+  <section v-if="!hideStatus" class="model-consent-panel" aria-label="模型服务状态">
   <div class="model-status-row"><strong>Agent 执行环境</strong><span :data-availability="statusView.availability" :class="{ 'status-ready': statusView.ready, 'status-unavailable': !statusView.ready }">{{ statusView.label }}</span><button class="text-button" :disabled="!controller||busy||statusTimedOut" @click="refresh">刷新状态</button></div>
   <p>{{ statusView.detail }}</p>
   <p v-if="statusView.ready">{{ modelDestination }} 每轮最多 3 次模型请求、10 条脱敏摘要；不连接影序 CloudBase 模型接口，也不会静默切换供应商。</p>
