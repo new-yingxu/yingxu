@@ -268,10 +268,12 @@ async fn agent_model_provider_config(
     model: Option<String>,
     api_key: Option<String>,
 ) -> Result<serde_json::Value, CoreError> {
-    if window.label() != "main" {
+    let allowed_window = window.label() == "main"
+        || (window.label() == "tray-agent" && matches!(action.as_str(), "status" | "select_local_model"));
+    if !allowed_window {
         return Err(CoreError::new(
             "PERMISSION_DENIED",
-            "仅主窗口可管理模型配置",
+            "当前窗口无权执行此模型配置操作",
         ));
     }
     tauri::async_runtime::spawn_blocking(move || {
@@ -1101,10 +1103,10 @@ async fn agent_local_models(
     window: tauri::WebviewWindow,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, CoreError> {
-    if window.label() != "main" {
+    if !["main", "tray-agent"].contains(&window.label()) {
         return Err(CoreError::new(
             "PERMISSION_DENIED",
-            "仅主窗口可查询本机模型列表",
+            "当前窗口无权查询本机模型列表",
         ));
     }
     tauri::async_runtime::spawn_blocking(move || {
