@@ -90,7 +90,7 @@ export function createMockApi(): DesktopApi {
       async get() { await delay(70); return { ...settings } },
       async update(next) { settings = { ...settings, ...next }; await delay(80); return { ...settings } },
       async reset() { settings = { ...defaultSettings }; await delay(100); return { ...settings } },
-      async connectProvider() { await delay(120); return '百度网盘尚未完成开放平台应用审核与 OAuth 配置，当前不能启动真实授权或上传。' },
+      async connectProvider() { await delay(120); return '百度网盘应用已上线（个人场景）。桌面端仍是演示适配器；API 权限、OAuth 和真实上传尚未验收。' },
     },
     presets: {
       async list() { await delay(60); return presets },
