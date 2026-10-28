@@ -2527,12 +2527,6 @@ function taskStateLabel(state: TaskState) {
                   上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。
                 </p>
                 <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" :hide-status="true" @reply="appendModelReply" />
-                <AgentLocalFileActions
-                  v-if="api.fileActions"
-                  :service="api.fileActions"
-                  :matches="latestAgentMatches"
-                  :demo="isMock"
-                />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"
@@ -2553,6 +2547,12 @@ function taskStateLabel(state: TaskState) {
                   <AgentExecutionEnvironment :service="api.model" :query="agentInput" :busy="modelConsentRef?.isBusy()" @preview="previewAgentModelTurn" />
                   <OllamaOnboarding :service="api.model" :provider-config="api.modelProviderConfig" />
                   <CloudModelSettings :service="api.modelProviderConfig" />
+                  <AgentLocalFileActions
+                    v-if="api.fileActions"
+                    :service="api.fileActions"
+                    :matches="latestAgentMatches"
+                    :demo="isMock"
+                  />
                 </div>
               </section>
             </div>
