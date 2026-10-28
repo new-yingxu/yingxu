@@ -184,7 +184,7 @@ body{min-width:0}
 @media(max-width:760px){.restore-controls{grid-template-columns:minmax(0,1fr)}}
 
 /* Agent page: keep one page-level scroll and put model configuration in a modal. */
-.agent-layout{height:auto;min-height:470px;align-items:start}
+.agent-layout{height:auto;min-height:470px;align-items:stretch}
 .agent-aside,.chat-panel{height:auto;min-height:470px}
 .chat-panel{overflow:visible}
 .chat-panel>*{flex:0 0 auto}
