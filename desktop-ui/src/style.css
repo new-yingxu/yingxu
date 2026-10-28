@@ -170,9 +170,7 @@ body{min-width:0}
 .workspace-switch b,.workspace-switch small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .transfer-path-fields{align-items:start}
 .transfer-path-fields>label{align-content:start;min-width:0}
-.transfer-path-fields>label:nth-child(2){display:grid;grid-template-columns:minmax(0,1fr);align-items:end;row-gap:7px}
-.transfer-path-fields>label:nth-child(2)>span{grid-column:1/-1}
-.transfer-path-fields>label:nth-child(2)>.secondary-button{width:100%;min-height:40px;box-sizing:border-box;white-space:nowrap}
+.transfer-path-fields>.transfer-destination-button{grid-column:1/-1;width:100%;min-height:40px;box-sizing:border-box;white-space:nowrap}
 .agent-layout,.chat-panel{min-width:0}
 .chat-panel>.ollama-onboarding{width:100%;max-width:100%;max-height:min(36vh,380px);min-height:0;box-sizing:border-box;overflow:auto;flex:none}
 .restore-controls{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch}

@@ -1944,14 +1944,14 @@ function taskStateLabel(state: TaskState) {
                     readonly /></label
                 ><label
                   ><span>目标目录</span
-                  ><input v-model="transferTarget" :readonly="!isMock" /><button
-                    v-if="!isMock"
-                    class="secondary-button"
-                    @click="chooseTransferDestination"
-                  >
-                    选择目标目录
-                  </button></label
+                  ><input v-model="transferTarget" :readonly="!isMock" /></label
+                ><button
+                  v-if="!isMock"
+                  class="secondary-button transfer-destination-button"
+                  @click="chooseTransferDestination"
                 >
+                  选择目标目录
+                </button>
               </div>
               <div class="panel-heading">
                 <div>
