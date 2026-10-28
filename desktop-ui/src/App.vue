@@ -6,7 +6,6 @@ import AgentLocalFileActions from "./components/AgentLocalFileActions.vue";
 import OllamaOnboarding from "./components/OllamaOnboarding.vue";
 import CloudModelSettings from "./components/CloudModelSettings.vue";
 import TrayAgentPanel from "./components/TrayAgentPanel.vue";
-import AgentExecutionEnvironment from "./components/AgentExecutionEnvironment.vue";
 import AgentActionCard from "./components/AgentActionCard.vue";
 import { canEnterNativeLocalMode, canShowDevDiagnostics, canUseCloudFeatures, enterNativeLocalMode, runCloudAction } from "./api/local-mode";
 import { shouldShowLocalAgentAdapterNotice } from "./api/local-agent";
@@ -919,10 +918,6 @@ async function askAgent() {
   }
 }
 
-async function previewAgentModelTurn() {
-  if (!agentInput.value.trim() || !modelConsentRef.value) return;
-  await modelConsentRef.value.submit(agentInput.value.trim());
-}
 function appendModelReply(value: { query: string; reply: AgentReply }) {
   agentMessages.value.push({ role: "user", text: value.query });
   agentMessages.value.push({
@@ -2511,7 +2506,7 @@ function taskStateLabel(state: TaskState) {
                 <p v-if="agentHasArchivedUnresolvedTurn" role="status" class="safety-callout">
                   上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。
                 </p>
-                <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" :hide-status="true" @reply="appendModelReply" />
+                <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" :hide-status="true" @reply="appendModelReply" @unavailable="say" />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"
@@ -2529,7 +2524,6 @@ function taskStateLabel(state: TaskState) {
               <section class="confirm-modal agent-settings-modal" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title">
                 <header class="agent-settings-modal-heading"><div><span class="eyebrow">模型与运行方式</span><h2 id="agent-settings-title">Agent 设置</h2></div><button class="icon-button agent-settings-close" type="button" aria-label="关闭 Agent 设置" @click="agentSettingsOpen = false"><X :size="18" /></button></header>
                 <div class="agent-settings-body">
-                  <AgentExecutionEnvironment :service="api.model" :query="agentInput" :busy="modelConsentRef?.isBusy()" @preview="previewAgentModelTurn" />
                   <OllamaOnboarding :service="api.model" :provider-config="api.modelProviderConfig" />
                   <CloudModelSettings :service="api.modelProviderConfig" />
                   <AgentLocalFileActions

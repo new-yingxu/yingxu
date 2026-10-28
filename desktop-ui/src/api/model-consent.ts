@@ -39,6 +39,9 @@ export function modelFailure(error: unknown, dispatched = true) {
     : code === 'RESUME_REQUIRES_SESSION_AND_TURN' ? '恢复请求缺少原会话或轮次编号；本轮未创建替代请求。'
     : code === 'MODEL_RECOVERY_REQUIRED' ? '本轮状态尚未解决，已阻止再次发送。请等待明确的恢复操作。'
     : code === 'MODEL_NOT_CONFIGURED' ? '模型未配置，请等待受控服务配置完成。'
+    : code === 'LOCAL_AGENT_UNAVAILABLE' ? '影序本机 Agent 服务不可用，请重启应用后重试。'
+    : code === 'OLLAMA_UNAVAILABLE' ? '本机 Ollama 未运行，请启动 Ollama 后重试。'
+    : code === 'MODEL_NOT_INSTALLED' ? '所选本机模型尚未安装，请先安装模型后重试。'
     : code === 'MODEL_CONFIGURATION_CHANGED' ? '供应商或模型配置已变化，请重新核对发送范围。'
     : code === 'LOCAL_AGENT_TURN_UNCONFIRMED' ? '本机 Agent 首轮状态未确认返回。模型可能已经运行；请保留本轮，不要重发或另建轮次。'
     : code === 'LOCAL_AGENT_CONTINUATION_UNCONFIRMED' ? '本机 Agent 工具结果或后续回答未确认返回。只读检索可能已经执行；请保留本轮，不要重发或另建轮次。'
@@ -52,6 +55,13 @@ export function modelFailure(error: unknown, dispatched = true) {
     ? record.diagnosticCode
     : undefined
   return { code, message, diagnosticCode, automaticRetryAllowed: false as const }
+}
+function requireConfigured(status: ModelStatus): asserts status is Extract<ModelStatus, { configured: true }> {
+  if (status.configured) return
+  if (status.availability === 'sidecar_unavailable') throw new CloudError('LOCAL_AGENT_UNAVAILABLE', '本机 Agent 服务不可用', 503, false)
+  if (status.availability === 'ollama_unavailable') throw new CloudError('OLLAMA_UNAVAILABLE', '本机 Ollama 未运行', 503, false)
+  if (status.availability === 'model_not_installed') throw new CloudError('MODEL_NOT_INSTALLED', '本机模型尚未安装', 503, false)
+  throw new CloudError('MODEL_NOT_CONFIGURED', '模型未配置', 503, false)
 }
 /** Ephemeral consent state only. Real identity bridge must bind service to one owner and
  * supply durable model-attempt records before production enablement. Never save secrets here.
@@ -75,7 +85,7 @@ export function createModelConsent(service: ModelService) {
       if (!query.trim() || query.length > 500 || !identity.sessionId || !identity.turnId) throw new CloudError('INVALID_QUERY', '请输入有效查询和轮次编号', 0, false)
       if (attempted.has(JSON.stringify([identity.sessionId, identity.turnId]))) throw new CloudError('MODEL_REQUEST_ALREADY_SENT', '本轮已提交，禁止再次派发', 0, false)
       const configured = await status()
-      if (!configured.configured) throw new CloudError('MODEL_NOT_CONFIGURED', '模型未配置', 503, false)
+      requireConfigured(configured)
       const plan = Object.freeze({ query, sessionId: identity.sessionId, turnId: identity.turnId, provider: configured.provider, model: configured.model, region: configured.region })
       plans.set(plan, 'ready')
       return plan
@@ -90,7 +100,7 @@ export function createModelConsent(service: ModelService) {
       // Reserve locally before awaiting another request to prevent double-click dispatch.
       attempted.add(key)
       const configured = await status()
-      if (!configured.configured) throw new CloudError('MODEL_NOT_CONFIGURED', '模型未配置', 503, false)
+      requireConfigured(configured)
       if (configured.provider !== plan.provider || configured.model !== plan.model || configured.region !== plan.region) throw new CloudError('MODEL_CONFIGURATION_CHANGED', '配置已变化，请重新确认', 0, false)
       plans.set(plan, 'sending')
       let reply: Awaited<ReturnType<ModelService['ask']>>
@@ -119,7 +129,7 @@ export function createModelConsent(service: ModelService) {
       recoveryInFlight = true
       try {
         const configured = await status()
-        if (!configured.configured) throw new CloudError('MODEL_NOT_CONFIGURED', '模型未配置', 503, false)
+        requireConfigured(configured)
         if (configured.provider !== plan.provider || configured.model !== plan.model || configured.region !== plan.region) throw new CloudError('MODEL_CONFIGURATION_CHANGED', '配置已变化，请重新核对后再恢复', 0, false)
         const reply = await service.resume(plan.query, { sessionId: plan.sessionId, turnId: plan.turnId }, { explicitConsent: true })
         guard()

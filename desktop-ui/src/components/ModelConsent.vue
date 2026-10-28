@@ -4,7 +4,10 @@ import type { AgentReply, ModelService, ModelStatus } from '../api/contracts'
 import { createModelConsent, modelFailure, type ModelPlan } from '../api/model-consent'
 import { localAgentStatusView, withLocalAgentStatusTimeout } from '../api/local-agent'
 const props=defineProps<{ service?: ModelService; query: string; hideStatus?: boolean }>()
-const emit=defineEmits<{ reply: [value: { query: string; reply: AgentReply }] }>()
+const emit=defineEmits<{
+  reply: [value: { query: string; reply: AgentReply }]
+  unavailable: [message: string]
+}>()
 const controller=props.service ? createModelConsent(props.service) : null
 const status=ref<ModelStatus|null>(null), busy=ref(false), plan=ref<ModelPlan|null>(null)
 const statusTimedOut=ref(false)
@@ -42,7 +45,7 @@ async function prepare(query=props.query) {
     // A fresh ID is created ONLY by this explicit user action, never in a retry handler.
     plan.value=await controller.prepare(query,{sessionId,turnId:crypto.randomUUID()})
     busy.value=false;await nextTick();cancel.value?.focus()
-  }catch(error){if(mounted)failure.value=modelFailure(error,false)}finally{if(mounted)busy.value=false}
+  }catch(error){if(mounted){failure.value=modelFailure(error,false);if(props.hideStatus)emit('unavailable',failure.value.message)}}finally{if(mounted)busy.value=false}
 }
 async function submit(query:string) {
   if(!query.trim())return
@@ -52,7 +55,7 @@ async function confirm(accepted:boolean) {
   if(!controller||!plan.value||busy.value)return
   const current=plan.value;busy.value=true
   try {const reply=await controller.confirm(current,accepted);if(reply&&mounted)emit('reply',{query:current.query,reply})}
-  catch(error){if(mounted){failure.value=modelFailure(error);recoveryRequired.value=controller.requiresRecovery();recoveryAvailable.value=controller.canResume()}}
+  catch(error){if(mounted){failure.value=modelFailure(error);if(props.hideStatus)emit('unavailable',failure.value.message);recoveryRequired.value=controller.requiresRecovery();recoveryAvailable.value=controller.canResume()}}
   finally{if(mounted){plan.value=null;busy.value=false;await nextTick();review.value?.focus()}}
 }
 async function openRecovery(){
@@ -67,7 +70,7 @@ async function resume(accepted:boolean){
  try{
   const reply=await controller.resume(true)
   if(reply&&mounted){recoveryRequired.value=false;recoveryAvailable.value=false;failure.value=null;emit('reply',{query:recoveryReview.value.query,reply})}
- }catch(error){if(mounted){failure.value=modelFailure(error);recoveryRequired.value=controller.requiresRecovery();recoveryAvailable.value=controller.canResume()}}
+ }catch(error){if(mounted){failure.value=modelFailure(error);if(props.hideStatus)emit('unavailable',failure.value.message);recoveryRequired.value=controller.requiresRecovery();recoveryAvailable.value=controller.canResume()}}
  finally{if(mounted){recoveryReview.value=null;busy.value=false;await nextTick();review.value?.focus()}}
 }
 function keyboard(event:KeyboardEvent){
@@ -81,7 +84,7 @@ function keyboard(event:KeyboardEvent){
   else if(!event.shiftKey&&current===nodes.length-1){event.preventDefault();nodes[0]?.focus()}
  }
 }
-onMounted(()=>void refresh())
+onMounted(()=>{if(!props.hideStatus)void refresh()})
 onUnmounted(()=>{mounted=false;controller?.stop()})
 defineExpose({
   submit,
