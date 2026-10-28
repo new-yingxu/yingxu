@@ -55,7 +55,7 @@
 
 ## 当前需用户在控制台确认的项目
 
-- 先轮换 `yingxu-dev` 当前注入给函数的 CloudBase API Key，再选用新 Key 注入 `yingxu-agent-api`。原因：控制台编辑表单将 Key 明文提供给辅助功能树，本轮未保存修改或部署；不要把新 Key 发到聊天、截图或仓库。
+- `yingxu-dev` API Key 配置页当前只列出一个已过期 Key（过期时间 2026-10-26 20:55:25）；函数编辑表单也曾将现有注入值明文提供给辅助功能树。请在「环境管理 → API Key 配置 → 生成」创建新 Key，并在 `yingxu-agent-api` 的 API Key 注入项选择新 Key。本轮未保存修改或部署；不要把新 Key 发到聊天、截图或仓库。
 - 邮箱代发的实际收件投递仍待真实邮箱登录验收；本轮没有发送验证码。
 - `yingxu-dev` 环境 ID 与服务端 API Key。
 - 正式 client ID 到 `desktop`/`mobile` 的映射。
