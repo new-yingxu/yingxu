@@ -71,6 +71,23 @@ const completed = (sessionId, turnId, answer = "已找到素材") => ({
 }
 
 {
+  const base = {
+    startTurn: async () => { throw new Error("not used"); },
+    submitResults: async () => { throw new Error("not used"); },
+  };
+  const make = (catalog) => createLocalAgentService({
+    transport: { ...base, status: async () => modelStatus, listLocalModels: async () => catalog },
+    executeTool: async () => ({}), prepareAction: async () => { throw new Error("not used"); },
+    confirmAction: async () => { throw new Error("not used"); }, confirmModelUse: async () => false,
+  });
+  assert.deepEqual(await make({ available: true, models: ["qwen2.5:7b", "llama3.1:8b"] }).model.listLocalModels(), {
+    available: true, models: ["qwen2.5:7b", "llama3.1:8b"],
+  });
+  await assert.rejects(make({ available: true, models: ["https://attacker.invalid"] }).model.listLocalModels(), { code: "LOCAL_AGENT_CONTRACT_MISMATCH" });
+  await assert.rejects(make({ available: false, models: ["qwen2.5:7b"] }).model.listLocalModels(), { code: "LOCAL_AGENT_CONTRACT_MISMATCH" });
+}
+
+{
   for (const unavailable of ["ollama_unavailable", "model_not_installed", "sidecar_unavailable"]) {
     let starts = 0;
     const service = createLocalAgentService({

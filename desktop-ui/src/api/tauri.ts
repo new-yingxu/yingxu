@@ -100,6 +100,7 @@ export function createTauriApi(options: Options = {}): AppApi {
   const localAgent = createLocalAgentService({
     transport: {
       status: () => invoke<ModelStatus>("agent_local_status"),
+      listLocalModels: () => invoke<{ available: boolean; models: string[] }>("agent_local_models"),
       startTurn: (request: LocalTurnRequest) =>
         invoke<LocalTurnResponse>("agent_local_turn", { request }),
       submitResults: (sessionId: string, turnId: string, request: { continuationToken: string; results: LocalToolResult[]; useModel: true }) =>
@@ -365,6 +366,7 @@ export function createTauriApi(options: Options = {}): AppApi {
     model: localAgent.model,
     modelProviderConfig: {
       status: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "status" }),
+      selectLocalModel: (model) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "select_local_model", model }),
       save: (provider, model, apiKey) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "save", provider, model, apiKey }),
       remove: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "remove" }),
     },

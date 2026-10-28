@@ -5,7 +5,7 @@ import sys
 import unittest
 from unittest.mock import patch,MagicMock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from app.model_provider import credential_for_owner,generate_answer,local_ollama_model_state,_tool_provider_request,ModelNotConfigured,ModelUnavailable,NoRedirect
+from app.model_provider import credential_for_owner,generate_answer,local_ollama_models,local_ollama_model_state,_tool_provider_request,ModelNotConfigured,ModelUnavailable,NoRedirect
 from urllib.error import HTTPError,URLError
 from urllib.request import Request
 
@@ -90,6 +90,17 @@ class ModelProvider(unittest.TestCase):
         opener.open.side_effect=URLError('local service unavailable')
         with patch('app.model_provider.build_opener',return_value=opener):
             self.assertEqual(local_ollama_model_state(credential),'ollama_unavailable')
+
+    def test_local_model_catalog_excludes_embedding_only_models_and_urls(self):
+        opener=MagicMock()
+        opener.open.return_value.__enter__.return_value.read.return_value=json.dumps({'models':[
+            {'name':'qwen3:14b','capabilities':['completion','tools']},
+            {'name':'nomic-embed-text:latest','capabilities':['embedding']},
+            {'name':'https://attacker.invalid','capabilities':['completion']},
+            {'name':'legacy-model:latest'},
+        ]}).encode()
+        with patch('app.model_provider.build_opener',return_value=opener):
+            self.assertEqual(local_ollama_models(),['legacy-model:latest','qwen3:14b'])
 
     def test_transport_minimizes_context_and_reports_real_usage(self):
         opener=MagicMock()

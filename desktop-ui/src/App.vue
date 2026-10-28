@@ -212,6 +212,7 @@ const backupPreset = ref("preset-camera");
 const backupTask = ref<ArchiveTask | null>(null);
 const newPresetName = ref("");
 const agentInput = ref("");
+const agentSettingsOpen = ref(false);
 const agentActionBusy = ref(false);
 const agentConversationKey = ref(0);
 const agentNewConversationReview = ref(false);
@@ -2429,7 +2430,7 @@ function taskStateLabel(state: TaskState) {
               eyebrow="受限工具 · 操作需确认"
               title="Agent 助手"
               description="查找和预览可直接进行；改名、移动、上传、清理等操作先列出对象与目标。"
-            />
+            ><button class="secondary-button agent-settings-trigger" type="button" aria-label="Agent 设置" title="Agent 设置" @click="agentSettingsOpen = true"><Settings2 :size="15" />设置</button></PageHeading>
             <section class="agent-layout">
               <aside class="panel agent-aside">
                 <button
@@ -2513,8 +2514,6 @@ function taskStateLabel(state: TaskState) {
                     </div>
                   </div>
                 </div>
-                <CloudModelSettings :service="api.modelProviderConfig" />
-                <OllamaOnboarding :service="api.model" />
                 <p v-if="agentHasArchivedUnresolvedTurn" role="status" class="safety-callout">
                   上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。
                 </p>
@@ -2538,6 +2537,15 @@ function taskStateLabel(state: TaskState) {
                 </p>
               </div>
             </section>
+            <div v-if="agentSettingsOpen" class="modal-backdrop agent-settings-backdrop" @click.self="agentSettingsOpen = false" @keydown.esc="agentSettingsOpen = false">
+              <section class="confirm-modal agent-settings-modal" role="dialog" aria-modal="true" aria-labelledby="agent-settings-title">
+                <header class="agent-settings-modal-heading"><div><span class="eyebrow">模型与运行方式</span><h2 id="agent-settings-title">Agent 设置</h2></div><button class="icon-button agent-settings-close" type="button" aria-label="关闭 Agent 设置" @click="agentSettingsOpen = false"><X :size="18" /></button></header>
+                <div class="agent-settings-body">
+                  <OllamaOnboarding :service="api.model" :provider-config="api.modelProviderConfig" />
+                  <CloudModelSettings :service="api.modelProviderConfig" />
+                </div>
+              </section>
+            </div>
             <AgentActionCard
               v-if="pendingAgentAction?.reply?.proposedAction"
               :action="pendingAgentAction.reply.proposedAction"

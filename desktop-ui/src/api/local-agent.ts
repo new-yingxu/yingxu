@@ -89,6 +89,7 @@ export interface LocalTurnResponse {
 export interface LocalAgentTransport {
   /** Native IPC keeps the sidecar bearer token inside the Rust host. */
   status(): Promise<ModelStatus>
+  listLocalModels(): Promise<unknown>
   startTurn(request: LocalTurnRequest): Promise<LocalTurnResponse>
   submitResults(sessionId: string, turnId: string, request: {
     continuationToken: string
@@ -281,6 +282,21 @@ export function createLocalAgentService(options: {
     return value
   }
 
+  async function listLocalModels(): Promise<{ available: boolean; models: string[] }> {
+    const row = object(await options.transport.listLocalModels())
+    exactKeys(row, ['available', 'models'], '本机模型列表')
+    if (typeof row.available !== 'boolean' || !Array.isArray(row.models) || row.models.length > 500)
+      throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机模型列表格式无效', 0, false)
+    const names = row.models.map(name => {
+      if (typeof name !== 'string' || !/^[A-Za-z0-9_.:/-]{1,100}$/.test(name) || name.includes('://') || name.includes(':cloud') || name.endsWith('-cloud'))
+        throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机模型列表包含无效名称', 0, false)
+      return name
+    })
+    if (new Set(names).size !== names.length || (!row.available && names.length))
+      throw new CloudError('LOCAL_AGENT_CONTRACT_MISMATCH', '本机模型列表状态不一致', 0, false)
+    return { available: row.available, models: names }
+  }
+
   /** Mirrors the host rule: a preview is only valid inside the next 5 minutes. */
   function actionExpiryMs(value: unknown, label: string): number {
     const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN
@@ -390,7 +406,7 @@ export function createLocalAgentService(options: {
     return processResponse(next, query, toolsUsed + results.length)
   }
 
-  const model: ModelService = { status, ask: (query, identity, consent) => run(query, identity, consent.explicitConsent) }
+  const model: ModelService = { status, listLocalModels, ask: (query, identity, consent) => run(query, identity, consent.explicitConsent) }
   return {
     model,
     ask: (query: string) => run(query, { sessionId: crypto.randomUUID(), turnId: crypto.randomUUID() }, false),

@@ -182,3 +182,19 @@ body{min-width:0}
 .auth-view-heading span,.auth-not-connected{font-size:11px;line-height:1.5;color:var(--muted)}
 .form-foot{gap:18px;margin-top:2px}
 @media(max-width:760px){.restore-controls{grid-template-columns:minmax(0,1fr)}}
+
+/* Agent page: keep one page-level scroll and put model configuration in a modal. */
+.agent-layout{height:auto;min-height:470px;align-items:start}
+.agent-aside,.chat-panel{height:auto;min-height:470px}
+.chat-panel{overflow:visible}
+.chat-panel>*{flex:0 0 auto}
+.chat-panel>.chat-scroll{flex:0 0 auto;min-height:240px;max-height:none;overflow:visible;overscroll-behavior:auto}
+.agent-settings-trigger{flex:none}
+.agent-settings-backdrop{z-index:20}
+.agent-settings-modal{width:min(920px,100%);max-height:min(90vh,900px);height:min(90vh,900px);display:flex;flex-direction:column;overflow:hidden;padding:0}
+.agent-settings-modal-heading{position:relative;display:flex;align-items:center;justify-content:space-between;gap:14px;flex:none;padding:20px 24px;border-bottom:1px solid var(--line);background:var(--card)}
+.agent-settings-modal-heading h2{margin:3px 0 0;font-size:20px}
+.agent-settings-close{display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--muted)}
+.agent-settings-body{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:18px 22px;display:grid;gap:14px;align-content:start}
+.agent-settings-body .provider-settings{margin:0}
+@media(max-width:760px){.agent-aside,.chat-panel{min-height:0}.chat-panel>.chat-scroll{min-height:200px;max-height:none;overflow:visible}.agent-settings-modal{width:100%;height:min(92vh,900px);max-height:92vh}.agent-settings-modal-heading{padding:16px}.agent-settings-body{padding:14px}}

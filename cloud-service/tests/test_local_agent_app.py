@@ -77,6 +77,18 @@ class LocalAgentApp(unittest.TestCase):
         self.assertFalse(missing.json()["configured"])
         self.assertEqual(missing.json()["availability"], "model_not_installed")
 
+    def test_local_model_catalog_is_authenticated_bounded_and_pathless(self):
+        unauthorized = self.client.get("/v1/agent/local-models")
+        self.assertEqual(unauthorized.status_code, 401)
+        with patch("app.model_provider.local_ollama_models", return_value=["qwen2.5:7b", "llama3.1:8b"]) as probe:
+            response = self.client.get("/v1/agent/local-models", headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"available": True, "models": ["qwen2.5:7b", "llama3.1:8b"]})
+        probe.assert_called_once_with()
+        with patch("app.model_provider.local_ollama_models", return_value=None):
+            unavailable = self.client.get("/v1/agent/local-models", headers=self.headers)
+        self.assertEqual(unavailable.json(), {"available": False, "models": []})
+
     def test_desktop_byok_status_is_ready_without_ollama_or_cloud_account(self):
         from app.local_agent_app import _local_settings
         env = {

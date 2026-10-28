@@ -198,6 +198,16 @@ def create_local_agent_app(*, settings: Settings | None = None, token: str | Non
             "cloudFallback": False,
         }
 
+    @app.get("/v1/agent/local-models")
+    def local_models(
+        request: Request,
+        principal: Principal = Depends(_require_local_principal),
+    ):
+        _check_local_runtime(request, principal)
+        from .model_provider import local_ollama_models
+        models = local_ollama_models()
+        return {"available": models is not None, "models": models or []}
+
     @app.post("/_host/shutdown")
     def host_shutdown(
         request: Request,

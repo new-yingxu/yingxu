@@ -85,6 +85,8 @@ fn local_agent_unavailable() -> serde_json::Value {
 
 const MODEL_CREDENTIAL_SERVICE: &str = "app.yingxu.desktop.next.agent-model";
 const MODEL_CREDENTIAL_ACCOUNT: &str = "byok-profile";
+const LOCAL_MODEL_ACCOUNT: &str = "local-model-profile";
+const ACTIVE_MODEL_ACCOUNT: &str = "active-provider";
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -117,6 +119,104 @@ fn read_model_provider_profile() -> Result<Option<ModelProviderProfile>, CoreErr
     let profile: ModelProviderProfile = serde_json::from_str(&raw)
         .map_err(|_| CoreError::new("MODEL_CONFIGURATION_INVALID", "模型配置无效"))?;
     Ok(Some(profile))
+}
+
+fn read_local_model_profile() -> Result<Option<ModelProviderProfile>, CoreError> {
+    let entry = keyring::Entry::new(MODEL_CREDENTIAL_SERVICE, LOCAL_MODEL_ACCOUNT)
+        .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
+    let raw = match entry.get_password() {
+        Ok(value) => Zeroizing::new(value),
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(_) => {
+            return Err(CoreError::new(
+                "MODEL_KEYSTORE_UNAVAILABLE",
+                "无法读取系统凭据库",
+            ));
+        }
+    };
+    let profile: ModelProviderProfile = serde_json::from_str(&raw)
+        .map_err(|_| CoreError::new("MODEL_CONFIGURATION_INVALID", "本机模型配置无效"))?;
+    if profile.provider != "ollama"
+        || !valid_local_model_name(&profile.model)
+        || !profile.api_key.is_empty()
+    {
+        return Err(CoreError::new(
+            "MODEL_CONFIGURATION_INVALID",
+            "本机模型配置无效",
+        ));
+    }
+    Ok(Some(profile))
+}
+
+fn valid_local_model_name(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 100
+        && model
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.:/-".contains(&b))
+        && !model.contains("://")
+        && !model.contains(":cloud")
+        && !model.ends_with("-cloud")
+}
+
+fn read_active_model_provider() -> Result<Option<String>, CoreError> {
+    let entry = keyring::Entry::new(MODEL_CREDENTIAL_SERVICE, ACTIVE_MODEL_ACCOUNT)
+        .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
+    match entry.get_password() {
+        Ok(value) if ["ollama", "dashscope", "deepseek"].contains(&value.as_str()) => {
+            Ok(Some(value))
+        }
+        Ok(_) => Err(CoreError::new(
+            "MODEL_CONFIGURATION_INVALID",
+            "当前模型选择无效",
+        )),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Err(CoreError::new(
+            "MODEL_KEYSTORE_UNAVAILABLE",
+            "无法读取系统凭据库",
+        )),
+    }
+}
+
+fn set_active_model_provider(provider: &str) -> Result<(), CoreError> {
+    let entry = keyring::Entry::new(MODEL_CREDENTIAL_SERVICE, ACTIVE_MODEL_ACCOUNT)
+        .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
+    entry
+        .set_password(provider)
+        .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "无法保存当前模型选择"))
+}
+
+fn store_model_profile(account: &str, profile: &ModelProviderProfile) -> Result<(), CoreError> {
+    let entry = keyring::Entry::new(MODEL_CREDENTIAL_SERVICE, account)
+        .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
+    let serialized = Zeroizing::new(
+        serde_json::to_string(profile)
+            .map_err(|_| CoreError::new("MODEL_CONFIGURATION_INVALID", "模型配置无法保存"))?,
+    );
+    entry
+        .set_password(&serialized)
+        .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "无法保存到系统凭据库"))
+}
+
+fn active_model_provider_profile() -> Result<Option<ModelProviderProfile>, CoreError> {
+    let cloud = read_model_provider_profile()?;
+    let local = read_local_model_profile()?;
+    let active = read_active_model_provider()?;
+    if matches!(active.as_deref(), Some("deepseek" | "dashscope")) {
+        return Ok(cloud);
+    }
+    if active.as_deref() == Some("ollama") {
+        return Ok(local.or_else(|| {
+            Some(ModelProviderProfile {
+                provider: "ollama".into(),
+                model: "qwen2.5:7b".into(),
+                api_key: String::new(),
+            })
+        }));
+    }
+    // Backward compatibility: a previously saved BYOK profile remains active
+    // until the user explicitly selects a local model.
+    Ok(cloud.or(local))
 }
 
 fn validate_model_provider_profile(
@@ -179,11 +279,18 @@ async fn agent_model_provider_config(
         let state = app.state::<HostState>();
         match action.as_str() {
             "status" => {
-                let profile = read_model_provider_profile()?;
-                Ok(profile.map_or_else(
-                    || serde_json::json!({"configured": false, "provider": "ollama", "model": "qwen2.5:7b", "secretStorage": "os_keychain"}),
-                    |value| serde_json::json!({"configured": true, "provider": &value.provider, "model": &value.model, "secretStorage": "os_keychain"}),
-                ))
+                let cloud = read_model_provider_profile()?;
+                let local = read_local_model_profile()?;
+                let local_model = local.as_ref().map_or_else(|| "qwen2.5:7b".to_string(), |value| value.model.clone());
+                let active = read_active_model_provider()?;
+                if active.as_deref().is_some_and(|value| value == "deepseek" || value == "dashscope")
+                    || (active.is_none() && cloud.is_some())
+                {
+                    let value = cloud.ok_or_else(|| CoreError::new("MODEL_CONFIGURATION_INVALID", "云端模型配置不存在"))?;
+                    Ok(serde_json::json!({"configured": true, "provider": &value.provider, "model": &value.model, "secretStorage": "os_keychain", "cloudKeyStored": true, "localModel": local_model}))
+                } else {
+                    Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": local_model.clone(), "secretStorage": "os_keychain", "cloudKeyStored": cloud.is_some(), "localModel": local_model}))
+                }
             }
             "save" => {
                 let provider = provider.as_deref().unwrap_or_default();
@@ -191,20 +298,31 @@ async fn agent_model_provider_config(
                 let api_key = Zeroizing::new(api_key.unwrap_or_default());
                 validate_model_provider_profile(provider, model, &api_key)?;
                 let value = ModelProviderProfile { provider: provider.to_string(), model: model.to_string(), api_key: api_key.to_string() };
-                let serialized = Zeroizing::new(serde_json::to_string(&value)
-                    .map_err(|_| CoreError::new("MODEL_CONFIGURATION_INVALID", "模型配置无法保存"))?);
-                entry.set_password(&serialized)
-                    .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "无法保存到系统凭据库"))?;
+                store_model_profile(MODEL_CREDENTIAL_ACCOUNT, &value)?;
+                set_active_model_provider(provider)?;
                 restart_local_agent_if_running(&state)?;
-                Ok(serde_json::json!({"configured": true, "provider": provider, "model": model, "secretStorage": "os_keychain"}))
+                Ok(serde_json::json!({"configured": true, "provider": provider, "model": model, "secretStorage": "os_keychain", "cloudKeyStored": true}))
+            }
+            "select_local_model" => {
+                let model = model.as_deref().unwrap_or_default();
+                if !valid_local_model_name(model) {
+                    return Err(CoreError::new("INVALID_MODEL_CONFIGURATION", "本机模型名称无效"));
+                }
+                let value = ModelProviderProfile { provider: "ollama".into(), model: model.into(), api_key: String::new() };
+                store_model_profile(LOCAL_MODEL_ACCOUNT, &value)?;
+                set_active_model_provider("ollama")?;
+                restart_local_agent_if_running(&state)?;
+                Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": model, "secretStorage": "os_keychain", "cloudKeyStored": read_model_provider_profile()?.is_some()}))
             }
             "remove" => {
                 match entry.delete_credential() {
                     Ok(()) | Err(keyring::Error::NoEntry) => {},
                     Err(_) => return Err(CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "无法从系统凭据库移除模型密钥")),
                 }
+                set_active_model_provider("ollama")?;
                 restart_local_agent_if_running(&state)?;
-                Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": "qwen2.5:7b", "secretStorage": "os_keychain"}))
+                let local = read_local_model_profile()?;
+                Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": local.map_or_else(|| "qwen2.5:7b".to_string(), |value| value.model.clone()), "secretStorage": "os_keychain", "cloudKeyStored": false}))
             }
             _ => Err(CoreError::new("INVALID_MODEL_ACTION", "模型配置操作无效")),
         }
@@ -283,7 +401,7 @@ fn start_local_agent(
         &app_data_dir.join("agent.sqlite"),
         &stable_agent_signing_key()?,
         Duration::from_secs(15),
-        read_model_provider_profile()?,
+        active_model_provider_profile()?,
     )
 }
 
@@ -966,6 +1084,33 @@ async fn agent_local_status(
     .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "本机 Agent 状态查询失败"))?
 }
 
+#[tauri::command]
+async fn agent_local_models(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可查询本机模型列表",
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<HostState>();
+        let (port, token) = local_agent_endpoint(&app, &state)?;
+        local_agent_request(
+            port,
+            &token,
+            "GET",
+            "/v1/agent/local-models",
+            None,
+            Duration::from_secs(4),
+        )
+    })
+    .await
+    .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "本机模型列表查询失败"))?
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LocalAgentTurnRequest {
@@ -1584,6 +1729,7 @@ fn main() {
             select_directory,
             backend_request,
             agent_local_status,
+            agent_local_models,
             agent_model_provider_config,
             agent_local_turn,
             agent_local_turn_results,

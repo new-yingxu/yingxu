@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import type { ModelProviderConfigService } from '../api/contracts'
 
 const props = defineProps<{ service?: ModelProviderConfigService }>()
-const state = ref<{ configured: boolean; provider: 'ollama'|'dashscope'|'deepseek'; model: string } | null>(null)
+const state = ref<{ configured: boolean; provider: 'ollama'|'dashscope'|'deepseek'; model: string; localModel?: string; cloudKeyStored?: boolean } | null>(null)
 const provider = ref<'dashscope'|'deepseek'>('dashscope')
 const model = ref('qwen-plus')
 const apiKey = ref('')
@@ -54,7 +54,7 @@ onMounted(() => void refresh())
 <template>
   <section v-if="service" class="provider-settings" aria-labelledby="byok-title">
     <div class="provider-heading"><div><p class="eyebrow">无需影序账号 · 用户自带 API Key</p><h3 id="byok-title">Agent 云端模型</h3><p>Agent 编排、资料库检索和文件操作仍在本机；模型请求由本机直接发送给 DeepSeek 或通义千问。</p></div><button class="text-button" :disabled="busy" @click="refresh">刷新</button></div>
-    <p class="provider-state" role="status">{{ busy ? '处理中…' : state?.configured && state.provider !== 'ollama' ? `当前已配置：${providerName(state.provider)} · ${state.model}（密钥在系统钥匙串）` : '当前使用本机模型；未配置云端 Key。' }}</p>
+    <p class="provider-state" role="status">{{ busy ? '处理中…' : state?.configured && state.provider !== 'ollama' ? `当前已配置：${providerName(state.provider)} · ${state.model}（密钥在系统钥匙串）` : state?.cloudKeyStored ? `当前使用本机模型 ${state.localModel || 'Ollama'}；云端 Key 已保留，保存云端配置后即可切换。` : `当前使用本机模型 ${state?.localModel || 'Ollama'}；尚未配置云端 Key。` }}</p>
     <div class="provider-form">
       <label><span>模型平台</span><select :value="provider" :disabled="busy" @change="chooseProvider(($event.target as HTMLSelectElement).value as 'dashscope'|'deepseek')"><option value="deepseek">DeepSeek 开放平台</option><option value="dashscope">通义千问（阿里云百炼）</option></select></label>
       <label><span>模型名称</span><input v-model="model" autocomplete="off" :disabled="busy" :placeholder="provider === 'deepseek' ? 'deepseek-flash' : 'qwen-plus'"></label>

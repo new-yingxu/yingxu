@@ -313,6 +313,7 @@ export type CloudClient = ReturnType<typeof createCloudClient>
 export function createCloudModelService(client: Pick<CloudClient, 'modelStatus' | 'askModel' | 'resumeModel'>): ModelService {
   return {
     status: () => client.modelStatus(),
+    listLocalModels: async () => ({ available: false, models: [] }),
     ask: (query, identity, consent) => client.askModel(query, identity, consent),
     resume: (query, identity, consent) => client.resumeModel(query, identity, consent),
   }

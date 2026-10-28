@@ -164,10 +164,29 @@ def verify(bundle: Path, *, with_ollama: bool) -> dict:
             model_status = _request(base + "/v1/agent/local-status", token)
             if model_status.get("provider") != "ollama" or model_status.get("cloudFallback") is not False:
                 raise RuntimeError("packaged model status is not local-only")
+            local_catalog = _request(base + "/v1/agent/local-models", token)
+            model_names = local_catalog.get("models") if isinstance(local_catalog, dict) else None
+            if (
+                set(local_catalog) != {"available", "models"}
+                or not isinstance(local_catalog.get("available"), bool)
+                or not isinstance(model_names, list)
+                or len(model_names) > 500
+                or any(
+                    not isinstance(name, str)
+                    or re.fullmatch(r"[A-Za-z0-9_.:/-]{1,100}", name) is None
+                    or "://" in name
+                    or ":cloud" in name
+                    or name.endswith("-cloud")
+                    for name in model_names
+                )
+                or (not local_catalog["available"] and model_names)
+            ):
+                raise RuntimeError("packaged local model catalog is invalid")
             if with_ollama and model_status.get("configured") is not True:
                 raise RuntimeError("configured local Ollama model is not available")
             result = {"health": "passed", "modelAvailability": model_status.get("availability"),
-                      "cloudFallback": model_status.get("cloudFallback")}
+                      "cloudFallback": model_status.get("cloudFallback"),
+                      "localModelCatalog": {"available": local_catalog["available"], "count": len(model_names)}}
             if with_ollama:
                 turn = _request(base + "/v1/agent/local-turns", token, {
                     "query": "请先使用 search_media 工具，在本机照片索引里搜索文件名包含 IMG_2048 的照片。收到结果后用中文总结，不再调用工具，也不要打开文件。",

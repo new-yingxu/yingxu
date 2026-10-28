@@ -352,6 +352,7 @@ export interface LocalFileActionService {
 export type ModelStatus = UnconfiguredModelStatus | ConfiguredModelStatus;
 export interface ModelService {
   status(): Promise<ModelStatus>;
+  listLocalModels(): Promise<{ available: boolean; models: string[] }>;
   ask(query: string, identity: { sessionId: string; turnId: string }, consent: { explicitConsent: true }): Promise<AgentReply>;
   /** Explicitly resumes the same persisted model turn. Never invoked as a retry fallback. */
   resume?(query: string, identity: { sessionId: string; turnId: string }, consent: { explicitConsent: true }): Promise<AgentReply>;
@@ -361,9 +362,12 @@ export interface ModelProviderConfig {
   provider: "ollama" | "dashscope" | "deepseek";
   model: string;
   secretStorage: "os_keychain";
+  cloudKeyStored?: boolean;
+  localModel?: string;
 }
 export interface ModelProviderConfigService {
   status(): Promise<ModelProviderConfig>;
+  selectLocalModel(model: string): Promise<ModelProviderConfig>;
   save(provider: "dashscope" | "deepseek", model: string, apiKey: string): Promise<ModelProviderConfig>;
   remove(): Promise<ModelProviderConfig>;
 }

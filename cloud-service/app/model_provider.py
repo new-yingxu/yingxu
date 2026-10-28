@@ -38,7 +38,7 @@ def credential_for_owner(secret,owner,allow_local=False):
             model=value.get('model')
             if not allow_local or not isinstance(model,str) or not 1<=len(model)<=100 or not re.fullmatch(r'[a-zA-Z0-9_.:/-]+',model):raise ValueError()
             # Local-only fixed loopback endpoint; never accept a user URL.
-            if ':cloud' in model or model.endswith('-cloud'):raise ValueError()
+            if '://' in model or ':cloud' in model or model.endswith('-cloud'):raise ValueError()
             return ModelCredential(None,model,'local','ollama')
         if provider not in {'dashscope','deepseek'}:raise ValueError()
         key=value.get('apiKey')
@@ -153,10 +153,8 @@ def _tool_provider_request(credential,messages,*,tools=None,max_tokens=None):
         raise ModelUnavailable('model provider unavailable or returned invalid tools') from None
 
 
-def local_ollama_model_state(credential):
-    """Check only the fixed loopback Ollama catalog; never probe a cloud model."""
-    if credential.provider!='ollama':
-        return 'provider_not_local'
+def local_ollama_models():
+    """Read a bounded model-name list from Ollama's fixed loopback catalog."""
     request=Request('http://127.0.0.1:11434/api/tags',method='GET',headers={'Accept':'application/json'})
     try:
         opener=build_opener(ProxyHandler({}),NoRedirect())
@@ -166,16 +164,30 @@ def local_ollama_model_state(credential):
         result=json.loads(raw)
         models=result.get('models') if isinstance(result,dict) else None
         if not isinstance(models,list) or len(models)>500:raise ValueError()
+        names=set()
         for item in models:
             if not isinstance(item,dict):continue
-            if credential.model in (item.get('name'),item.get('model')):
-                return 'ready'
-        return 'model_not_installed'
+            capabilities=item.get('capabilities')
+            if isinstance(capabilities,list) and not ({'completion','tools','chat'} & set(capabilities)):
+                continue
+            name=item.get('name') or item.get('model')
+            if isinstance(name,str) and 1<=len(name)<=100 and re.fullmatch(r'[a-zA-Z0-9_.:/-]+',name) and '://' not in name and ':cloud' not in name and not name.endswith('-cloud'):
+                names.add(name)
+        return sorted(names, key=str.casefold)
     except HTTPError as exc:
         exc.close()
-        return 'ollama_unavailable'
+        return None
     except (URLError,TimeoutError,ValueError,TypeError,AttributeError):
-        return 'ollama_unavailable'
+        return None
+
+
+def local_ollama_model_state(credential):
+    """Check only the fixed loopback Ollama catalog; never probe a cloud model."""
+    if credential.provider!='ollama':
+        return 'provider_not_local'
+    models=local_ollama_models()
+    if models is None:return 'ollama_unavailable'
+    return 'ready' if credential.model in models else 'model_not_installed'
 
 
 def _unique_arguments(pairs):
