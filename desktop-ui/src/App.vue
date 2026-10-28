@@ -2111,7 +2111,7 @@ function taskStateLabel(state: TaskState) {
                 </article>
                 <div
                   v-if="libraryPage.status === 'empty'"
-                  class="empty-state"
+                  class="empty-state library-empty-state"
                 >
                   没有匹配素材，请调整搜索或筛选条件。
                 </div>
