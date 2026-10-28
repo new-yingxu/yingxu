@@ -1446,7 +1446,6 @@ function taskStateLabel(state: TaskState) {
                   ><b>{{ summary.reviewCount }}</b> 待复核</span
                 >
               </div>
-              <p>{{ localWorkspace ? "本地 Rust / SQLite；Agent、素材索引和备份仅在此设备运行，云账号与同步已停用。" : "结果来自本地 Rust / SQLite；云端身份、Agent、设备同步未连接。" }}</p>
               <div class="native-home-actions"><button class="primary-button" @click="setPage('backup')">
                 开始本地备份</button
               ><button class="secondary-button" @click="setPage('library')">
@@ -1646,7 +1645,6 @@ function taskStateLabel(state: TaskState) {
                 ><div class="panel-heading">
                   <div>
                     <h3>选择来源设备</h3>
-                    <p>来源以只读方式扫描，不自动开始写入。</p>
                   </div>
                   <button
                     class="secondary-button"
