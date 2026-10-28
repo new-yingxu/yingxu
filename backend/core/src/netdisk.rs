@@ -1,6 +1,6 @@
-//! 网盘上传骨架（百度 / 夸克）。
+//! 网盘上传骨架（百度网盘）。
 //!
-//! 现状与闸门：两家开放平台的**应用资质未申请、未核实**，因此真实上传执行体不落地，
+//! 现状与闸门：百度开放平台的**应用资质未申请、未核实**，因此真实上传执行体不落地，
 //! 厂商实现一律返回 `NETDISK_NOT_APPROVED`。本模块交付的是可联调、可测试的骨架：
 //!
 //! - OAuth：PKCE + loopback 回调（`http://127.0.0.1:<随机端口>/callback`），token 只进系统凭据库
@@ -48,15 +48,6 @@ pub fn providers() -> Vec<Provider> {
             auth_endpoint: "https://openapi.baidu.com/oauth/2.0/authorize",
             token_endpoint: "https://openapi.baidu.com/oauth/2.0/token",
             scopes: &["basic", "netdisk"],
-            max_chunk: 4 * 1024 * 1024,
-        },
-        Provider {
-            id: "quark",
-            display: "夸克网盘",
-            approval: "pending",
-            auth_endpoint: "https://open.quark.cn/oauth/authorize",
-            token_endpoint: "https://open.quark.cn/oauth/token",
-            scopes: &["file:write"],
             max_chunk: 4 * 1024 * 1024,
         },
         Provider {
@@ -577,9 +568,11 @@ impl Engine {
         )
     }
 
-    /// 生成授权 URL 与 state；PKCE verifier 只落本机待用文件（含过期时间），不返回给 UI。
+    /// 仅为获批 Provider 生成授权 URL；资质待核实时拒绝返回占位 OAuth URL。
+    /// PKCE verifier 只落本机待用文件（含过期时间），不返回给 UI。
     pub fn netdisk_begin_auth(&self, provider_id: &str) -> CoreResult<Value> {
         let p = provider(provider_id)?;
+        require_runnable(&p)?;
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
         let redirect = format!("http://127.0.0.1:{port}/callback");
@@ -1088,11 +1081,22 @@ mod tests {
     }
 
     #[test]
+    fn providers_include_baidu_and_local_mock_only() {
+        let ids = providers().into_iter().map(|p| p.id).collect::<Vec<_>>();
+        assert_eq!(ids, ["baidu", "mock"]);
+        assert!(provider("quark").is_err());
+    }
+
+    #[test]
     fn baidu_upload_is_gated_until_approved() {
         let e = engine();
         let id = sample_media(&e, b"payload");
         assert_eq!(
             e.netdisk_enqueue("baidu", &id).unwrap_err().code,
+            "NETDISK_NOT_APPROVED"
+        );
+        assert_eq!(
+            e.netdisk_begin_auth("baidu").unwrap_err().code,
             "NETDISK_NOT_APPROVED"
         );
     }

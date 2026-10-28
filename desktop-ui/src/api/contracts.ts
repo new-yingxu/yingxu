@@ -23,7 +23,7 @@ export interface DesktopApi {
   history: { list(query: string, state: TaskState | 'all'): Promise<ArchiveTask[]>; detail(taskId: string): Promise<ArchiveTask>; rename(taskId: string, name: string): Promise<void>; clear(): Promise<void>; retry(taskId: string, destinationId: string): Promise<ArchiveTask> }
   agent: { ask(text: string): Promise<AgentReply>; confirm(actionId: string, accepted: boolean): Promise<string> }
   account: { devices(): Promise<Device[]>; revoke(deviceId: string): Promise<void>; updateSync(settings: Pick<AppSettings, 'syncHistory' | 'syncAgent' | 'syncThumbnails' | 'syncPaths'>): Promise<void> }
-  settings: { get(): Promise<AppSettings>; update(settings: Partial<AppSettings>): Promise<AppSettings>; reset(): Promise<AppSettings>; connectProvider(provider: 'baidu' | 'quark'): Promise<string> }
+  settings: { get(): Promise<AppSettings>; update(settings: Partial<AppSettings>): Promise<AppSettings>; reset(): Promise<AppSettings>; connectProvider(provider: 'baidu'): Promise<string> }
   presets: { list(): Promise<NamePreset[]>; save(preset: NamePreset): Promise<NamePreset>; remove(id: string): Promise<void> }
   audit: { run(): Promise<AuditResult>; restore(path: string, destination: string): Promise<string> }
   delivery: { create(name: string, fileIds: string[], includeContactSheet: boolean, includeManifest: boolean): Promise<DeliveryPackage> }
