@@ -1,0 +1,54 @@
+{
+  "sourceType": "user-authorized removable volume",
+  "photoFileCount": 784,
+  "photoFormats": {
+    ".dng": 495,
+    ".jpg": 289
+  },
+  "photoBytes": 17650505728,
+  "privatePathsIncluded": false,
+  "networkUsed": false,
+  "index": {
+    "changed": 929,
+    "copyStarted": false,
+    "files": 929,
+    "skipped": [],
+    "skippedCount": 0,
+    "sourceReadOnly": true
+  },
+  "analyzedPhotoCount": 784,
+  "analysisByExtension": {
+    ".dng": {
+      "raw_preview_decoded": 495
+    },
+    ".jpg": {
+      "decoded": 288,
+      "resource_limit": 1
+    }
+  },
+  "decodeReasons": {
+    "Memory limit exceeded": 1
+  },
+  "qualityCandidates": {
+    "unanalyzed": 765,
+    "review": 19
+  },
+  "signalCounts": {
+    "low_detail_candidate": 17,
+    "highlight_clipping_candidate": 2
+  },
+  "timestampSources": {
+    "exif_DateTimeOriginal": 784
+  },
+  "analysisErrors": {},
+  "thumbnailReadChecks": 3,
+  "qualityAccuracy": "not_established_no_ground_truth_labels",
+  "sampleBackup": {
+    "files": 1,
+    "state": "success",
+    "verified": 1,
+    "independentSha256Match": true
+  },
+  "sourceMetadataUnchanged": true,
+  "elapsedSeconds": 189.79
+}

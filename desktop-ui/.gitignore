@@ -3,4 +3,17 @@ dist/
 .DS_Store
 
 # Local integration evidence, disposable media/DB fixtures and short-lived fixture tokens.
-/evidence/
+/evidence/*
+# ui-slice-1 的构建与测试输出按交接要求入库。
+!/evidence/ui-slice-1/
+# ui-slice-2（分页资料库 / Agent 两步确认）的构建与测试输出按交接要求入库。
+!/evidence/ui-slice-2-task1/
+!/evidence/ui-slice-2-task2/
+!/evidence/ui-slice-2-task3/
+!/evidence/agent-bridge-status-20261026.json
+!/evidence/agent-bridge-followup-20261027.json
+/evidence/ui-slice-module/
+/evidence/ui-slice-2-module/
+/evidence/adapter-module/
+/evidence/local-agent-module/
+/evidence/adapter-fixture-*/

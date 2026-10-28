@@ -73,16 +73,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend/tauri-host -> target
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-tauri
-          key: tauri-cli-2.12-${{ runner.os }}
-      - name: 锁定 tauri-cli 版本（与 tauri crate 2.12 对齐）
-        run: |
-          if [ ! -x "$HOME/.cargo/bin/cargo-tauri" ]; then
-            cargo install tauri-cli --version "^2.12" --locked
-          fi
-          cargo tauri --version
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,10 +80,8 @@ jobs:
           projectPath: ${{ env.PROJECT_PATH }}
           tagName: ${{ env.TAG }}
           releaseName: 影序桌面版 ${{ env.TAG }}（未签名测试版）
-          releaseBody: 草稿：产物与发布说明将在 finalize 阶段补全。
           releaseDraft: true
           prerelease: true
-          tauriScript: cargo tauri
           args: --target aarch64-apple-darwin --bundles app,dmg
       - name: 记录签名状态（ad-hoc，不是正式签名）
         run: |
@@ -127,16 +115,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend/tauri-host -> target
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-tauri
-          key: tauri-cli-2.12-${{ runner.os }}
-      - name: 锁定 tauri-cli 版本（与 tauri crate 2.12 对齐）
-        run: |
-          if [ ! -x "$HOME/.cargo/bin/cargo-tauri" ]; then
-            cargo install tauri-cli --version "^2.12" --locked
-          fi
-          cargo tauri --version
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -144,10 +122,8 @@ jobs:
           projectPath: ${{ env.PROJECT_PATH }}
           tagName: ${{ env.TAG }}
           releaseName: 影序桌面版 ${{ env.TAG }}（未签名测试版）
-          releaseBody: 草稿：产物与发布说明将在 finalize 阶段补全。
           releaseDraft: true
           prerelease: true
-          tauriScript: cargo tauri
           args: --bundles nsis
       - name: 记录签名状态（未签名）
         shell: pwsh
@@ -181,14 +157,10 @@ jobs:
             --tag "$TAG" \
             --out release-out
           cp "docs/发布/首次打开说明.md" release-out/ || true
-          # 发布说明单一来源：docs/发布/发布说明模板.md
-          python3 scripts/render-release-notes.py --tag "$TAG" --out release-out/notes.md
       - name: 上传到 Release（含校验和与首次打开说明）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "$TAG" release-out/* --repo "$REPO" --clobber
-          gh release edit "$TAG" --repo "$REPO" --notes-file release-out/notes.md
+        run: gh release upload "$TAG" release-out/* --repo "$REPO" --clobber
       - name: 输出摘要
         run: |
           echo "### $TAG 构建完成（草稿，未对外）" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,17 @@
+{
+  "data": {
+    "RequestId": "70ede233-54cb-43bf-91be-904f2b78d8e7",
+    "Columns": [
+      "result",
+      "latest_version",
+      "remaining_requests",
+      "client_access"
+    ],
+    "Rows": [
+      "[\"model-reservation-rpc-checks-passed-and-rolled-back\",\"10\",\"0\",\"false\"]"
+    ],
+    "AffectedRows": 0,
+    "ExecutionTimeMs": 19
+  }
+}
+

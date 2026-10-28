@@ -12,6 +12,7 @@ export interface SyncPreferences {
 }
 export class CloudError extends Error {
   modelDispatched?: boolean
+  diagnosticCode?: string
   constructor(public code: string, message: string, public status = 0, public automaticRetryAllowed?: boolean) { super(message) }
 }
 type RecordValue = Record<string, unknown>

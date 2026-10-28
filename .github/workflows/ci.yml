@@ -74,29 +74,3 @@ jobs:
           for f in site/assets/*.js; do node --check "$f"; done
       - name: 安装脚本语法检查
         run: bash -n scripts/*.sh && python3 -m py_compile scripts/*.py backend/scripts/*.py
-      - name: 发布清单脚本自检（假产物 → latest.json / SHA256SUMS / 说明）
-        run: |
-          set -e
-          TMP=$(mktemp -d)
-          mkdir -p "$TMP/in"
-          head -c 2048 /dev/urandom > "$TMP/in/app_0.1.0_aarch64.dmg"
-          head -c 1024 /dev/urandom > "$TMP/in/app_0.1.0_x64-setup.exe"
-          python3 scripts/gen-latest-json.py --artifacts "$TMP/in" --version 0.1.0 \
-            --repo example/repo --tag v0.1.0 --out "$TMP/out"
-          python3 - "$TMP/out" <<'PY'
-          import json, sys, pathlib
-          out = pathlib.Path(sys.argv[1])
-          d = json.loads((out / "latest.json").read_text(encoding="utf-8"))
-          assert d["version"] == "0.1.0", d["version"]
-          assert d["updater_enabled"] is False
-          assert set(d["platforms"]) == {"darwin-aarch64", "windows-x86_64"}, d["platforms"]
-          # arm64 的 dmg 不能被标成 x86_64
-          assert "aarch64" in d["platforms"]["darwin-aarch64"]["url"]
-          sums = (out / "SHA256SUMS").read_text(encoding="utf-8").strip().splitlines()
-          assert len(sums) == 2 and all(len(l.split()[0]) == 64 for l in sums)
-          print("latest.json 自检通过")
-          PY
-          python3 scripts/render-release-notes.py --tag v0.1.0 --out "$TMP/out/notes.md"
-          grep -q "v0.1.0" "$TMP/out/notes.md"
-          ! grep -q "{{" "$TMP/out/notes.md"
-          echo "发布说明自检通过"

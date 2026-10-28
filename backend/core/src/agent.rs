@@ -322,13 +322,13 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        // macOS exposes the default temp directory through /var -> /private/var;
-        // the production scanner correctly rejects symlinked roots, so fixtures
-        // must start from the canonical system path.
-        let temp = tempfile::tempdir_in("/private/var/tmp").unwrap();
-        let source = temp.path().join("authorized-source");
-        let target = temp.path().join("target");
-        let app = temp.path().join("app-data");
+        let temp = tempfile::tempdir().unwrap();
+        // The production scanner rejects symlinked roots, so make the fixture
+        // root canonical on every host rather than assuming a macOS temp path.
+        let root = temp.path().canonicalize().unwrap();
+        let source = root.join("authorized-source");
+        let target = root.join("target");
+        let app = root.join("app-data");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&target).unwrap();
         let image_path = source.join("fixture-photo.jpg");

@@ -2,6 +2,11 @@
 import ScanSummary from "./components/ScanSummary.vue";
 import NetdiskPanel from "./components/NetdiskPanel.vue";
 import ModelConsent from "./components/ModelConsent.vue";
+import AgentLocalFileActions from "./components/AgentLocalFileActions.vue";
+import OllamaOnboarding from "./components/OllamaOnboarding.vue";
+import AgentActionCard from "./components/AgentActionCard.vue";
+import { canEnterNativeLocalMode, canShowDevDiagnostics, canUseCloudFeatures, enterNativeLocalMode, runCloudAction } from "./api/local-mode";
+import { shouldShowLocalAgentAdapterNotice } from "./api/local-agent";
 import {
   computed,
   nextTick,
@@ -28,8 +33,28 @@ import type {
 } from "./api/contracts";
 import { createDesktopApi } from "./api";
 import { errorText } from "./api/tauri";
+import {
+  canControl,
+  canEnterStep,
+  canRetryTarget,
+  summarizeResult,
+} from "./api/backup-state";
 import { formatBytes } from "./api/format";
 import type { RawJob } from "./api/format";
+import {
+  applyLibraryPage,
+  canLoadNextPage,
+  canLoadPreviousPage,
+  createLibraryPage,
+  describeLibraryPage,
+  failLibraryLoad,
+  LIBRARY_PAGE_SIZE,
+  nextLibraryOffset,
+  previousLibraryOffset,
+  resetLibraryPage,
+  startLibraryLoad,
+} from "./api/library-paging";
+import type { LibraryPageState } from "./api/library-paging";
 import {
   Activity,
   Archive,
@@ -86,11 +111,15 @@ const api = (props.createApi || createDesktopApi)(
 );
 const isMock = api.mode === "mock";
 const localWorkspace = ref(false);
-const canUseLocalWorkspace = !isMock && import.meta.env.DEV;
+// LocalIntegration enables offline library/backup; Agent model IPC is checked independently.
+const canEnterLocalWorkspace = canEnterNativeLocalMode(api.mode, !!api.local);
+const showLocalAgentAdapterNotice = shouldShowLocalAgentAdapterNotice(api.mode, !!api.model);
+const canUseCloud = computed(() => canUseCloudFeatures(session.value, localWorkspace.value));
+const canShowLocalDiagnostics = canShowDevDiagnostics(api.mode, !!api.local, import.meta.env.DEV);
 const displayName = computed(
   () =>
     session.value?.displayName ||
-    (localWorkspace.value ? "本机联调" : "未登录"),
+    (localWorkspace.value ? "本机模式" : "未登录"),
 );
 const displayEmail = computed(() => session.value?.email || "云端未登录");
 const localCapabilities = ref<LocalCapabilities | null>(null);
@@ -151,6 +180,7 @@ const selectedTaskId = ref("YX-20250422-014");
 const taskDetail = ref<ArchiveTask | null>(null);
 const tasks = ref<ArchiveTask[]>([]);
 const files = ref<MediaFile[]>([]);
+const libraryPage = ref<LibraryPageState>(createLibraryPage());
 const sources = ref<
   {
     id: string;
@@ -180,14 +210,29 @@ const backupPreset = ref("preset-camera");
 const backupTask = ref<ArchiveTask | null>(null);
 const newPresetName = ref("");
 const agentInput = ref("");
-const agentMessages = ref<
-  {
-    role: "assistant" | "user";
-    text: string;
-    reply?: AgentReply;
-    actionId?: string;
-  }[]
->([]);
+const agentActionBusy = ref(false);
+const agentConversationKey = ref(0);
+const agentNewConversationReview = ref(false);
+const agentHasArchivedUnresolvedTurn = ref(false);
+const modelConsentRef = ref<{
+  submit(query: string): Promise<void>;
+  requiresRecovery(): boolean;
+  isBusy(): boolean;
+} | null>(null);
+type AgentMessage = {
+  role: "assistant" | "user";
+  text: string;
+  reply?: AgentReply;
+  actionId?: string;
+};
+const agentMessages = ref<AgentMessage[]>([]);
+const latestAgentMatches = computed(() => {
+  for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
+    const message = agentMessages.value[index];
+    if (message.role === "assistant" && message.reply?.matches.length) return message.reply.matches;
+  }
+  return [];
+});
 const settings = reactive<AppSettings>({
   theme: "light",
   startOnLogin: true,
@@ -250,23 +295,39 @@ const pageLabels: Record<Page, string> = {
   settings: "偏好设置",
 };
 const visibleFiles = computed(() => files.value);
+/** The newest proposal that still waits for an explicit local decision. */
+const pendingAgentAction = computed(() => {
+  for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
+    const message = agentMessages.value[index];
+    if (message.actionId && message.reply?.proposedAction) return message;
+  }
+  return null;
+});
 const selectedTask = computed(
   () =>
     taskDetail.value ||
     tasks.value.find((task) => task.id === selectedTaskId.value) ||
     null,
 );
+const resultSummary = computed(() =>
+  selectedTask.value ? summarizeResult(selectedTask.value) : null,
+);
+const wizardContext = computed(() => ({
+  scanned: sources.value.length > 0,
+  targets: backupTargets.value.length,
+  busy: operationBusy.value || scanBusy.value,
+}));
 const activeTitle = computed(() => pageLabels[page.value]);
 const globalSearchItems = computed(() => [
   ...navGroups.flatMap((group) =>
     group.items.map((item) => ({ ...item, group: group.title })),
   ),
-  {
+  ...(canUseCloud.value ? [{
     id: "account" as Page,
     label: "账号与设备",
     group: "工具",
     icon: LockKeyhole,
-  },
+  }] : []),
   { id: "settings" as Page, label: "偏好设置", group: "工具", icon: Settings2 },
 ]);
 const globalSearchMatches = computed(() => {
@@ -434,17 +495,19 @@ async function runAction(action: () => Promise<void>) {
   }
 }
 async function loadData() {
-  const [snapshot, settingData, presetData, fileData] = await Promise.all([
+  const [snapshot, settingData, presetData, page] = await Promise.all([
     api.workbench.snapshot(),
     api.settings.get(),
     api.presets.list(),
-    api.library.search("", "all", "all"),
+    api.library.searchPage("", "all", "all", LIBRARY_PAGE_SIZE, 0),
   ]);
   tasks.value = snapshot.tasks;
   Object.assign(summary, snapshot);
   Object.assign(settings, settingData);
   presets.value = presetData;
-  files.value = fileData;
+  const next = applyLibraryPage(libraryPage.value, page);
+  libraryPage.value = next;
+  files.value = next.items;
   if (!presetData.some((p) => p.id === backupPreset.value))
     backupPreset.value =
       presetData.find((p) => p.isDefault)?.id || presetData[0]?.id || "";
@@ -452,10 +515,19 @@ async function loadData() {
   document.documentElement.dataset.theme = settings.theme;
 }
 async function enterLocalWorkspace() {
+  if (!canEnterLocalWorkspace) return;
   await runAction(async () => {
-    await loadData();
-    localWorkspace.value = true;
-    page.value = "home";
+    const entered = await enterNativeLocalMode({
+      mode: api.mode,
+      hasLocalDataAdapter: !!api.local,
+      loadLocalData: loadData,
+      setSession: (value) => { session.value = value; },
+      setEnabled: (value) => { localWorkspace.value = value; },
+    });
+    if (entered) {
+      page.value = "home";
+      say("已进入本机模式：不登录、不云同步，数据仅在此设备处理。");
+    }
   });
 }
 function onAppError(event: Event) {
@@ -533,6 +605,7 @@ onUnmounted(() => {
   finishConfirmation(false);
 });
 async function signIn() {
+  if (localWorkspace.value) return;
   loginError.value = "";
   if (isMock && loginMode.value === "wechat")
     loginIdentifier.value ||= "wechat-demo";
@@ -562,6 +635,7 @@ async function signIn() {
 async function logout() {
   if (localWorkspace.value) {
     localWorkspace.value = false;
+    session.value = null;
     page.value = "home";
     return;
   }
@@ -646,28 +720,59 @@ async function openTask(task: ArchiveTask) {
 async function refreshHistory() {
   tasks.value = await api.history.list(query.value, filterState.value);
 }
-async function searchFiles() {
-  const epoch = ++thumbnailEpoch;
-  const found = await api.library.search(
-    query.value,
-    filterKind.value,
-    filterQuality.value,
-  );
-  if (epoch !== thumbnailEpoch) return;
-  files.value = found;
-  if (api.local) {
-    const previews = found.filter((f) => f.kind !== "other").slice(0, 24);
-    for (const f of found) delete thumbnails[f.id];
-    for (let i = 0; i < previews.length; i += 4) {
-      if (epoch !== thumbnailEpoch) return;
-      await Promise.allSettled(
-        previews.slice(i, i + 4).map(async (file) => {
-          const image = await api.local!.thumbnail(file.id);
-          if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
-        }),
-      );
-    }
+async function loadThumbnails(list: MediaFile[], epoch: number) {
+  if (!api.local) return;
+  const pending = list
+    .filter((file) => file.kind !== "other" && !thumbnails[file.id])
+    .slice(0, 24);
+  for (let i = 0; i < pending.length; i += 4) {
+    if (epoch !== thumbnailEpoch) return;
+    await Promise.allSettled(
+      pending.slice(i, i + 4).map(async (file) => {
+        const image = await api.local!.thumbnail(file.id);
+        if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
+      }),
+    );
   }
+}
+async function loadLibraryPage(offset: number, append: boolean) {
+  const epoch = ++thumbnailEpoch;
+  const base = append
+    ? libraryPage.value
+    : resetLibraryPage(libraryPage.value);
+  libraryPage.value = startLibraryLoad(base);
+  try {
+    const page = await api.library.searchPage(
+      query.value,
+      filterKind.value,
+      filterQuality.value,
+      libraryPage.value.limit,
+      offset,
+    );
+    if (epoch !== thumbnailEpoch) return;
+    const next = applyLibraryPage(libraryPage.value, page);
+    libraryPage.value = next;
+    files.value = next.items;
+    await loadThumbnails(next.items, epoch);
+  } catch (error) {
+    if (epoch !== thumbnailEpoch) return;
+    libraryPage.value = failLibraryLoad(
+      libraryPage.value,
+      errorText(error),
+    );
+    showError(error);
+  }
+}
+async function searchFiles() {
+  await loadLibraryPage(0, false);
+}
+async function loadNextPage() {
+  if (!canLoadNextPage(libraryPage.value)) return;
+  await loadLibraryPage(nextLibraryOffset(libraryPage.value), true);
+}
+async function loadPreviousPage() {
+  if (!canLoadPreviousPage(libraryPage.value)) return;
+  await loadLibraryPage(previousLibraryOffset(libraryPage.value), false);
 }
 async function inspectTransfer() {
   transferBusy.value = true;
@@ -701,7 +806,14 @@ async function beginTransfer() {
   });
 }
 async function queueBaidu(file: MediaFile) {
-  if (api.netdisk) await runAction(async () => { await api.netdisk!.enqueue("baidu", file); say("已加入上传队列，尚未上传；请到偏好设置确认上传。"); });
+  if (!api.netdisk) return;
+  await runAction(async () => {
+    const allowed = await runCloudAction(session.value, localWorkspace.value, async () => {
+      await api.netdisk!.enqueue("baidu", file);
+      say("已加入上传队列，尚未上传；请到偏好设置确认上传。");
+    });
+    if (!allowed) say("本机模式已禁用网盘上传；不会发送云端请求。");
+  });
 }
 async function indexLibrary() {
   if (api.local)
@@ -751,6 +863,14 @@ async function stageSource() {
 async function askAgent() {
   const text = agentInput.value.trim();
   if (!text) return;
+  if (api.model) {
+    if (!modelConsentRef.value) {
+      showError(new Error("本机模型确认界面尚未就绪，请稍后重试"));
+      return;
+    }
+    await modelConsentRef.value.submit(text);
+    return;
+  }
   agentMessages.value.push({ role: "user", text });
   agentInput.value = "";
   try {
@@ -759,8 +879,9 @@ async function askAgent() {
       role: "assistant",
       text: reply.text,
       reply,
-      actionId:
-        isMock && reply.proposedAction ? `act-${Date.now()}` : undefined,
+      actionId: reply.proposedAction?.kind === "open"
+        ? reply.proposedAction.actionId
+        : isMock && reply.proposedAction ? `act-${Date.now()}` : undefined,
     });
   } catch (error) {
     showError(error);
@@ -768,22 +889,72 @@ async function askAgent() {
 }
 function appendModelReply(value: { query: string; reply: AgentReply }) {
   agentMessages.value.push({ role: "user", text: value.query });
-  agentMessages.value.push({ role: "assistant", text: value.reply.text, reply: value.reply });
+  agentMessages.value.push({
+    role: "assistant",
+    text: value.reply.text,
+    reply: value.reply,
+    actionId: value.reply.proposedAction?.kind === "open"
+      ? value.reply.proposedAction.actionId
+      : undefined,
+  });
   if (agentInput.value === value.query) agentInput.value = "";
 }
-async function confirmAgent(message: { actionId?: string }, accepted: boolean) {
-  if (!message.actionId) return;
+function requestNewAgentConversation() {
+  if (modelConsentRef.value?.isBusy()) return;
+  if (modelConsentRef.value?.requiresRecovery()) {
+    agentNewConversationReview.value = true;
+    return;
+  }
+  startNewAgentConversation();
+}
+function startNewAgentConversation() {
+  agentMessages.value = [];
+  agentInput.value = "";
+  agentConversationKey.value += 1;
+  agentNewConversationReview.value = false;
+}
+function confirmNewAgentConversation() {
+  if (!agentNewConversationReview.value) return;
+  agentHasArchivedUnresolvedTurn.value = true;
+  startNewAgentConversation();
+}
+async function confirmAgent(message: AgentMessage, accepted: boolean) {
+  if (!message.actionId || agentActionBusy.value) return;
+  agentActionBusy.value = true;
   try {
-    say(await api.agent.confirm(message.actionId, accepted));
+    const result = await api.agent.confirm(message.actionId, accepted);
+    if (typeof result === "string") say(result);
+    else agentMessages.value.push({
+      role: "assistant",
+      text: result.text,
+      reply: result,
+      actionId: result.proposedAction?.kind === "open"
+        ? result.proposedAction.actionId
+        : undefined,
+    });
     message.actionId = undefined;
   } catch (error) {
+    // A host action is single use: a failed decision never stays on screen.
+    message.actionId = undefined;
+    if (message.reply?.proposedAction?.kind === "open") {
+      agentMessages.value.push({
+        role: "assistant",
+        text: "打开未确认：本机没有返回可验证的成功回执，不能把素材标记为已打开。",
+      });
+    }
     showError(error);
+  } finally {
+    agentActionBusy.value = false;
   }
 }
 async function updateSetting<K extends keyof AppSettings>(
   key: K,
   value: AppSettings[K],
 ) {
+  if (localWorkspace.value && (["syncHistory", "syncAgent", "syncThumbnails", "syncPaths", "maxUploadMbps", "webhookEnabled", "webhookUrl"].includes(key) || (key === "aiProvider" && value === "OpenAI 兼容 API"))) {
+    say("本机模式已禁用云同步、Webhook 和云端模型设置；不会发送远端请求。");
+    return;
+  }
   try {
     Object.assign(settings, await api.settings.update({ [key]: value }));
     document.documentElement.dataset.theme = settings.theme;
@@ -854,7 +1025,11 @@ async function createDelivery() {
   });
 }
 async function revokeDevice(device: Device) {
-  if (!device.current) await api.account.revoke(device.id);
+  if (!device.current) {
+    await runCloudAction(session.value, localWorkspace.value, async () => {
+      await api.account.revoke(device.id);
+    });
+  }
 }
 async function clearHistory() {
   await runAction(async () => {
@@ -873,7 +1048,10 @@ async function renameTask(task: ArchiveTask) {
 }
 async function connectProvider(provider: "baidu" | "quark") {
   try {
-    say(await api.settings.connectProvider(provider));
+    const allowed = await runCloudAction(session.value, localWorkspace.value, async () => {
+      say(await api.settings.connectProvider(provider));
+    });
+    if (!allowed) say("本机模式已禁用网盘授权；不会发送云端请求。");
   } catch (error) {
     showError(error);
   }
@@ -887,11 +1065,15 @@ async function resetSettings() {
   }
 }
 function setPage(next: Page) {
+  if (localWorkspace.value && next === "account") {
+    say("账号与设备功能在本机模式下不可用。");
+    return;
+  }
   page.value = next;
   taskDetail.value = next === "task" ? selectedTask.value : null;
   if (next === "history") void refreshHistory().catch(showError);
   if (next === "library") void searchFiles().catch(showError);
-  if (next === "account")
+  if (next === "account" && canUseCloud.value)
     void api.account
       .devices()
       .then((value) => (devices.value = value))
@@ -1042,13 +1224,16 @@ function taskStateLabel(state: TaskState) {
                 : "登录影序（演示）"
         }}
       </button>
+      <p v-if="canEnterLocalWorkspace" class="local-mode-note">
+        本机模式无需登录，照片、任务和 Agent 留在此设备；账号、云同步与网盘功能将停用。
+      </p>
       <button
-        v-if="canUseLocalWorkspace"
+        v-if="canEnterLocalWorkspace"
         class="secondary-button full-width local-entry"
         @click="enterLocalWorkspace"
         :disabled="operationBusy"
       >
-        打开本地联调工作区（不登录云端）
+        进入本机模式（不登录、不云同步）
       </button>
       <p class="login-disclaimer">
         {{ isMock ? "浏览器预览 · 登录仅为界面演示" : hostStatus }}
@@ -1112,10 +1297,11 @@ function taskStateLabel(state: TaskState) {
           class="nav-item"
           :class="{ active: page === 'account' }"
           aria-label="账号与设备"
-          title="账号与设备"
+          :title="localWorkspace ? '本机模式下不可用' : '账号与设备'"
+          :disabled="localWorkspace"
           @click="setPage('account')"
         >
-          <LockKeyhole :size="17" /><span>账号与设备</span></button
+          <LockKeyhole :size="17" /><span>{{ localWorkspace ? '账号与设备（已停用）' : '账号与设备' }}</span></button
         ><button
           class="nav-item"
           :class="{ active: page === 'settings' }"
@@ -1130,7 +1316,7 @@ function taskStateLabel(state: TaskState) {
           ><span
             ><b>{{ displayName }}</b
             ><small>{{ displayEmail }}</small></span
-          ><button class="icon-button" title="退出登录" @click="logout">
+          ><button class="icon-button" :title="localWorkspace ? '退出本机模式' : '退出登录'" @click="logout">
             <MoreHorizontal :size="16" />
           </button>
         </div>
@@ -1142,9 +1328,9 @@ function taskStateLabel(state: TaskState) {
           <span>影序</span><ChevronRight :size="13" /><b>{{ activeTitle }}</b>
         </div>
         <div class="top-actions">
-          <span class="draft-chip"><i></i> V2 草稿预览</span
+          <span v-if="!localWorkspace" class="draft-chip"><i></i> V2 草稿预览</span
           ><span class="demo-chip"
-            ><i></i>{{ isMock ? "演示数据" : "本地真实数据" }}</span
+            ><i></i>{{ isMock ? "演示数据" : localWorkspace ? "本机模式 · 云端已停用" : "本地真实数据" }}</span
           >
           <div class="search-action-wrap">
             <button
@@ -1238,11 +1424,14 @@ function taskStateLabel(state: TaskState) {
       <div class="page-scroll">
         <div class="page-content">
           <div v-if="notice" class="toast inline-toast">{{ notice }}</div>
+          <div v-if="localWorkspace" class="local-mode-banner" role="status">
+            <b>本机模式已开启</b><span>无需账号；本地 Agent、素材索引和备份仅在此设备运行。云账号、跨设备同步与网盘入口均已停用。</span>
+          </div>
           <ScanSummary :report="page === 'backup' ? backupScan : page === 'transfer' ? transferScan : page === 'library' ? indexScan : null" />
 
           <template v-if="page === 'home' && !isMock"
             ><PageHeading
-              eyebrow="本地联调工作区 · 云端未登录"
+              :eyebrow="localWorkspace ? '本机模式 · 未登录、不云同步' : '本地联调工作区 · 云端未登录'"
               title="工作台"
               :description="props.testTransport || hostStatus"
             />
@@ -1256,9 +1445,7 @@ function taskStateLabel(state: TaskState) {
                   ><b>{{ summary.reviewCount }}</b> 待复核</span
                 >
               </div>
-              <p>
-                结果来自本地 Rust / SQLite；云端身份、Agent、设备同步未连接。
-              </p>
+              <p>{{ localWorkspace ? "本地 Rust / SQLite；Agent、素材索引和备份仅在此设备运行，云账号与同步已停用。" : "结果来自本地 Rust / SQLite；云端身份、Agent、设备同步未连接。" }}</p>
               <button class="primary-button" @click="setPage('backup')">
                 开始本地备份</button
               ><button class="secondary-button" @click="setPage('library')">
@@ -1446,6 +1633,7 @@ function taskStateLabel(state: TaskState) {
                   current: backupStep === index + 1,
                   done: backupStep > index + 1,
                 }"
+                :disabled="!canEnterStep(index + 1, wizardContext)"
                 @click="backupStep = index + 1"
               >
                 <i>{{ backupStep > index + 1 ? "✓" : index + 1 }}</i
@@ -1916,7 +2104,7 @@ function taskStateLabel(state: TaskState) {
                         {{
                           file.kind === "video" ? "分析视频" : "分析 / 预览"
                         }}</button
-                      ><button v-if="api.netdisk" class="text-button" @click="queueBaidu(file)">加入百度上传队列</button><button
+                      ><button v-if="api.netdisk && !localWorkspace" class="text-button" @click="queueBaidu(file)">加入百度上传队列</button><button
                         v-if="isMock"
                         class="text-button"
                         @click="restoreFile(file)"
@@ -1926,10 +2114,45 @@ function taskStateLabel(state: TaskState) {
                     </div>
                   </div>
                 </article>
-                <div v-if="!files.length" class="empty-state">
+                <div
+                  v-if="libraryPage.status === 'empty'"
+                  class="empty-state"
+                >
                   没有匹配素材，请调整搜索或筛选条件。
                 </div>
+                <p
+                  v-else-if="libraryPage.status === 'loading'"
+                  class="empty-state"
+                >
+                  正在读取资料库…
+                </p>
               </div>
+              <div class="library-pager">
+                <span class="pager-summary">{{
+                  describeLibraryPage(libraryPage)
+                }}</span>
+                <button
+                  class="text-button"
+                  :disabled="!canLoadPreviousPage(libraryPage)"
+                  @click="loadPreviousPage"
+                >
+                  上一页
+                </button>
+                <button
+                  class="text-button"
+                  :disabled="!canLoadNextPage(libraryPage)"
+                  @click="loadNextPage"
+                >
+                  下一页
+                </button>
+              </div>
+              <p
+                v-if="libraryPage.status === 'error'"
+                class="library-error"
+                role="alert"
+              >
+                {{ libraryPage.error }}
+              </p>
               <p class="table-foot">
                 {{
                   isMock
@@ -2059,6 +2282,20 @@ function taskStateLabel(state: TaskState) {
                   <b>{{ selectedTask.progress }}%</b
                   ><span>{{ selectedTask.phase }}</span>
                 </div>
+                <div
+                  v-if="selectedTask.error"
+                  class="result-banner failed"
+                  role="alert"
+                >
+                  <b>任务错误</b><span>{{ selectedTask.error }}</span>
+                </div>
+                <div
+                  v-if="resultSummary"
+                  :class="['result-banner', resultSummary.state]"
+                >
+                  <b>{{ resultSummary.headline }}</b
+                  ><span>{{ resultSummary.detail }}</span>
+                </div>
                 <div class="detail-stats">
                   <span
                     ><b>{{ selectedTask.files }}</b> 计划文件</span
@@ -2068,6 +2305,15 @@ function taskStateLabel(state: TaskState) {
                     ><b>{{ selectedTask.speed }}</b> 当前速度</span
                   >
                 </div>
+                <p
+                  v-if="
+                    selectedTask.state === 'running' &&
+                    selectedTask.currentFile
+                  "
+                  class="current-file"
+                >
+                  正在写入：{{ selectedTask.currentFile }}
+                </p>
                 <div class="destination-list">
                   <h4>目的地结果</h4>
                   <div
@@ -2085,7 +2331,7 @@ function taskStateLabel(state: TaskState) {
                       taskStateLabel(destination.state)
                     }}</span
                     ><button
-                      v-if="destination.state === 'failed'"
+                      v-if="canRetryTarget(selectedTask, destination.id)"
                       class="secondary-button compact"
                       @click="
                         api.history
@@ -2102,23 +2348,19 @@ function taskStateLabel(state: TaskState) {
                 </div>
                 <div class="panel-actions">
                   <button
-                    v-if="['running', 'queued'].includes(selectedTask.state)"
+                    v-if="canControl(selectedTask.state, 'pause')"
                     class="secondary-button"
                     @click="controlTask('pause')"
                   >
                     暂停</button
                   ><button
-                    v-if="selectedTask.state === 'paused'"
+                    v-if="canControl(selectedTask.state, 'resume')"
                     class="secondary-button"
                     @click="controlTask('resume')"
                   >
                     继续</button
                   ><button
-                    v-if="
-                      ['running', 'queued', 'paused'].includes(
-                        selectedTask.state,
-                      )
-                    "
+                    v-if="canControl(selectedTask.state, 'cancel')"
                     class="danger-button"
                     @click="controlTask('cancel')"
                   >
@@ -2189,8 +2431,8 @@ function taskStateLabel(state: TaskState) {
           </template>
 
           <template v-else-if="page === 'agent'"
-            ><p v-if="!isMock" class="integration-banner">
-              Agent 服务和本地执行桥未连接，不会模拟执行。
+            ><p v-if="showLocalAgentAdapterNotice" class="integration-banner">
+              当前桌面环境未接入本机 Agent 模型适配器，Agent 对话不可用。
             </p>
             <PageHeading
               eyebrow="受限工具 · 操作需确认"
@@ -2201,7 +2443,8 @@ function taskStateLabel(state: TaskState) {
               <aside class="panel agent-aside">
                 <button
                   class="primary-button full-width"
-                  @click="agentMessages = []"
+                  :disabled="modelConsentRef?.isBusy()"
+                  @click="requestNewAgentConversation"
                 >
                   <Plus :size="15" />新建对话
                 </button>
@@ -2247,12 +2490,12 @@ function taskStateLabel(state: TaskState) {
                       >
                         <article
                           v-for="match in message.reply.matches"
-                          :key="match.kind === 'media' ? match.media.id : `${match.deviceId}:${match.jobId}`"
+                          :key="match.kind === 'media' ? match.media.id : match.kind === 'local_media' ? match.media.mediaId : `${match.deviceId}:${match.jobId}`"
                         >
                           <Image :size="15" /><span
-                            ><b>{{ match.kind === "media" ? match.media.name : match.name }}</b
+                            ><b>{{ match.kind === "media" || match.kind === "local_media" ? match.media.name : match.name }}</b
                             ><small
-                              >{{ match.kind === "media" ? `${match.media.path} · ${match.media.quality}` : `已同步任务 · ${match.state} · 设备 ${match.deviceId} · ${match.jobId}` }}</small
+                              >{{ match.kind === "media" ? `${match.media.path} · ${match.media.quality}` : match.kind === "local_media" ? `${match.media.kind} · ${formatBytes(match.media.bytes)} · ${match.media.qualityState}` : `已同步任务 · ${match.state} · 设备 ${match.deviceId} · ${match.jobId}` }}</small
                             ></span
                           >
                         </article>
@@ -2263,7 +2506,7 @@ function taskStateLabel(state: TaskState) {
                       >
                         <b>待确认操作计划</b
                         ><span
-                          >操作：{{ message.reply.proposedAction.kind }} ·
+                          >操作：{{ message.reply.proposedAction.kind === "open" ? "打开" : message.reply.proposedAction.kind }} ·
                           {{ message.reply.proposedAction.label }}</span
                         ><span
                           >对象：{{
@@ -2272,24 +2515,24 @@ function taskStateLabel(state: TaskState) {
                         ><span
                           >目标：{{ message.reply.proposedAction.target }}</span
                         >
-                        <div v-if="message.actionId" class="plan-actions">
-                          <button
-                            class="secondary-button compact"
-                            @click="confirmAgent(message, false)"
-                          >
-                            取消</button
-                          ><button
-                            class="primary-button compact"
-                            @click="confirmAgent(message, true)"
-                          >
-                            确认演示操作
-                          </button>
-                        </div>
+                        <small v-if="message.actionId"
+                          >等待你在确认卡片里明确同意或拒绝。</small
+                        >
                       </div>
                     </div>
                   </div>
                 </div>
-                <ModelConsent :service="api.model" :query="agentInput" @reply="appendModelReply" />
+                <OllamaOnboarding :service="api.model" />
+                <p v-if="agentHasArchivedUnresolvedTurn" role="status" class="safety-callout">
+                  上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。
+                </p>
+                <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" @reply="appendModelReply" />
+                <AgentLocalFileActions
+                  v-if="api.fileActions"
+                  :service="api.fileActions"
+                  :matches="latestAgentMatches"
+                  :demo="isMock"
+                />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"
@@ -2299,11 +2542,26 @@ function taskStateLabel(state: TaskState) {
                   </button>
                 </form>
                 <p class="table-foot centered">
-                  演示 Agent
-                  不会读取或修改本机文件；真实工具采用白名单与逐次确认。
+                  {{ isMock ? "演示 Agent 使用合成素材。" : "本机 LangGraph Agent 仅调用白名单工具；打开素材须经本机确认，模型请求不会自动切换到云端。" }}
                 </p>
               </div>
             </section>
+            <AgentActionCard
+              v-if="pendingAgentAction?.reply?.proposedAction"
+              :action="pendingAgentAction.reply.proposedAction"
+              :busy="agentActionBusy"
+              @decide="confirmAgent(pendingAgentAction, $event)"
+            />
+            <div v-if="agentNewConversationReview" class="modal-backdrop" @keydown.esc="agentNewConversationReview = false">
+              <section role="alertdialog" aria-modal="true" aria-labelledby="new-agent-conversation-title" class="confirm-modal integration-confirm">
+                <h2 id="new-agent-conversation-title">新建独立对话</h2>
+                <p>上一轮结果未确认，可能已经运行过本机模型或只读检索。旧轮次记录会保留；新对话会使用新的会话和轮次编号，不会恢复、重发或删除旧轮次。发送新查询仍需单独确认。</p>
+                <div class="modal-actions">
+                  <button class="secondary-button" @click="agentNewConversationReview = false">保留当前状态</button>
+                  <button class="primary-button" @click="confirmNewAgentConversation">保留旧记录并新建对话</button>
+                </div>
+              </section>
+            </div>
           </template>
 
           <template v-else-if="page === 'account' && !isMock"
@@ -2865,7 +3123,7 @@ function taskStateLabel(state: TaskState) {
                       <p>命名先预览；模型不直接执行文件操作</p>
                     </div>
                   </div>
-                  <label class="setting-row"
+                  <label v-if="!localWorkspace" class="setting-row"
                     ><span
                       ><b>AI 命名建议</b
                       ><small>离线备份不依赖 AI；执行前仍需确认</small></span
@@ -2876,9 +3134,10 @@ function taskStateLabel(state: TaskState) {
                     >
                       <option>本地规则优先</option>
                       <option>Ollama</option>
-                      <option>OpenAI 兼容 API</option>
+                      <option v-if="!localWorkspace">OpenAI 兼容 API</option>
                     </select></label
                   >
+                  <p v-else class="cloud-disabled-note">本机模式不使用云端模型；Agent 仅连接本机 Ollama，命名建议使用本机规则。</p>
                   <div class="setting-row">
                     <span
                       ><b>当前命名预设</b
@@ -2939,34 +3198,22 @@ function taskStateLabel(state: TaskState) {
                 <section id="cloud" class="panel settings-section">
                   <div class="panel-heading">
                     <div>
-                      <h3>百度网盘与云同步</h3>
-                      <p>仅接官方允许的 API 与个人账号授权</p>
+                      <h3>{{ localWorkspace ? "百度网盘与云同步（已停用）" : "百度网盘与云同步" }}</h3>
+                      <p>{{ localWorkspace ? "本机模式不发起任何网盘或云同步请求。" : "仅接官方允许的 API 与个人账号授权" }}</p>
                     </div>
                   </div>
-                  <NetdiskPanel v-if="api.netdisk" :api="api.netdisk" />
-                  <p v-else>浏览器演示不连接真实网盘。请在原生应用查看本机资质、授权与上传队列。</p>
-                  <div class="setting-row">
-                    <span
-                      ><b>同步速度上限</b
-                      ><small
-                        >0 表示不限制 · {{ settings.maxUploadMbps }} Mbps</small
-                      ></span
-                    ><input
-                      class="number-control"
-                      type="number"
-                      min="0"
-                      :value="settings.maxUploadMbps"
-                      @change="
-                        updateSetting(
-                          'maxUploadMbps',
-                          Number(($event.target as HTMLInputElement).value),
-                        )
-                      "
-                    />
-                  </div>
-                  <button class="text-button" @click="setPage('account')">
-                    管理同步范围与设备 <ArrowRight :size="13" />
-                  </button>
+                  <template v-if="localWorkspace">
+                    <p class="cloud-disabled-note">本机模式下云账号、跨设备同步和网盘授权均不可用；相关操作不会发出远端请求。</p>
+                  </template>
+                  <template v-else>
+                    <NetdiskPanel v-if="api.netdisk" :api="api.netdisk" />
+                    <p v-else>浏览器演示不连接真实网盘。请在原生应用查看本机资质、授权与上传队列。</p>
+                    <div class="setting-row">
+                      <span><b>同步速度上限</b><small>0 表示不限制 · {{ settings.maxUploadMbps }} Mbps</small></span>
+                      <input class="number-control" type="number" min="0" :value="settings.maxUploadMbps" @change="updateSetting('maxUploadMbps', Number(($event.target as HTMLInputElement).value))" />
+                    </div>
+                    <button class="text-button" @click="setPage('account')">管理同步范围与设备 <ArrowRight :size="13" /></button>
+                  </template>
                 </section>
                 <section id="advanced" class="panel settings-section">
                   <div class="panel-heading">
@@ -2975,7 +3222,7 @@ function taskStateLabel(state: TaskState) {
                       <p>Webhook、带宽和相似度</p>
                     </div>
                   </div>
-                  <label class="setting-row"
+                  <label v-if="!localWorkspace" class="setting-row"
                     ><span
                       ><b>Webhook 通知</b
                       ><small>真实发送需后端配置并由用户授权</small></span
@@ -2988,7 +3235,7 @@ function taskStateLabel(state: TaskState) {
                           ($event.target as HTMLInputElement).checked,
                         )
                       " /></label
-                  ><label v-if="settings.webhookEnabled" class="setting-row"
+                  ><label v-if="settings.webhookEnabled && !localWorkspace" class="setting-row"
                     ><span
                       ><b>Webhook 地址</b
                       ><small>演示表单；请勿填写真实密钥</small></span
@@ -2996,6 +3243,7 @@ function taskStateLabel(state: TaskState) {
                       v-model="settings.webhookUrl"
                       class="text-control"
                       placeholder="https://example.com/hook" /></label
+                  ><p v-if="localWorkspace" class="cloud-disabled-note">本机模式不会配置或发送 Webhook 请求。</p>
                   ><button
                     class="secondary-button"
                     @click="say('高级参数已保存至演示状态。')"
@@ -3032,14 +3280,14 @@ function taskStateLabel(state: TaskState) {
       <footer class="statusbar">
         <span
           ><i class="status-dot online"></i
-          >{{ isMock ? "浏览器演示模式" : "本地后端联调" }}</span
+          >{{ isMock ? "浏览器演示模式" : localWorkspace ? "本机模式 · 不登录、不云同步" : "本地后端" }}</span
         ><span>{{
           isMock
             ? "MockDesktopApi · 不读取磁盘"
-            : "Rust / SQLite · 云端账号和 Agent 未连接"
+            : localWorkspace ? "Rust / SQLite · 云账号、同步和网盘功能已停用" : "Rust / SQLite · 云端账号和 Agent 未连接"
         }}</span
         ><span class="statusbar-right"
-          ><CircleHelp :size="13" />帮助与反馈 <i></i> V2 草稿预览</span
+          ><CircleHelp :size="13" />帮助与反馈 <i></i>{{ localWorkspace ? "本机模式" : "V2 草稿预览" }}</span
         >
       </footer>
     </section>
@@ -3113,7 +3361,7 @@ function taskStateLabel(state: TaskState) {
           <dd>{{ row.value }}</dd>
         </div>
       </dl>
-      <details v-if="canUseLocalWorkspace">
+      <details v-if="canShowLocalDiagnostics">
         <summary>开发联调诊断 JSON</summary>
         <pre>{{ JSON.stringify(taskReport || analysis, null, 2) }}</pre>
       </details>

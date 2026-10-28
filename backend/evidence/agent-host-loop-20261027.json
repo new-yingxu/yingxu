@@ -1,0 +1,78 @@
+{
+  "date": "2026-10-27",
+  "branch": "codex/local-agent-ui-closure",
+  "scope": "isolated macOS arm64 draft bundle; synthetic fixtures only; no user media or cloud access",
+  "qaBundle": {
+    "bundleIdentifier": "app.yingxu.desktop.next.codexqa20261027",
+    "dmg": "backend/tauri-host/target/release/bundle/dmg/影序本机QA 20261027_0.2.0-draft.1_aarch64.dmg",
+    "sizeMiB": 48.29,
+    "adHocSigned": true,
+    "notarized": false,
+    "isolatedAppData": "~/Library/Application Support/app.yingxu.desktop.next.codexqa20261027",
+    "dmgSha256": "08086d775e33b84c6b027e8aae90a5ef8a975e5fb04d3d180e385c2ee8e96820",
+    "sidecarManifestSha256": "ec895be625c7aa164e5640ca27ee2dcedaeb5fc8c3208083f88067aebc2d4db1"
+  },
+  "checks": {
+    "coreRustTests": "passed: 35 unit + 6 API/delivery + 22 local backend + 6 media = 69",
+    "tauriHostTests": "passed: 9; opt-in real model test skipped because YINGXU_RUN_OLLAMA_HOST_TESTS was not set",
+    "desktopUiProductionBuild": "passed: Vue typecheck and Vite, 48 modules",
+    "localAgentAdapter": "passed: 10 checks",
+    "nativeAdapter": "passed: 18 checks against synthetic Rust CLI fixture",
+    "localFileActionContract": "passed: IPC contract verified",
+    "conversationSafety": "passed: prior uncertain WebView turn was not replayed; one new synthetic-only local Agent turn used two Ollama model requests around one confirmed search_media tool call; no cloud fallback or user media access",
+    "trayProgress": "passed: rate, ETA, unknown-speed, and idle states covered by host tests",
+    "sidecarManifest": "1187 files SHA-256 and sizes verified before copying staged package into isolated QA tree",
+    "visualUi": "login, workspace, Agent, and local media-analysis modal inspected in isolated desktop UI; no text overflow or clipping observed",
+    "packagedWebViewToTauriToSidecarToSQLiteToOllama": {
+      "status": "passed",
+      "keychain": "after user filled the macOS login keychain and restarted the isolated app, local status returned ready",
+      "model": "qwen2.5:7b via local Ollama",
+      "query": "Search only the local index for the synthetic filename SYNTH_OVEREXPOSED; summarize the result without any file actions",
+      "ledger": "one completed local_agent_steps turn with step_index 0 awaiting exactly one search_media call and step_index 1 completed; modelRequests=2; matched only synthetic media ID 9e038b3a-dd3d-4165-9728-72c410d591e7",
+      "ui": "Agent conversation showed the search_media result and Chinese summary; result card exposed only name, kind, bytes, and review status",
+      "sideEffects": "Agent turn filesChanged=false; executionAuthorized=false; no photo bytes, full real paths, GPS, cloud service, or other tools used"
+    },
+    "syntheticLocalBackupRuntime": {
+      "status": "passed",
+      "job": "completed 1 synthetic JPEG copy to a temporary local destination; UI reported 100% and completed",
+      "sha256": "4fafe7e681789e3d496a6c37f70c82e1c8eb0b91dc1dd2a2e4af428d5d809283",
+      "sourcePreserved": true,
+      "cloud": false
+    },
+    "syntheticImageAnalysis": {
+      "status": "passed",
+      "fixture": "generated 512x512 all-white JPEG, no user media",
+      "decode": "decoded; local preview generated",
+      "qualityCandidates": [
+        "highlight_clipping_candidate",
+        "low_detail_candidate"
+      ],
+      "cloudVision": false,
+      "cleanup": "no cleanup action performed; UI states thresholds are uncalibrated and must not auto-clean"
+    },
+    "invalidSyntheticJpegFixture": "first 339-byte placeholder JPEG was correctly reported as decode failure without claiming the original is corrupt; replaced for analysis check with a valid generated JPEG",
+    "syntheticQuarantineTrashRestoreRuntime": {
+      "status": "passed",
+      "fixture": "generated 512x512 white JPEG SYNTH_OVEREXPOSED.jpg; source retained",
+      "quarantine": "Agent result used only this synthetic indexed item; user-confirmed copy created a pending-review duplicate; UI showed SHA-256 538c3e4a9d71b048fdac9a7438bb84e08085bd8fda0bac96c2c915644f213b38",
+      "trash": "user-confirmed cleanup preview named the quarantine copy in System Trash as the only target; UI receipt completed cleanup_quarantine and reported original untouched",
+      "finderRestore": "Finder showed SYNTH_OVEREXPOSED.jpg in Trash; Put Back restored it to the isolated app quarantine path; app refresh reported restored from System Trash",
+      "hashVerification": "original source and restored quarantine copy both exist, 4723 bytes, SHA-256 538c3e4a9d71b048fdac9a7438bb84e08085bd8fda0bac96c2c915644f213b38",
+      "boundary": "No real user media, cloud, permanent deletion, or Trash emptying"
+    },
+    "packagedWebViewModelOnlyQuery": {
+      "status": "passed",
+      "keychain": "after user filled the macOS login keychain and restarted the isolated app, local status returned ready",
+      "model": "qwen2.5:7b via local Ollama",
+      "query": "请只用本机运行信息回答：当前使用的模型是什么？是否启用云端回退？",
+      "ledger": "one completed local_agent_steps record; modelRequests=1; localToolRequests=0",
+      "ui": "final answer appeared in Agent conversation; answer did not itself know the configured model/fallback policy, which was independently shown by local status UI",
+      "sideEffects": "filesChanged=false; no files opened, modified, moved, uploaded, or deleted; no cloud fallback",
+      "name": "model-only local query, no tools"
+    }
+  },
+  "notVerified": {
+    "uncertainPriorWebViewTurn": "not replayed; this verification used a new isolated session and exactly one model request",
+    "cloudTasks": "paused by user; no CloudBase or cloud deployment actions performed"
+  }
+}

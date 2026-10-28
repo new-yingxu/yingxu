@@ -1,0 +1,25 @@
+$ node tests/native-adapter.mjs  (real Rust CLI: backend/target/debug/yingxu-core)
+{
+  "passed": 18,
+  "checks": [
+    "health protocol",
+    "actual capabilities",
+    "cloud login fails closed",
+    "source selector and scan mapping",
+    "source index and formatted media",
+    "paged library search against the real Rust CLI",
+    "photo analysis and thumbnail",
+    "video analysis stays local",
+    "cancel confirmation creates no job or media copy",
+    "lost reply replays same durable job",
+    "queue pause and resume",
+    "real backup SHA256 and report",
+    "report export confirmation",
+    "healthy replica restore through same adapter",
+    "verified delivery job through same adapter",
+    "backend error code retained",
+    "native transport failure never falls back to mock",
+    "reply correlation rejects wrong request"
+  ],
+  "evidence": "evidence/adapter-fixture-1793021443229"
+}

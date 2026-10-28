@@ -45,6 +45,20 @@ arg!(Search {
     kind: String,
     quality: String
 });
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SearchPage {
+    query: String,
+    kind: String,
+    quality: String,
+    #[serde(default = "default_search_page_limit")]
+    limit: u32,
+    #[serde(default)]
+    offset: u32,
+}
+fn default_search_page_limit() -> u32 {
+    200
+}
 arg!(History {
     query: String,
     state: String
@@ -107,6 +121,12 @@ arg!(AgentTool {
     tool: String,
     arguments: Value
 });
+arg!(QuarantineId { item_id: String });
+arg!(QuarantineAction {
+    action_id: String,
+    accepted: bool
+});
+arg!(Empty {});
 
 impl Engine {
     pub fn dispatch(&self, request: Request) -> Reply {
@@ -140,7 +160,7 @@ impl Engine {
     fn call(&self, method: &str, p: Value) -> CoreResult<Value> {
         match method {
             "health" => Ok(
-                json!({"service":"yingxu-local-core","version":env!("CARGO_PKG_VERSION"),"protocolVersion":PROTOCOL_VERSION,"databaseVersion":1,"capabilities":{"localBackup":true,"persistentQueue":true,"multiTarget":true,"transferToRecovery":true,"history":true,"replicaAudit":true,"restore":true,"delivery":true,"agentProvider":false,"cloudConnection":false,"photoSignals":true,"photoThumbnails":true,"rawDecode":false,"rawPreview":true,"videoMetadata":true,"videoFrameExtraction":"optional_ffmpeg","videoQualityModel":false,"netdiskUpload":false}}),
+                json!({"service":"yingxu-local-core","version":env!("CARGO_PKG_VERSION"),"protocolVersion":PROTOCOL_VERSION,"databaseVersion":3,"capabilities":{"localBackup":true,"persistentQueue":true,"multiTarget":true,"transferToRecovery":true,"history":true,"replicaAudit":true,"restore":true,"delivery":true,"agentProvider":false,"cloudConnection":false,"photoSignals":true,"photoThumbnails":true,"rawDecode":false,"rawPreview":true,"videoMetadata":true,"videoFrameExtraction":"optional_ffmpeg","videoQualityModel":false,"netdiskUpload":false,"quarantine":true,"agentFileActionPreview":true}}),
             ),
             "backup.scan" => {
                 let a: Source = decode(p)?;
@@ -191,6 +211,10 @@ impl Engine {
                 let a: Search = decode(p)?;
                 value(self.search(&a.query, &a.kind, &a.quality)?)
             }
+            "library.searchPage" => {
+                let a: SearchPage = decode(p)?;
+                self.search_page(&a.query, &a.kind, &a.quality, a.limit, a.offset)
+            }
             "agent.tools" => Ok(crate::agent::tool_directory()),
             "agent.searchMedia" => {
                 let a: AgentSearch = decode(p)?;
@@ -230,6 +254,22 @@ impl Engine {
                 self.review_media(&a.media_id, &a.state, &a.note, a.confirmed)
             }
             "library.duplicates" => value(self.duplicate_candidates()?),
+            "quarantine.stage" => {
+                let a: MediaId = decode(p)?;
+                self.quarantine_candidate(&a.media_id)
+            }
+            "quarantine.list" => {
+                let _: Empty = decode(p)?;
+                value(self.quarantine_list()?)
+            }
+            "quarantine.prepareCleanup" => {
+                let a: QuarantineId = decode(p)?;
+                self.quarantine_prepare_cleanup(&a.item_id)
+            }
+            "quarantine.confirmCleanup" => {
+                let a: QuarantineAction = decode(p)?;
+                self.quarantine_confirm_cleanup(&a.action_id, a.accepted)
+            }
             "settings.get" => self.store.get("settings", "preferences"),
             "settings.update" => self.update_settings(p),
             "settings.reset" => {

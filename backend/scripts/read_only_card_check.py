@@ -1,52 +1,181 @@
 #!/usr/bin/env python3
-"""Explicitly selected source; no writes to source, no private media in evidence."""
-import argparse,collections,hashlib,json,pathlib,subprocess,tempfile,time
-p=argparse.ArgumentParser();p.add_argument('--source',required=True);p.add_argument('--evidence',required=True);args=p.parse_args()
-source=pathlib.Path(args.source).resolve(strict=True);binary=pathlib.Path(__file__).resolve().parents[1]/'target/release/yingxu-core'
-photos=sorted(x for x in source.rglob('*') if x.is_file() and not x.is_symlink() and not any(v.startswith('.') for v in x.relative_to(source).parts) and x.suffix.lower() in {'.jpg','.jpeg','.png'})
+"""Analyze an explicitly selected removable volume without writing to its source."""
+
+import argparse
+import collections
+import hashlib
+import json
+import pathlib
+import subprocess
+import tempfile
+import time
+
+
+PHOTO_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".cr2", ".cr3", ".crw", ".nef", ".nrw",
+    ".arw", ".srf", ".sr2", ".raf", ".dng", ".orf", ".rw2", ".raw",
+    ".pef", ".srw", ".x3f", ".3fr", ".fff", ".iiq", ".mos", ".mrw",
+    ".erf", ".kdc", ".dcr", ".rwl",
+}
+
+
 def digest(path):
- h=hashlib.sha256()
- with path.open('rb') as f:
-  while chunk:=f.read(1024*1024):h.update(chunk)
- return h.hexdigest()
-before={x:(x.stat().st_size,x.stat().st_mtime_ns,digest(x)) for x in photos}
-start=time.monotonic();result={'sourceType':'user-authorized removable FAT32 card','originalCount':len(photos),'formats':dict(collections.Counter(x.suffix.lower() for x in photos)),'originalBytes':sum(v[0] for v in before.values()),'privatePathsIncluded':False,'networkUsed':False}
-with tempfile.TemporaryDirectory(prefix='yingxu-readonly-card-') as tmp:
- root=pathlib.Path(tmp).resolve();dest=root/'copy';dest.mkdir()
- process=subprocess.Popen([str(binary),'--data-dir',str(root/'db'),'rpc'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
- sequence=0
- def rpc(method,params):
-  global sequence
-  sequence+=1;process.stdin.write(json.dumps({'requestId':str(sequence),'version':1,'method':method,'params':params})+'\n');process.stdin.flush();reply=json.loads(process.stdout.readline())
-  if not reply['ok']:raise RuntimeError(reply['error']['code'])
-  return reply.get('data')
- try:
-  result['index']=rpc('library.index',{'source':str(source)})
-  rows=rpc('library.search',{'query':'','kind':'photo','quality':'all'})
-  decode_reasons=collections.Counter();decoded=collections.Counter();quality=collections.Counter();hints=collections.Counter();timestamps=collections.Counter();errors=collections.Counter();thumbnail_checked=0
-  for row in rows:
-   try:
-    response=rpc('library.analyzePhoto',{'mediaId':row['id']});meta=response['metadata'];decoded[meta['decodeStatus']]+=1;
-    if meta.get('decodeReason'):decode_reasons[meta['decodeReason']]+=1
-    quality[response['qualityState']]+=1;timestamps[meta['timestampSource']]+=1
-    hints.update(meta.get('quality',{}).get('candidates',[]))
-    if response['thumbnailAvailable'] and thumbnail_checked<3:
-     thumb=rpc('library.thumbnail',{'mediaId':row['id']});assert thumb['maxEdge']==512 and thumb['exifIncluded'] is False and len(thumb['bytes'])<1024*1024;thumbnail_checked+=1
-   except RuntimeError as e:errors[str(e)]+=1
-  result.update(decoded=dict(decoded),decodeReasons=dict(decode_reasons),qualityCandidates=dict(quality),signalCounts=dict(hints),timestampSources=dict(timestamps),analysisErrors=dict(errors),thumbnailReadChecks=thumbnail_checked,qualityAccuracy='not_established_no_ground_truth_labels')
-  selected=[]
-  for ext in {x.suffix.lower() for x in photos}:
-   selected.append(next(x for x in photos if x.suffix.lower()==ext))
-  plan=rpc('backup.preview',{'source':str(source),'destinations':[str(dest)],'name':'Read-only card verification','verify':True,'selected':[str(x.relative_to(source)) for x in selected]})
-  job=rpc('jobs.start',{'planId':plan['id'],'confirmed':True,'idempotencyKey':'card-check'})
-  completed=rpc('worker.runNext',{})
-  assert completed['state']=='success'
-  matches=all(digest(source/item['relative'])==digest(pathlib.Path(item['output'])) for item in completed['items'])
-  result['sampleBackup']={'files':len(selected),'state':completed['state'],'verified':completed['targets'][0]['verified'],'independentSha256Match':matches}
- finally:
-  process.stdin.close();process.wait(timeout=10)
-result['sourceContentUnchanged']=all((x.stat().st_size,x.stat().st_mtime_ns,digest(x))==values for x,values in before.items())
-result['elapsedSeconds']=round(time.monotonic()-start,2)
-assert result['sourceContentUnchanged']
-pathlib.Path(args.evidence).write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n')
-print(json.dumps(result,ensure_ascii=False))
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def rpc(process, method, params, sequence):
+    sequence += 1
+    process.stdin.write(json.dumps({
+        "requestId": str(sequence), "version": 1,
+        "method": method, "params": params,
+    }) + "\n")
+    process.stdin.flush()
+    reply = json.loads(process.stdout.readline())
+    if not reply["ok"]:
+        raise RuntimeError(reply["error"]["code"])
+    return reply.get("data"), sequence
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--source", required=True)
+parser.add_argument("--evidence", required=True)
+args = parser.parse_args()
+
+source = pathlib.Path(args.source).resolve(strict=True)
+binary = pathlib.Path(__file__).resolve().parents[1] / "target/release/yingxu-core"
+photos = sorted(
+    path for path in source.rglob("*")
+    if path.is_file()
+    and not path.is_symlink()
+    and not any(part.startswith(".") for part in path.relative_to(source).parts)
+    and path.suffix.lower() in PHOTO_EXTENSIONS
+)
+formats = collections.Counter(path.suffix.lower() for path in photos)
+stat_before = {
+    path: (path.stat().st_size, path.stat().st_mtime_ns, path.stat().st_ino)
+    for path in photos
+}
+start = time.monotonic()
+result = {
+    "sourceType": "user-authorized removable volume",
+    "photoFileCount": len(photos),
+    "photoFormats": dict(formats),
+    "photoBytes": sum(value[0] for value in stat_before.values()),
+    "privatePathsIncluded": False,
+    "networkUsed": False,
+}
+
+with tempfile.TemporaryDirectory(prefix="yingxu-readonly-card-") as temporary:
+    root = pathlib.Path(temporary).resolve()
+    destination = root / "copy"
+    destination.mkdir()
+    process = subprocess.Popen(
+        [str(binary), "--data-dir", str(root / "db"), "rpc"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    sequence = 0
+    try:
+        result["index"], sequence = rpc(
+            process, "library.index", {"source": str(source)}, sequence
+        )
+        analysis_by_extension = collections.defaultdict(collections.Counter)
+        decode_reasons = collections.Counter()
+        quality = collections.Counter()
+        hints = collections.Counter()
+        timestamps = collections.Counter()
+        errors = collections.Counter()
+        thumbnail_checks = 0
+        analyzed_ids = set()
+
+        # Search by suffix to stay below library.search's 500-row ceiling.
+        for extension in sorted(formats):
+            rows, sequence = rpc(process, "library.search", {
+                "query": extension, "kind": "photo", "quality": "all",
+            }, sequence)
+            for row in rows:
+                media_id = row["id"]
+                if media_id in analyzed_ids:
+                    continue
+                analyzed_ids.add(media_id)
+                try:
+                    response, sequence = rpc(
+                        process, "library.analyze", {"mediaId": media_id}, sequence
+                    )
+                    metadata = response["metadata"]
+                    actual_extension = pathlib.Path(row["name"]).suffix.lower()
+                    analysis_by_extension[actual_extension][metadata["decodeStatus"]] += 1
+                    if metadata.get("decodeReason"):
+                        decode_reasons[metadata["decodeReason"]] += 1
+                    quality[response["qualityState"]] += 1
+                    timestamps[metadata.get("timestampSource", "unknown")] += 1
+                    hints.update(metadata.get("quality", {}).get("candidates", []))
+                    if response["thumbnailAvailable"] and thumbnail_checks < 3:
+                        thumbnail, sequence = rpc(
+                            process, "library.thumbnail", {"mediaId": media_id}, sequence
+                        )
+                        assert thumbnail["maxEdge"] == 512
+                        assert thumbnail["exifIncluded"] is False
+                        assert len(thumbnail["bytes"]) < 1024 * 1024
+                        thumbnail_checks += 1
+                except RuntimeError as error:
+                    analysis_by_extension[extension][f"error:{error}"] += 1
+                    errors[str(error)] += 1
+
+        result.update({
+            "analyzedPhotoCount": len(analyzed_ids),
+            "analysisByExtension": {
+                extension: dict(counts)
+                for extension, counts in sorted(analysis_by_extension.items())
+            },
+            "decodeReasons": dict(decode_reasons),
+            "qualityCandidates": dict(quality),
+            "signalCounts": dict(hints),
+            "timestampSources": dict(timestamps),
+            "analysisErrors": dict(errors),
+            "thumbnailReadChecks": thumbnail_checks,
+            "qualityAccuracy": "not_established_no_ground_truth_labels",
+        })
+
+        # Verify one representative JPEG; large RAWs are analyzed but not copied
+        # by this smoke test, so the test does not unexpectedly consume disk space.
+        jpeg = next((path for path in photos if path.suffix.lower() in {".jpg", ".jpeg"}), None)
+        if jpeg:
+            plan, sequence = rpc(process, "backup.preview", {
+                "source": str(source), "destinations": [str(destination)],
+                "name": "Read-only card verification", "verify": True,
+                "selected": [str(jpeg.relative_to(source))],
+            }, sequence)
+            job, sequence = rpc(process, "jobs.start", {
+                "planId": plan["id"], "confirmed": True,
+                "idempotencyKey": "card-check",
+            }, sequence)
+            completed, sequence = rpc(process, "worker.runNext", {}, sequence)
+            assert completed["state"] == "success"
+            item = completed["items"][0]
+            matches = digest(jpeg) == digest(pathlib.Path(item["output"]))
+            result["sampleBackup"] = {
+                "files": 1,
+                "state": completed["state"],
+                "verified": completed["targets"][0]["verified"],
+                "independentSha256Match": matches,
+            }
+    finally:
+        process.stdin.close()
+        process.wait(timeout=10)
+
+result["sourceMetadataUnchanged"] = all(
+    (path.stat().st_size, path.stat().st_mtime_ns, path.stat().st_ino) == before
+    for path, before in stat_before.items()
+)
+result["elapsedSeconds"] = round(time.monotonic() - start, 2)
+assert result["sourceMetadataUnchanged"]
+pathlib.Path(args.evidence).write_text(
+    json.dumps(result, ensure_ascii=False, indent=2) + "\n"
+)
+print(json.dumps(result, ensure_ascii=False))

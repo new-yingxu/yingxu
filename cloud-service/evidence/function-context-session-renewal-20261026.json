@@ -1,0 +1,15 @@
+{
+  "buildId": "38efa88c29ef39fda626520136bb31435b1b54b4433b5b6b29b73b54c4505bfb",
+  "appVersion": "0.7.2-session-renewal-preview",
+  "schemaVersion": 11,
+  "filesVerified": 2729,
+  "packagesVerified": 60,
+  "sourceMatched": true,
+  "credentialsChecked": true,
+  "deployed": false,
+  "package": "/Users/nanyu/Documents/AI\u5de5\u5177/02_Codex\u6570\u636e_0907/worktrees/yingxu-cloud-agent/new-\u5f71\u5e8fagent\u5f00\u53d1/infra/cloud/function-packages/0.7.2-session-renewal-preview-38efa88c29ef.zip",
+  "sha256": "384eb67061eb2810da2deeafd98f15ef6c0b4bd963265a2085a9436f0b32183f",
+  "bytes": 34246444,
+  "archiveFiles": 2730,
+  "archiveReadback": true
+}

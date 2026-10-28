@@ -11,8 +11,10 @@ pub mod transfer;
 pub use engine::{Engine, Worker};
 pub use model::*;
 
+pub mod file_actions;
 pub mod media;
 pub mod netdisk;
 pub mod netdisk_baidu;
+pub mod quarantine;
 pub mod raw;
 pub mod video;

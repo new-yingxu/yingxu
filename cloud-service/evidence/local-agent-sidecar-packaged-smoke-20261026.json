@@ -1,0 +1,1 @@
+{"health":"passed","modelAvailability":"ready","cloudFallback":false,"status":"passed","platform":"darwin","architecture":"arm64","manifestFiles":1187,"signedOrNotarized":false,"modelWeightsBundled":false,"inheritedCloudCredentialsIgnored":true,"gracefulShutdown":"passed"}

@@ -1,0 +1,41 @@
+{
+  "environment": "local development, synthetic owner and database",
+  "firstStatus": 200,
+  "repeatStatus": 200,
+  "realProviderCalls": 1,
+  "response": {
+    "answer": "当没有匹配到任务时，不应声称已经执行备份。",
+    "matches": [],
+    "model": "qwen2.5:7b",
+    "dataSource": "owner_scoped_sync_events",
+    "searchWindow": {
+      "eventLimit": 200,
+      "complete": false
+    },
+    "provider": "ollama",
+    "usage": {
+      "prompt_tokens": 92,
+      "completion_tokens": 14,
+      "total_tokens": 106
+    },
+    "executionAuthorized": false,
+    "sessionId": "ollama-real",
+    "turnId": "one",
+    "persisted": true,
+    "duplicate": false,
+    "orchestrator": "langgraph"
+  },
+  "calls": [
+    {
+      "elapsedSeconds": 1.34,
+      "provider": "ollama",
+      "model": "qwen2.5:7b",
+      "usage": {
+        "prompt_tokens": 92,
+        "completion_tokens": 14,
+        "total_tokens": 106
+      }
+    }
+  ],
+  "cloudbaseCalled": false
+}

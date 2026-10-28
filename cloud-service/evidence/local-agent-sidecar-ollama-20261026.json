@@ -1,0 +1,64 @@
+{
+  "date": "2026-10-26",
+  "status": "local-only",
+  "architecture": {
+    "agent_runtime": "LangGraph Python sidecar intended to ship inside the desktop installer",
+    "model": "Ollama qwen2.5:7b on fixed loopback OpenAI-compatible endpoint",
+    "local_tools": "Typed requests are handed to Tauri/Rust; the sidecar does not read arbitrary desktop paths",
+    "cloudbase": "No request, migration, or deployment performed"
+  },
+  "evidence": [
+    {
+      "kind": "automated_http_contract",
+      "command": "/tmp/yingxu-cloud-py311/bin/python -m unittest discover -s cloud-service/tests -p 'test_local_agent_app.py' -v",
+      "result": "4 passed",
+      "coverage": [
+        "Bearer token required",
+        "local model-turn replay does not call provider twice",
+        "typed search_media result is consumed by the second model call",
+        "duplicate continuation does not make another provider request",
+        "development-only runtime and high-entropy host token checks"
+      ],
+      "provider": "mocked"
+    },
+    {
+      "kind": "real_local_model_http",
+      "command": "YINGXU_RUN_OLLAMA_TESTS=1 /tmp/yingxu-cloud-py311/bin/python -m unittest discover -s cloud-service/tests -p 'test_local_agent_ollama.py' -v",
+      "result": "1 passed in 13.168 seconds",
+      "model": "qwen2.5:7b",
+      "provider": "actual local Ollama",
+      "coverage": [
+        "real model selected search_media",
+        "synthetic typed local result was returned to the model",
+        "two provider calls completed the tool round trip",
+        "duplicate result replay made no additional provider call"
+      ],
+      "user_media_accessed": false
+    },
+    {
+      "kind": "loopback_runner_smoke",
+      "result": "passed",
+      "host": "127.0.0.1",
+      "port": "ephemeral",
+      "healthz": "200 service=yingxu-local-agent",
+      "database": "temporary SQLite"
+    },
+    {
+      "kind": "store_regressions",
+      "results": {
+        "local_steps": "9 passed",
+        "action_commit": "8 passed",
+        "account_data": "6 passed",
+        "store_contract": "21 total; 11 passed; 10 CloudBase integration tests skipped"
+      }
+    }
+  ],
+  "limits": [
+    "The sidecar and runner are not yet included in a desktop installation package.",
+    "Tauri agent.ask/confirm product integration is being implemented in the full-stack session.",
+    "The per-process continuation signing key is ephemeral; continuation after restarting the sidecar needs a stable key from the OS credential store.",
+    "The Ollama model weights are not bundled; Ollama and the selected model are explicit local prerequisites.",
+    "PostgreSQL v15/v16 migration/bridge verification is not established by this evidence.",
+    "No CloudBase state was changed."
+  ]
+}

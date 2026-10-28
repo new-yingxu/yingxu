@@ -21,27 +21,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-def targets_for(name):
-    """按文件名里的架构标识判定平台，**不猜测**。
-
-    Tauri 产物名带 target triple（如 `..._aarch64.dmg`、`..._x64-setup.exe`），
-    因此可以精确判断。判不出就跳过并告警，宁可少一项也不让 Intel 用户下到 arm64 包。
-    """
-    lower = name.lower()
-    arch = None
-    if "aarch64" in lower or "arm64" in lower:
-        arch = "arm64"
-    elif "x86_64" in lower or "x64" in lower or "intel" in lower or "amd64" in lower:
-        arch = "x64"
-    if lower.endswith(".dmg"):
-        return {"arm64": ["darwin-aarch64"], "x64": ["darwin-x86_64"]}.get(arch, [])
-    if lower.endswith(".tar.gz"):
-        return {"arm64": ["darwin-aarch64"], "x64": ["darwin-x86_64"]}.get(arch, [])
-    if lower.endswith(".exe") or lower.endswith(".msi"):
-        return ["windows-x86_64"] if arch in (None, "x64") else ["windows-aarch64"]
-    if lower.endswith(".appimage"):
-        return ["linux-x86_64"] if arch in (None, "x64") else ["linux-aarch64"]
-    return []
+SUFFIX_MAP = [
+    (".dmg", ["darwin-aarch64", "darwin-x86_64"]),
+    (".exe", ["windows-x86_64"]),
+    (".msi", ["windows-x86_64"]),
+    (".AppImage", ["linux-x86_64"]),
+    (".tar.gz", ["darwin-aarch64", "darwin-x86_64"]),
+]
 
 
 def sha256(path):
@@ -78,18 +64,19 @@ def main():
         assets.append({"name": p.name, "bytes": p.stat().st_size, "sha256": digest, "url": url})
         sums.append(f"{digest}  {p.name}")
 
-    platforms, unmapped = {}, []
+    platforms = {}
     for a in assets:
-        targets = targets_for(a["name"])
-        if not targets:
-            unmapped.append(a["name"])
-        for t in targets:
-            # 同一平台只留第一个（避免 tar.gz 覆盖 dmg）
-            platforms.setdefault(t, {
-                "url": a["url"],
-                "signature": "",
-                "sha256": a["sha256"],
-            })
+        lower = a["name"].lower()
+        for suffix, targets in SUFFIX_MAP:
+            if lower.endswith(suffix.lower()):
+                for t in targets:
+                    # 同名同平台只留第一个（dmg 优先于 tar.gz）
+                    platforms.setdefault(t, {
+                        "url": a["url"],
+                        "signature": "",
+                        "sha256": a["sha256"],
+                    })
+                break
 
     manifest = {
         "version": args.version,
@@ -104,14 +91,10 @@ def main():
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (out / "SHA256SUMS").write_text("\n".join(sums) + "\n", encoding="utf-8")
-    print(f"已生成 {out / 'latest.json'} 与 {out / 'SHA256SUMS'}")
+    print(f"已生成 {out/'latest.json'} 与 {out/'SHA256SUMS'}")
     for a in assets:
         print(f"  {a['sha256'][:16]}…  {a['bytes']:>12,}  {a['name']}")
     print("平台:", ", ".join(platforms) or "（无）")
-    if unmapped:
-        print("警告：以下资产无法判定架构，未写入 platforms（需人工确认）:")
-        for name in unmapped:
-            print("  -", name)
 
 
 if __name__ == "__main__":

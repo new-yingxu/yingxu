@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "branch": "codex/yingxu-desktop-agent",
+  "test": "agent_action_tests::packaged_local_agent_real_model_tool_round_trip_from_host",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "model": "qwen2.5:7b (existing local Ollama)",
+  "modelRequests": 2,
+  "flow": [
+    "host starts staged packaged sidecar and authenticates local status",
+    "Ollama requests search_media for a synthetic IMG_2048.jpg fixture indexed in an isolated SQLite database",
+    "host executes the typed read-only Rust search tool and submits its result",
+    "test kills the test-owned sidecar process while the turn is awaiting tool continuation",
+    "restarted sidecar preserves awaiting_tools ledger state and does not replay the model step",
+    "duplicate start returns the existing awaiting_local_tools turn with modelRequests=1",
+    "signed continuation resumes the same turn; Ollama summarizes the result",
+    "completed continuation replay is idempotent",
+    "a second synthetic turn is marked uncertain by a SQLite test fixture, then remains uncertain across restart and duplicate start is rejected",
+    "host requests authenticated graceful shutdown and the child exits"
+  ],
+  "uncertainFixtureBoundary": "The uncertain ledger row is injected directly by the test. This verifies restart/non-replay behavior for persisted uncertain state, not the provider-failure transition that creates uncertain state.",
+  "localDataBoundary": "Synthetic fixture only; no user media or real media library accessed.",
+  "filesChanged": false,
+  "executionAuthorized": false,
+  "cloudFallback": false,
+  "tauriWebviewInvoked": false,
+  "commands": [
+    "YINGXU_RUN_OLLAMA_HOST_TESTS=1 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk cargo test --manifest-path backend/tauri-host/Cargo.toml -p yingxu-desktop-host packaged_local_agent_real_model_tool_round_trip_from_host -- --nocapture",
+    "YINGXU_RUN_OLLAMA_HOST_TESTS=1 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk cargo test --manifest-path backend/tauri-host/Cargo.toml -p yingxu-desktop-host"
+  ],
+  "results": [
+    "real local Ollama restart test: 1 passed, 0 failed",
+    "complete Tauri host suite with opt-in test: 7 passed, 0 failed"
+  ]
+}

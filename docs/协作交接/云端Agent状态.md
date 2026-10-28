@@ -84,6 +84,14 @@ SQLStore / PostgRESTStore 同语义；v8-session-deletion 迁移草案依赖 v7�
 
 扩展尚未执行的 v8 草案，为会话删除标记增加账号串行分配的 id，GET /v1/agent/session-deletions 支持按独立 after_id 游标拉取（100 条分页）。客户端须按账号保存删除游标、清除对应会话缓存并停止旧 session 重发；此游标不得混用任务 serverCursor 或设备 sequence。重复删除不生成额外标记。服务端测试已覆盖重复删除仅一条通知、分页与账号隔离。21 项中 13 项本地通过、8 项云端跳过。客户端消费、云迁移与云端验证未完成，不能宣称跨端删除已验收。
 
+## 路径同步关闭后的缓存失效通知（本地）
+
+新增账号隔离 GET /v1/sync/invalidations，按独立 after_id 返回 paths_redacted 通知（每页100条）。关闭路径同步在同一账号锁事务中清理旧投影并发布通知；重复保持关闭且无旧路径时不重复发布，重新开启再关闭会发新通知。新账号首次明确关闭也发布通知。通知不包含路径。v9 迁移草案依赖 v8，production readiness 要求9；未执行迁移、未部署、未重试受阻REST网关。
+
+客户端应按账号独立维护任务事件、路径失效、会话删除三个游标，收到 paths_redacted 后清除已有缓存source/paths。快照拉取与偏好变化可并发，客户端写缓存后应再拉失效通知，并持续轮询，不能仅登录时检查一次；本地清理操作和通知游标推进必须事务提交。当前未声称一致性快照/原生客户端消费或跨端隐私验收完成。23项检查中14项本地通过9项云端跳过。
+
+已读取全栈R2结果；旧宿主包阻塞可通过独立target构建新本地调试宿主继续，已授权全栈R3不改backend源码完成重建及原生联调，无需等待用户手工处理。
+
 ## PostgreSQL 实测及真实云端 schema v9（修正前述草案状态）
 
 本轮安装 Homebrew PostgreSQL 17.11_1（依赖由 Homebrew 更新），未启用开机服务。验证器 `infra/cloud/validate_local_postgres.py` 创建仅 Unix socket 的独立 /tmp/yingxu-pg-* 数据库，应用 v1–v9 真实迁移，检查客户端表/RPC权限，运行 SQLStore 与真实 PL/pgSQL RPC 合约；RPC 写入测试切换为 service_role。通过 pg_locks 亲见账号锁阻塞，验证跨事务发布顺序；新增直连/RPC 双向重试与脱敏后指纹兼容检查。总计45项：36项本地通过、9项CloudBase HTTP合约主动跳过。所有测试数据库均已停止，保留日志与数据供复查；未使用Homebrew默认数据库。
@@ -95,6 +103,14 @@ SQLStore / PostgRESTStore 同语义；v8-session-deletion 迁移草案依赖 v7�
 证据：cloud-service/evidence/postgresql17-migrations-contracts-20261026.log、cloudbase-schema-v6-v9-20261026.log、cloudbase-schema-v9-rpc-checks-20261026.log。管理SQL成功不能当作REST网关成功；本轮未调用已受限网关、未部署新应用。线上应用仍是此前0.2.0预发布，本地应用要求schema9。CloudBase HTTP合约、正式身份、BYOK和最终客户端联调继续，整体目标未完成。
 
 全栈R3已报告原生目录选择到报告闭环通过；协调已派R4客户端通知消费、账号隔离与persisted=false合法行为修复，后端源码边界不变。
+
+## BYOK 文本传输层（未接入公开路由）
+
+新增 model_provider.py：按 owner 解析由服务端 Secret 提供的凭据、凭据 repr 隐藏，当前仅固定北京 DashScope 端点；禁止客户端自定URL、重定向、工具调用、照片或任意事件原文。发送用户明确授权查询时需只附带最多10条任务摘要白名单字段；响应上限1MiB、输出1024 token、超时15秒，返回供应商实际usage字段，不编造用量。适配按官方文档：https://www.alibabacloud.com/help/en/model-studio/model-calling-in-sub-workspace 。
+
+本模块目前未被 /agent/turns 调用、未配置真实BYOK凭据、未发任何模型请求、未部署，因此不能宣称模型已接通。后续接线仍需逐次明确模型授权、受控Secret入口及持久化请求预留以防重试重复计费；不能只在完成后去重便宣称付费调用幂等。单元检查模拟传输，验证账号凭据隔离、无敏感字段、工具响应拒绝、禁止重定向。全套含真实本地PG：49项中40项通过，9项CloudBase HTTP跳过。
+
+全栈R4已报告客户端三游标/缓存处理/退出账号停止旧队列及persisted=false支持通过；继续派R5真实本地FastAPI开发鉴权HTTP联调，不能冒充正式登录或线上验收。
 
 ## 显式 BYOK 路由及持久化请求预留（应用未部署）
 
@@ -119,3 +135,63 @@ POST /v1/agent/turns 新增 useModel（默认false）；只有明确true才允�
 继续本地工作：新增verify_function_context.py，严格核对包内完整文件集合/逐文件SHA256/路径越界/可执行bootstrap/行尾/Linux依赖与当前app/contracts/lock/bootstrap源码一致；扫描外部凭据字节，连manifest也覆盖。2项破坏性样本回归通过。实际0.3.0-agent-preview包1499清单文件、32依赖、sourceMatched与credentialsChecked均true，未部署。旧包保留，测试和临时DB证据不删。
 
 协调：独立验收已确认EXE/NSIS/ZIP内容完整hash一致、DMG容器有效；Windows运行回归仍缺x64 VM。已派独立线修复UTF8兼容ZIP副本与当前源码指纹清单，不能反推旧二进制来源；全栈R7继续本地原生适配，不调用CloudBase重试。
+
+## 本地继续：拒绝迟到结果的一致性与r2构建
+
+直连SQLStore在会话删除/设备撤销时曾先提交cancelled再抛异常，而RPC抛错会回滚保留pending。现统一为回滚保留预留；已删除会话与撤销设备仍拒绝重发，且迟到结果不落历史。真实PG两种Store新增回归通过。Python3.11+PG17全套65项：55项本地通过，10项云HTTP主动跳过，未调用CloudBase。
+
+版本默认值集中到DEFAULT_APP_VERSION；构建器从源配置读取版本，增加全文件清单的确定性buildId。新目录function-build-0.3.0-agent-preview-r2已构建，buildId=391f81dafdc3a15a236e1a5a554d14417c0dd672eb6d6622aa661bcd7f891cce，1499文件、32个Linux/Python3.11依赖、源/lock/bootstrap一致、凭据字节扫描通过。旧候选包保留，但不再等同当前源码。新包未部署。
+
+部署验证器增加buildId、源版本与候选配置APP_VERSION一致性检查；两项本地破坏样本回归通过。项目外生成600权限候选配置cloudbase-deploy-config-0.3.0-preview.json，原0.2.0部署配置保持，未调用部署。当前开发环境APIKey原到期时间仍需在恢复网络后核验/轮换，不把候选配置视为长期凭据就绪。
+
+独立验收线已生成UTF8兼容ZIP副本（13个文件内容匹配，SHA256 c0a4c083498283d00189435dba07e49c9d3c91579c9a3fa016a077713a86330d），原ZIP未覆盖；Windows解压和运行尚待x64 VM。已派其继续逐项框架验收缺口矩阵，全栈R7继续；云端连接异常停止规则及合成owner待清理清单保持。
+
+## LangGraph 明确纳入完整目标（本地0.4候选）
+
+用户明确更正并要求采用LangGraph，完整目标增加LangGraph编排、工具适配和实际云模型API接入，不能用关键词查询或仅有文本传输模块替代。已固定langgraph1.2.17，并沿官方StateGraph/START/END/条件边构建实际运行图；POST agent/turns已走图，而非仅声明依赖。图主链：owner_scoped_tool → reserved_model_call 或 persist_readonly_turn → END。
+
+只读工具注册表已实现search_backup_jobs/get_backup_job，新增工具目录与POST工具调用接口，强制绑定服务端principal.owner，不接受owner注入；未知/云端写工具403，非法参数422。结果明确最近200事件窗口，get_backup_job未找到只称NOT_IN_SEARCH_WINDOW，不能断言任务不存在。文件改名/移动/上传仍仅既有提议，不由云图直接执行。
+
+Graph不自动重试，模型仍逐次useModel授权、owner Secret和SQL持久化请求预留。凭据不进入图状态；即使外部LANGSMITH_TRACING=true也在执行上下文禁用追踪，已有回归验证。当前没有Graph专用持久checkpoint或模型自主工具选择，不能把SQL会话保存说成LangGraph恢复机制已实现；这些仍保留后续任务。官方依据：https://docs.langchain.com/oss/python/langgraph/graph-api 。
+
+本地PG17/Python3.11全套68项：58本地通过，10云HTTP主动跳过；新增图分流/模型节点单次调用/禁追踪/工具所有权与API路由检查通过。更新Linux与通用锁，0.4.0-langgraph-preview候选已构建：2727清单文件、60依赖，源/配置/凭据扫描通过。buildId258d02d1cb11fec7ef43c4f3d1fb1042ef09352fd7ecef22ac58310231026aa3。
+
+生成本地ZIP并逐文件回读：0.4.0-langgraph-preview-258d02d1cb11.zip，34,234,547字节，2728文件（含manifest），SHA25681c1f3a737383c613aac6435528218d738dd899a59620207f0f4e5c2c1bf93b4；bootstrap执行位保留。项目外600权限候选配置准备，原配置及旧包保留。未调用CloudBase、未部署；线上仍0.2.0，真实schema10。
+
+R8后端视频重复分析修复已由全栈报告：5视频单测、clippy通过，三次原生分析均3帧，来源字节/mtime不变；仅确认Mac本地调试验收，不代表旧发行包已更新。已派R9客户端真实本地LangGraph工具API联调，后端恢复只读。
+
+## 用户授权Ollama真实本地模型验证（0.4.1候选）
+
+检查现有Ollama服务和本机模型，复用已安装qwen2.5:7b，无新模型下载，不重启服务、不删除其他模型。新增仅APP_ENV=development可用的provider=ollama适配；固定127.0.0.1:11434/v1/chat/completions，显式禁用系统HTTP代理、不发送APIKey、不允许云模型标签，不作为生产或云端异常的自动fallback。DashScope路径保留独立BYOK验证。官方兼容依据：https://docs.ollama.com/api/openai-compatibility 。
+
+真实本地证据（不是模拟provider响应）：首次LangGraph模型回答耗时1.34秒，返回prompt92/completion14/total106 token；同轮次重复200 duplicate且实测真实模型调用仍1次。另一隔离任务事件的实际模型回答约4.65秒，正确返回running匹配摘要并说明数据可能不完整，executionAuthorized=false；无原片、GPS、用户资料、CloudBase或付费模型调用。证据ollama-langgraph-real-local-20261026.json与ollama-langgraph-grounded-job-20261026.json。
+
+新增可重复执行的显式opt-in测试test_ollama_integration.py，临时SQLite、运行时随机开发令牌、现有本地模型，校验真实回答/usage/任务依据/重复请求只调用1次；普通测试不自动调用模型。命令：YINGXU_RUN_OLLAMA_TESTS=1 python -m unittest discover -s cloud-service/tests -p test_ollama_integration.py -v。此测试已通过。生产拒绝Ollama配置、无认证头、禁代理与云标签拒绝单元检查通过；PG回归69项59通过10云HTTP跳过（新增opt-in测试之前），未调用CloudBase。
+
+本地0.4.1-ollama-preview包已构建并逐文件回读：2727清单文件/60依赖，buildId0f6bf83c2b184aeb0018b4b301e68b3c645ec2e399e60b2dd0acf801bd34606d，ZIP34234875字节/SHA256eb790deff28a5fb98ccbf21c43d5135275fb82d30d43f69b28732c31b6fbf0d3。项目外600候选配置、旧包保留；未部署，线上仍0.2.0/schema10。LangGraph专用checkpoint、模型自主工具选择和正式身份/远端模型验收继续，不能用本地Ollama通过代替云端供应商接通。已让全栈R9后续接真实本地Ollama逐次授权交互，仍不自动推送。
+
+
+## 0.7.0 账号令牌与服务端设备短会话（仅本地）
+
+新增可选 AUTH_MODE=cloudbase，默认配置仍禁用/原候选配置不启用该模式。POST /v1/auth/session/exchange 请求体仅 displayName，Authorization 为 CloudBase 用户 access_token；固定同环境 user/me 与 token/introspect 双验证 sub、一致 Bearer 类型、服务端注册 client_id→desktop/mobile 映射，再由服务端生成 device ID。请求体 owner/device/origin 不被接受，header 不提供身份依据；不声称硬件认证。返回 RS256 900秒影序 accessToken、tokenType、expiresIn、ownerId、deviceId、origin、deviceAttested:false；私钥及上游token不保存数据库、不返回。auth响应 Cache-Control:no-store。/.well-known/jwks.json 只返回公钥。POST /v1/auth/logout 用影序短JWT撤销当前设备所有token，再次登出幂等；旧token不能重新注册该设备。重新账号交换会生成新device ID。
+
+配置需要已确认 CLOUDBASE_CLIENT_ORIGINS、SESSION_PRIVATE_KEY（RSA≥2048，仅服务端Secrets）、SESSION_KEY_ID、JWT_ISSUER/JWT_AUDIENCE；生产issuer需HTTPS。没有配置则503，不能回退开发认证。现阶段不实现刷新或多key平滑轮换，短期会话到期需重新账号交换；生产登录UI、渠道送达、真实client注册和手机UID兼容仍需联调。旧jwt模式保持。
+
+验证：Python3.11/PostgreSQL17.11 104 tests，93 passed、11 skipped。新增8项账户通道与真实RSA测试、3项真实本地HTTP/SQLite交换与退出测试；CloudBase HTTP为合成响应，未请求网关，不代表正式登录成功。真实签名、issuer/aud/exp、未知client/账号不匹配拒绝、客户端伪造device/header无效、owner隔离、退出403已验证。证据 account-session-postgresql-regression-20261026.log。
+
+本地ZIP 0.7.0-account-session-preview-093b3d54029c.zip，34,245,375字节，2730条目，SHA256 0682dcef5f9986c32f15f790115a37f6f46389bae3fcbf4b913b1a477d11c114。源码匹配、凭据扫描及ZIP逐文件回读通过；schema11仅本地，云仍schema10/应用0.2.0，未部署。R10桌面8项合成回归与构建已收，已派R11短会话客户端和真实本地fixture联调，运行中不重复派发。
+
+官方接口参考：https://docs.cloudbase.net/http-api/auth/auth-token-introspect 。实际供应商返回client_id的语义及真实注册配置仍待云端验收，不能以合成测试代替。
+
+
+## 0.7.1 短会话公钥轮换（本地）
+
+SESSION_VERIFICATION_JWKS 可配置最多3个旧公钥；新会话只用当前私钥签发。严格接受六字段 RSA/RS256/use=sig JWK，RSA至少2048位，拒绝私钥字段、URL、未知字段、重复kid（包括active kid冲突）及超量keys。cloudbase模式每次按kid明确选key验签，不缓存旧key；JWKS输出active+旧public，移除旧key后该进程立即拒绝旧token。旧jwt/JWKS模式仍有原有300秒set缓存，不把本轮结论扩展到它。
+
+本地实际RSA与HTTP验证：旧签名会话在新active+旧public时仍可用，移除旧public返回401，新会话继续可用。PG隔离全量109 tests，98 passed、11 skipped；证据session-key-rotation-postgresql-regression-20261026.log。
+
+运维顺序：保留旧公钥→配置新私钥/kid与旧public→完成所有实例配置部署→等待旧900秒会话全部到期→移除旧public。配置在应用启动时读取；不声称未重启或多实例未更新时已全局立即撤销。遇密钥失陷需紧急移除对应public并完成实例更新，重新登录。没有创建生产私钥、修改CloudBase或发布。刷新仍未实现；本段替代0.7“无多key轮换”的旧状态。
+
+本地ZIP 0.7.1-session-rotation-preview-512dedd4525d.zip，34,246,015字节，2730条目，SHA256 530e252a9fc9d933d2afaf51ead13bd4cc0c54894624b7f29835cdeeb19379f3。源/凭据/ZIP逐文件回读通过。线上仍0.2.0/schema10，v11仅本地。
+
+协调修正：全栈会话在R11准备中转入存储卡只读复核，当前等待卡片挂载；R11尚未完成，不再标记运行中，不覆盖其当前任务或重复派发前端任务。云端会话继续独立实现。

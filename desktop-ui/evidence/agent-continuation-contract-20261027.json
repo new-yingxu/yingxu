@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-27",
+  "scope": "isolated packaged desktop QA app and synthetic indexed item only",
+  "observed": {
+    "persistedStep": 0,
+    "state": "awaiting_tools",
+    "modelRequests": 1,
+    "tool": "search_media",
+    "toolReadOnly": true,
+    "additionalModelStepPersisted": false,
+    "fileActionsPersisted": false
+  },
+  "rootCause": "Desktop search continuation included a redundant query field rejected by strict backend SearchData DTO.",
+  "change": "Continuation payload now sends only matches and truncated; UI no longer renders internal IPC diagnostic codes.",
+  "verification": {
+    "uiAgentChecks": "10 passed",
+    "nativeAdapterChecks": "18 passed",
+    "uiProductionBuild": "passed",
+    "strictDtoNewPayload": "accepted",
+    "strictDtoLegacyPayloadWithQuery": "rejected as expected",
+    "narrowViewportWidthPx": 391,
+    "horizontalOverflow": false
+  },
+  "recovery": "Original continuation was not replayed; its saved continuation state is expired. A new explicit model consent is required for a fresh UI end-to-end run.",
+  "cloudbase": "Migrations v11-v16 remain unapplied; CLI refresh request timed out."
+}

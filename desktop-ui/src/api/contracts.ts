@@ -1,3 +1,5 @@
+import type { LocalDirectoryGrant, LocalFileActionPreview, LocalFileActionReceipt } from './local-file-actions'
+
 export type Result<T> =
   { ok: true; data: T } | { ok: false; code: string; message: string };
 export type TaskState =
@@ -45,6 +47,13 @@ export interface MediaFile {
   qualityState: "good" | "review" | "unanalyzed";
   selected?: boolean;
 }
+export interface MediaPage {
+  items: MediaFile[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}
 export interface ArchiveTask {
   kind?: string;
   verify?: boolean;
@@ -57,6 +66,7 @@ export interface ArchiveTask {
   progress: number;
   speed: string;
   phase: string;
+  currentFile?: string;
   source: string;
   destinations: TaskDestination[];
   error?: string;
@@ -85,6 +95,7 @@ export interface AppSettings {
 }
 export type AgentMatch =
   | { kind: "media"; media: MediaFile }
+  | { kind: "local_media"; media: { mediaId: string; name: string; kind: MediaKind; bytes: number; qualityState: "good" | "review" | "unanalyzed" } }
   | { kind: "job"; deviceId: string; jobId: string; name: string; state: string; sequence: number; occurredAt: string; source: "synced_job_snapshot" };
 
 export interface AgentReply {
@@ -96,7 +107,14 @@ export interface AgentReply {
   text: string;
   matches: AgentMatch[];
   proposedAction?: {
-    kind: "rename" | "move" | "upload" | "cleanup";
+    actionId?: string;
+    tool?: string;
+    fileIds?: string[];
+    expiresAt?: string;
+    canConfirm?: boolean;
+    /** Who proposed the operation. Shown on the confirmation card. */
+    source?: string;
+    kind: "open" | "rename" | "move" | "upload" | "cleanup";
     label: string;
     target: string;
     objects: string[];
@@ -108,6 +126,26 @@ export interface AuditResult {
   issues: { path: string; reason: string; recoverable: boolean }[];
   lastRun: string;
 }
+export interface UnconfiguredModelStatus {
+  configured: false;
+  requiresExplicitConsent: true;
+  executionAuthorized: false;
+  /** Present only for local Agent status; Cloud model status stays transport-neutral. */
+  availability?: LocalAgentAvailability;
+  cloudFallback?: false;
+}
+export interface ConfiguredModelStatus {
+  configured: true;
+  provider: string;
+  model: string;
+  region: string;
+  requiresExplicitConsent: true;
+  executionAuthorized: false;
+  /** Present only for local Agent status; Cloud model status stays transport-neutral. */
+  availability?: LocalAgentAvailability;
+  cloudFallback?: false;
+}
+export type LocalAgentAvailability = "ready" | "ollama_unavailable" | "model_not_installed" | "sidecar_unavailable";
 export interface DeliveryPackage {
   id: string;
   name: string;
@@ -119,6 +157,7 @@ export interface DeliveryPackage {
 
 /** UI contract: native adapter maps to local RPC; browser preview uses explicit mock data. */
 export interface DesktopApi {
+  fileActions: LocalFileActionService;
   auth: {
     restore(): Promise<UserSession | null>;
     login(
@@ -169,6 +208,13 @@ export interface DesktopApi {
     ): Promise<ArchiveTask>;
   };
   library: {
+    searchPage(
+      query: string,
+      kind: MediaKind | "all",
+      quality: string,
+      limit?: number,
+      offset?: number,
+    ): Promise<MediaPage>;
     search(
       query: string,
       kind: MediaKind | "all",
@@ -184,7 +230,7 @@ export interface DesktopApi {
   };
   agent: {
     ask(text: string): Promise<AgentReply>;
-    confirm(actionId: string, accepted: boolean): Promise<string>;
+    confirm(actionId: string, accepted: boolean): Promise<string | AgentReply>;
   };
   account: {
     devices(): Promise<Device[]>;
@@ -280,9 +326,30 @@ export interface LocalIntegration {
     onNotice?: (message: string) => void,
   ): Promise<() => void>;
 }
-export type ModelStatus =
-  | { configured: false; requiresExplicitConsent: true; executionAuthorized: false }
-  | { configured: true; provider: string; model: string; region: string; requiresExplicitConsent: true; executionAuthorized: false };
+export interface QuarantineItem {
+  id: string
+  mediaId: string
+  name: string
+  bytes: number
+  sha256: string
+  state: string
+  createdAt: string
+  updatedAt: string
+  restoreViaSystemTrash: boolean
+  originalPreserved: true
+}
+export interface LocalFileActionService {
+  selectDirectory(): Promise<LocalDirectoryGrant | null>
+  prepare(request:
+    | { tool: 'rename_item'; mediaId: string; newName: string }
+    | { tool: 'move_item'; mediaId: string; destinationGrantId: string }
+    | { tool: 'cleanup_quarantine'; quarantineId: string }
+  ): Promise<LocalFileActionPreview>
+  confirm(actionId: string, accepted: boolean): Promise<LocalFileActionReceipt>
+  stageCandidate(mediaId: string): Promise<{ id: string; name: string; state: string; originalPreserved: true }>
+  listQuarantine(): Promise<QuarantineItem[]>
+}
+export type ModelStatus = UnconfiguredModelStatus | ConfiguredModelStatus;
 export interface ModelService {
   status(): Promise<ModelStatus>;
   ask(query: string, identity: { sessionId: string; turnId: string }, consent: { explicitConsent: true }): Promise<AgentReply>;
