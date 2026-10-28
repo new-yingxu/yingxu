@@ -32,9 +32,9 @@
 - `AUTH_MODE=cloudbase`
 - `CORS_ORIGINS=tauri://localhost,http://tauri.localhost`：只允许两个精确桌面 WebView origin；不使用 `*`。桌面流量经 Rust 原生 HTTPS，不依赖浏览器 CORS。
 - `CLOUDBASE_CLIENT_ORIGINS={"yingxu-dev-d8gowpye17ee27a61":"desktop"}`：CloudBase 官方 HTTP API 的 client ID 默认是环境 ID；只有控制台实际配置了另一个 client ID 时才替换。移动端 client ID 等移动端接入时再登记。
-- `JWT_ISSUER`：正式 HTTPS issuer URL。
-- `JWT_AUDIENCE`：影序服务端短会话的 audience 标识。
-- `SESSION_KEY_ID`：当前签名密钥的非秘密 key ID。
+- `JWT_ISSUER=https://yingxu-dev-d8gowpye17ee27a61-1479513274.ap-shanghai.app.tcloudbase.com`：当前体验环境先使用已配置的 HTTPS API Gateway origin 作为 issuer；正式生产前应切换到影序自有稳定 HTTPS 域名，并保持签发与校验一致。
+- `JWT_AUDIENCE=yingxu-agent-api`：影序服务端短会话的 audience 标识。
+- `SESSION_KEY_ID=yingxu-dev-20261028-01`：本轮体验环境签名密钥的非秘密 key ID。
 - `DATABASE_URL`：留空，当前部署候选通过 CloudBase PostgreSQL REST 访问共享数据库。
 
 ### 通过 Secret/加密环境变量设置
@@ -58,7 +58,7 @@
 ## 当前待完成项
 
 - 当前注入的 API Key 需先轮换：在「环境管理 → API Key 配置 → 生成」创建替代 Key，再在 `yingxu-agent-api` 的 API Key 注入项重新选择并保存。不要把值发到聊天。旧 `yingxu-codex-dev` Key 已过期，暂不删除。
-- 需要配置影序短会话的 RSA 私钥 `SESSION_PRIVATE_KEY`（至少 2048 位）、对应非秘密 `SESSION_KEY_ID`、HTTPS `JWT_ISSUER` 与 `JWT_AUDIENCE`。这是独立于 CloudBase API Key 的应用签名密钥；请在本地安全生成并仅录入 CloudBase 服务端 Secret，不要发送到聊天或提交仓库。
+- 已在本机生成影序短会话 RSA-2048 私钥，权限为仅当前用户可读写，保存在 CloudBase 配置目录；尚未录入云端。需由用户在 CloudBase `yingxu-agent-api` 的服务端 Secret 中粘贴为 `SESSION_PRIVATE_KEY`。私钥不得发送到聊天或提交仓库。配套非秘密值为 `SESSION_KEY_ID=yingxu-dev-20261028-01`、`JWT_ISSUER=https://yingxu-dev-d8gowpye17ee27a61-1479513274.ap-shanghai.app.tcloudbase.com`、`JWT_AUDIENCE=yingxu-agent-api`。
 - 将函数 `AUTH_MODE` 切换为 `cloudbase`，并设置 `CLOUDBASE_CLIENT_ORIGINS`、精确 `CORS_ORIGINS`；保存后再由维护者部署 schema v16 候选并验收。
 - 邮箱代发的实际收件投递仍待真实邮箱登录验收；本轮没有发送验证码。
 - 正式 client ID 到 `desktop`/`mobile` 的映射；桌面默认 ID 按环境 ID，移动端来源留待移动端接入时再登记。
