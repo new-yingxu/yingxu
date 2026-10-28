@@ -2148,13 +2148,6 @@ function taskStateLabel(state: TaskState) {
               >
                 {{ libraryPage.error }}
               </p>
-              <p class="table-foot">
-                {{
-                  isMock
-                    ? "资料库使用演示数据。"
-                    : "只读本地索引，分析不上传原片；信号未校准，不能据此自动清理。"
-                }}
-              </p>
             </section>
           </template>
 
@@ -2238,7 +2231,6 @@ function taskStateLabel(state: TaskState) {
                   没有符合条件的归档记录。
                 </div>
               </div>
-              <p class="table-foot">清空记录会二次确认，不会删除媒体文件。</p>
             </section>
           </template>
 
@@ -2460,7 +2452,6 @@ function taskStateLabel(state: TaskState) {
                   <div class="agent-welcome">
                     <span class="agent-orb"><Sparkles :size="20" /></span
                     ><b>你好，{{ displayName }}</b>
-                    <p>可以查找素材、询问备份状态，或先预览文件操作计划。</p>
                     <div class="suggestion-tags">
                       <button @click="agentInput = '查找青岛海边照片'">
                         查找青岛海边照片</button
@@ -2529,7 +2520,7 @@ function taskStateLabel(state: TaskState) {
                     <Send :size="15" />发送
                   </button>
                 </form>
-                <p class="table-foot centered">
+                <p class="table-foot centered agent-footnote">
                   {{ isMock ? "演示 Agent 使用合成素材。" : "本机 LangGraph Agent 仅调用白名单工具；打开素材须经本机确认，模型请求不会自动切换到云端。" }}
                 </p>
               </div>
