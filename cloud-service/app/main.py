@@ -286,14 +286,7 @@ def readyz(request: Request):
             db_ready = store.ready(production=settings.app_env == "production")
     except Exception:
         db_ready = False
-    auth_ready = (
-        settings.auth_mode == "jwt"
-        and bool(settings.jwt_issuer and settings.jwt_audience and settings.jwt_jwks_url)
-    ) or (
-        settings.auth_mode == "dev"
-        and settings.app_env == "development"
-        and bool(settings.dev_auth_token)
-    )
+    auth_ready = settings.authentication_configured()
     ready = db_ready and auth_ready and not request.app.state.config_errors
     return JSONResponse(status_code=200 if ready else 503, content={
         "ready": ready,

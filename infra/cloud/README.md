@@ -2,19 +2,15 @@
 
 此目录保存云端部署说明和模板，不包含账号凭据、环境 ID 或生产环境变量。
 
-## 当前状态
+## 当前状态（2026-10-28）
 
 - 服务源码：`../../cloud-service/`
-- `yingxu-dev` 体验环境的 PostgreSQL schema v11–v16 已于 2026-10-27 逐项应用并读回验证；当前服务启动要求 schema v16。
-- 2026-10-28 在 CloudBase HTTP 网关新增并读回 `/v1` → `yingxu-agent-api` 路由，已开启路径透传，网关 CORS 与网关级鉴权关闭。桌面使用 Tauri 原生 HTTPS；服务自身承担身份校验。无凭据 `GET /v1/agent/model` 返回 JSON 404，确认请求到达当前函数，但函数仍是旧预发布版本，不能作为新 API 验收。
-- 2026-10-28 完成桌面来源方案复核：Windows 和 macOS 均由 Tauri Rust 宿主经 HTTPS 直连，不需把 `tauri.localhost` 加入 CloudBase 安全来源，也不需为此升级套餐。CloudBase Authentication API 与影序 HTTP Gateway 是不同官方 HTTPS host；详细 origin 和构建参数见 `console-configuration-checklist.md` 与 `backend/tauri-host/README.md`。
-- 2026-10-28 发现旧候选 ZIP 与当前 `cloud-service/app` 源码不匹配，已重建 schema v16 当前候选：`function-packages/0.9.0-local-sync-preview-03c5fe6fc059.zip`，SHA-256 `e4099e10395faff6de02b6a8e42616f605ee2103a77eb9019d34be6a4a9bfedf`；源码匹配、60 个 Linux 依赖和 ZIP 回读通过，仍未部署。
-- 2026-10-28 用户在 CloudBase 控制台创建了新的服务端 API Key（名称 `yingxu`），Codex 在 `yingxu-agent-api` 中选择该 Key 进行 API Key 注入并保存；函数短暂更新后恢复“正常”，配置更新时间为 2026-10-28 08:42:44。随后只读打开函数配置编辑表单时，CloudBase 辅助功能树明文返回了注入值；未复制或保存该值，但已按凭据暴露处理。部署前需由用户轮换新 Key 并重新注入。控制台仍保留已过期旧 Key；未删除。
-- 当前函数代码仍为旧 `0.2.0-store-preview`，`APP_ENV=production`、`AUTH_MODE=jwt`。已注入的新 API Key 需要先轮换；CloudBase session 配置（`AUTH_MODE=cloudbase`、可信 issuer/audience、client ID 映射、session signing key 与明确 CORS allowlist）也尚未配置。当前候选 ZIP 未部署，不得对外启用云端业务接口。
-- 当前目标改为 HTTP 云函数：官方支持 FastAPI、Python 3.11 与 WebSocket。体验版的云托管 CPU/内存需另行开启超限按量，因此本项目暂不创建云托管服务。
-- 当前登录决策：只使用邮箱验证码与用户名/密码；用户名/密码账号先通过邮箱验证码注册。短信与微信登录均关闭且不属于首期范围。Codex 云端分支已接入 Tauri 原生 CloudBase 身份交换和影序短会话。服务端 Secrets、可信 session issuer/audience、client_id 映射仍未设置，云函数未部署。
-- 当前机器未安装 CloudBase CLI；控制台 CLI 授权申请涵盖多个 CloudBase 资源，尚未授权。数据库迁移仅经 SQL 编辑器完成。不得用开发 token 或 SQLite 作为生产身份/数据层。
-- 新候选 ZIP 和详细证据见 [`cloudbase-v16-migration-20261027.md`](../../cloud-service/evidence/cloudbase-v16-migration-20261027.md)。未上传部署，未清理合成测试账号，未调用真实短信、微信、邮箱或云模型。
+- `yingxu-dev` PostgreSQL schema v11–v16 已逐项应用并回读验证；当前服务要求 schema v16。
+- CloudBase HTTP Gateway `/v1` 路由到 `yingxu-agent-api` 并开启路径透传。桌面使用 Tauri 原生 HTTPS；网关鉴权关闭，由服务验证 CloudBase access token 并签发影序短会话。
+- Windows 和 macOS 均由 Tauri Rust 宿主经 HTTPS 直连，不需把 `tauri.localhost` 加入 CloudBase 安全来源，也不需为此升级套餐。CloudBase Authentication API 与影序 HTTP Gateway 是不同用途的 HTTPS host；详见 `console-configuration-checklist.md` 与 `backend/tauri-host/README.md`。
+- 依据当前源码构建的 `0.9.0-local-sync-preview-098ea858abd3.zip` 已完成源文件/依赖/凭据扫描及 ZIP 回读，并于 2026-10-28 部署到 `$LATEST`。其 SHA-256 为 `ffebe46a7d669394d4d5c90e216955faf7742bec40775d6d37cf03b5b892dac2`；包内 60 个 Python 3.11 Linux 依赖，2738 个源码文件逐项校验通过。
+- 部署配置已保存：`APP_ENV=production`、`AUTH_MODE=cloudbase`、环境/client 映射、HTTPS issuer/audience、session key ID、服务端签名私钥、精确 CORS origins，以及 CloudBase API Key 注入引用。控制台显示函数正常；`/healthz` 和 `/readyz` 在线测试均为 200，readiness 报告 database/authentication 已就绪。Gateway `/v1/auth/session/exchange` 无凭据请求返回 401 `AUTH_REQUIRED`，确认路由到新服务且拒绝匿名访问。
+- 控制台辅助功能曾将服务端 CloudBase API Key 与 `SESSION_PRIVATE_KEY` 的明文暴露给本轮工具输出。开发阶段结束后必须轮换这两类凭据并更新函数配置；不得把值记录到仓库或日志。控制台旧的过期 Key 尚未删除。
 
 ## 本地启动
 
@@ -33,15 +29,13 @@ uvicorn app.main:app --host 127.0.0.1 --port 8080
 3. 认证首期为邮箱验证码和用户名/密码；微信扫码暂停，短信待服务商、审核签名和模板配置。新用户先通过邮箱验证码注册，再设置用户名/密码。桌面 SDK 接入时按 CloudBase Authentication v2 官方流程实现，并将 CloudBase access token 交给服务端 `/v1/auth/session/exchange` 换发影序短会话。
 4. 配置正式 CloudBase 身份通道后，再生成服务端 session 签名密钥并以 Secrets 保存：`CLOUDBASE_CLIENT_ORIGINS`、`SESSION_PRIVATE_KEY`、`SESSION_KEY_ID`、`JWT_ISSUER`、`JWT_AUDIENCE`、`CLOUDBASE_ENV_ID`、`CLOUDBASE_APIKEY` 和 HTTPS `CORS_ORIGINS`。凭据不得进入仓库、客户端或聊天。
 5. 使用 `python3 infra/cloud/prepare_function_context.py` 生成 Linux/Python 3.11 函数上下文，并校验源文件、锁定依赖和候选包哈希。
-6. 已准备 `/v1` 网关路径并配置路径透传；桌面构建的 `YINGXU_CLOUD_API_ORIGIN` 使用默认 HTTPS HTTP-Gateway 根域名，不附加路径。只有身份配置和 Secrets 完成后，才在体验环境部署已验证的 schema16 候选。部署后记录函数版本/路径和访问策略；验证 `/healthz`、`/readyz`、账号交换、PostgreSQL 读写、WebSocket 与回滚。
+6. `/v1` 网关路径和路径透传已就绪；桌面构建的 `YINGXU_CLOUD_API_ORIGIN` 使用 HTTPS HTTP-Gateway 根域名，不附加路径。schema16 函数已部署；`/healthz`、`/readyz` 和无凭据身份交换已验证。接下来需要在真实桌面登录后验证 CloudBase 邮箱/密码认证、账号 session exchange、用户隔离 PostgreSQL 读写、WebSocket 与故障恢复。
 
 用户逐项配置路径与非敏感待办见 [`console-configuration-checklist.md`](console-configuration-checklist.md)。
 
-## 当前本地部署候选（不代表已部署）
+## 部署产物和后续验收
 
-旧候选 0.9.0/schema14 的描述为历史记录，不再作为当前部署候选。当前 schema16 候选的包哈希与验证边界见上面的证据文件。待认证和服务端密钥完成后，再从已验证上下文部署，切勿将密钥写入代码、仓库或聊天。
-
-早期部署证据曾记录 0.2.0-store-preview 的 health/database 正常但 authentication 未配置；本轮未重新查询现存函数版本，故不把该旧记录视为当前运行状态。下一次部署前应在控制台读回当前版本和访问策略。使用项目外的私有配置文件注入 Secret；不要把含 Secret 的 cloudbaserc 放入上传目录或输出日志。
+当前 `$LATEST` 来自上述 schema16 包。用户账号登录和授权下的读写尚未通过真实桌面客户端验收；部署状态和 readiness 不等于账号链路验收完成。切勿将密钥写入代码、仓库或聊天。
 
 ## 官方文档
 

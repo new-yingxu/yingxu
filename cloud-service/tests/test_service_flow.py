@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from datetime import timedelta
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import Encoding, PrivateFormat, NoEncryption
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fastapi.testclient import TestClient
@@ -149,3 +151,36 @@ class ServiceFlow(unittest.TestCase):
                 self.assertEqual(result.status_code,503)
                 self.assertEqual(result.json()['authentication'],'not_configured')
                 self.assertEqual(client.get('/v1/devices',headers={'Authorization':'Bearer invalid'}).status_code,503)
+
+    def test_cloudbase_session_signing_configuration_counts_as_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            private = rsa.generate_private_key(public_exponent=65537,key_size=2048).private_bytes(
+                Encoding.PEM,PrivateFormat.PKCS8,NoEncryption()).decode()
+            env = {
+                'APP_ENV':'development','AUTH_MODE':'cloudbase','DATABASE_URL':'sqlite:///'+tmp+'/cloudbase-ready.db',
+                'CLOUDBASE_ENV_ID':'env-fixture','CLOUDBASE_CLIENT_ORIGINS':'{"desktop-client":"desktop"}',
+                'SESSION_PRIVATE_KEY':private,'SESSION_KEY_ID':'fixture-key',
+                'JWT_ISSUER':'https://issuer.invalid','JWT_AUDIENCE':'yingxu-session',
+            }
+            with patch.dict(os.environ,env):
+                with TestClient(app) as client:
+                    result=client.get('/readyz')
+                    self.assertEqual(result.status_code,200,result.text)
+                    self.assertEqual(result.json()['authentication'],'configured')
+                    self.assertEqual(result.json()['database'],'ready')
+                    self.assertEqual(result.json()['configurationErrors'],[])
+
+    def test_cloudbase_invalid_signing_configuration_stays_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                'APP_ENV':'development','AUTH_MODE':'cloudbase','DATABASE_URL':'sqlite:///'+tmp+'/cloudbase-not-ready.db',
+                'CLOUDBASE_ENV_ID':'env-fixture','CLOUDBASE_CLIENT_ORIGINS':'{"desktop-client":"desktop"}',
+                'SESSION_PRIVATE_KEY':'invalid','SESSION_KEY_ID':'fixture-key',
+                'JWT_ISSUER':'https://issuer.invalid','JWT_AUDIENCE':'yingxu-session',
+            }
+            with patch.dict(os.environ,env):
+                with TestClient(app) as client:
+                    result=client.get('/readyz')
+                    self.assertEqual(result.status_code,503,result.text)
+                    self.assertEqual(result.json()['authentication'],'not_configured')
+                    self.assertIn('cloudbase auth requires valid session signing configuration',result.json()['configurationErrors'])

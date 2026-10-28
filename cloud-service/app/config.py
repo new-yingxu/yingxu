@@ -78,14 +78,8 @@ class Settings:
         )
         return settings
 
-    def configuration_errors(self) -> list[str]:
+    def authentication_configuration_errors(self) -> list[str]:
         errors: list[str] = []
-        if not self.database_url and not (self.cloudbase_env_id and self.cloudbase_api_key):
-            errors.append("configure DATABASE_URL or CLOUDBASE_ENV_ID and CLOUDBASE_APIKEY")
-        if self.app_env not in {"development", "staging", "production"}:
-            errors.append("APP_ENV must be development, staging, or production")
-        if self.app_env == "production" and self.database_url.startswith("sqlite:"):
-            errors.append("production requires a shared database; SQLite is local-development only")
         if self.auth_mode == "dev" and (self.app_env != "development" or not self.dev_auth_token):
             errors.append("dev auth requires APP_ENV=development and an explicit DEV_AUTH_TOKEN")
         if self.auth_mode == "jwt" and not all((self.jwt_issuer, self.jwt_audience, self.jwt_jwks_url)):
@@ -111,6 +105,20 @@ class Settings:
             errors.append("AUTH_MODE must be disabled, dev, jwt, or cloudbase")
         if self.app_env == "production" and self.auth_mode == "dev":
             errors.append("development auth is forbidden in production")
+        return errors
+
+    def authentication_configured(self) -> bool:
+        return self.auth_mode != "disabled" and not self.authentication_configuration_errors()
+
+    def configuration_errors(self) -> list[str]:
+        errors: list[str] = []
+        if not self.database_url and not (self.cloudbase_env_id and self.cloudbase_api_key):
+            errors.append("configure DATABASE_URL or CLOUDBASE_ENV_ID and CLOUDBASE_APIKEY")
+        if self.app_env not in {"development", "staging", "production"}:
+            errors.append("APP_ENV must be development, staging, or production")
+        if self.app_env == "production" and self.database_url.startswith("sqlite:"):
+            errors.append("production requires a shared database; SQLite is local-development only")
+        errors.extend(self.authentication_configuration_errors())
         if self.app_env == "production" and not self.cors_origins:
             errors.append("production requires an explicit CORS_ORIGINS allowlist")
         if self.app_env == "production" and any("*" in origin for origin in self.cors_origins):
