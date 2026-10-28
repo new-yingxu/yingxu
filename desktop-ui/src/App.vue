@@ -3,7 +3,8 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import type { AgentReply, AppSettings, ArchiveTask, AuditResult, Device, MediaFile, NamePreset, TaskState, UserSession } from './api/contracts'
 import { createMockApi } from './api/mock'
 import BaiduPanel from './components/BaiduPanel.vue'
-import { cloudApiRequest, currentCloudSession, emailCodeSignIn, emailCodeSignUp, getCloudSyncPreferences, isNativeTauriRuntime, nativeCoreRequest, passwordSignIn, putCloudSyncPreferences, requestEmailCode, signOut as nativeSignOut, syncBackupRecords } from './api/nativeAuth'
+import { cloudApiRequest, currentCloudSession, getCloudSyncPreferences, isNativeTauriRuntime, nativeCoreRequest, passwordSignIn, putCloudSyncPreferences, signOut as nativeSignOut, syncBackupRecords } from './api/nativeAuth'
+import { baiduStatus, listVerifiedReplicas, pickDirectory, previewBackup, queueVerifiedReplicasForBaidu, scanSource as scanNativeSource, startBackupJob, waitForJob, type BackupJob, type BackupPlan, type BackupScan, type BaiduUploadTask } from './api/localBackup'
 import { Activity, Archive, ArrowDownToLine, ArrowRight, Bell, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock3, Cloud, Copy, Database, FileImage, FileVideo, Filter, Folder, HardDrive, Image, LayoutDashboard, LockKeyhole, Moon, MoreHorizontal, Play, Plus, Search, Send, Settings2, ShieldCheck, Sparkles, Sun, WandSparkles, X } from './icons'
 
 const api = createMockApi()
@@ -14,16 +15,9 @@ type DesktopAuthState = { kind: 'mock'; user: UserSession } | { kind: 'cloud-ses
 const authState = ref<DesktopAuthState | null>(null)
 const activeDisplayName = computed(() => authState.value?.kind === 'mock' ? authState.value.user.displayName : authState.value?.kind === 'cloud-session' ? authState.value.identifier : '')
 const activeEmail = computed(() => authState.value?.kind === 'mock' ? authState.value.user.email : authState.value?.kind === 'cloud-session' ? (authState.value.identifier.includes('@') ? authState.value.identifier : '') : '')
-const loginMode = ref<'wechat' | 'phone-code' | 'email-code' | 'email-password' | 'email-signup'>(nativeTauriRuntime ? 'email-password' : 'wechat')
+const loginMode = ref<'wechat' | 'phone-code' | 'email-password'>(nativeTauriRuntime ? 'email-password' : 'wechat')
 const loginIdentifier = ref('')
 const loginProof = ref('')
-const signupPassword = ref('')
-const emailVerificationId = ref('')
-const emailChallengeFor = ref('')
-const emailChallengeForSignup = ref(false)
-const emailCodeCooldown = ref(0)
-const codeBusy = ref(false)
-let emailCodeTimer: number | undefined
 const loginError = ref('')
 const loginBusy = ref(false)
 const notice = ref('')
@@ -53,6 +47,18 @@ const backupSource = ref('sd-1')
 const backupTargets = ref<string[]>(['local'])
 const backupPreset = ref('preset-camera')
 const backupTask = ref<ArchiveTask | null>(null)
+// 真实本机链路状态（桌面端）。演示数据不再冒充真实备份结果。
+const nativeBackupSource = ref('')
+const nativeScan = ref<BackupScan | null>(null)
+const nativeDestinations = ref<string[]>([])
+const nativePlan = ref<BackupPlan | null>(null)
+const nativeJob = ref<BackupJob | null>(null)
+const nativeJobRunning = ref(false)
+const nativeBackupError = ref('')
+const baiduReady = ref(false)
+const baiduUploads = ref<BaiduUploadTask[]>([])
+const baiduUploadBusy = ref(false)
+const baiduUploadError = ref('')
 const newPresetName = ref('')
 const agentInput = ref('')
 const agentMessages = ref<{role:'assistant'|'user';text:string;reply?:AgentReply;actionId?:string}[]>([])
@@ -118,6 +124,7 @@ async function loadData() {
 }
 onMounted(async () => {
   if (nativeTauriRuntime) {
+    void refreshBaiduStatus()
     try {
       const session = await currentCloudSession()
       if (session) {
@@ -129,75 +136,110 @@ onMounted(async () => {
   }
   const restored = await api.auth.restore(); if (restored) authState.value = { kind: 'mock', user: restored }
 })
-onUnmounted(() => { if (emailCodeTimer !== undefined) window.clearInterval(emailCodeTimer) })
 function setLoginMode(mode: typeof loginMode.value) {
   loginMode.value = mode
   loginProof.value = ''
-  signupPassword.value = ''
-  emailVerificationId.value = ''
-  emailChallengeFor.value = ''
-  emailChallengeForSignup.value = false
-}
-async function sendEmailCode() {
-  loginError.value = ''
-  const email = loginIdentifier.value.trim()
-  if (!email || !email.includes('@')) { loginError.value = '请输入有效的邮箱地址。'; return }
-  if (!nativeTauriRuntime) { say('验证码发送将在真实认证服务接入后启用。'); return }
-  if (emailCodeCooldown.value > 0) return
-  codeBusy.value = true
-  try {
-    const challenge = await requestEmailCode(email, loginMode.value === 'email-signup')
-    emailVerificationId.value = challenge.verificationId
-    emailChallengeFor.value = email.toLowerCase()
-    emailChallengeForSignup.value = loginMode.value === 'email-signup'
-    loginProof.value = ''
-    emailCodeCooldown.value = 60
-    if (emailCodeTimer !== undefined) window.clearInterval(emailCodeTimer)
-    emailCodeTimer = window.setInterval(() => {
-      emailCodeCooldown.value = Math.max(0, emailCodeCooldown.value - 1)
-      if (emailCodeCooldown.value === 0 && emailCodeTimer !== undefined) {
-        window.clearInterval(emailCodeTimer)
-        emailCodeTimer = undefined
-      }
-    }, 1000)
-    say(`验证码已发送，${Math.ceil(challenge.expiresIn / 60)} 分钟内有效。`)
-  } catch (error) { loginError.value = typeof error === 'string' ? error : error instanceof Error ? error.message : '验证码发送失败，请稍后重试。' }
-  finally { codeBusy.value = false }
 }
 async function signIn() {
   loginError.value = ''
-  if (nativeTauriRuntime && !['email-password', 'email-code', 'email-signup'].includes(loginMode.value)) { loginError.value = '当前桌面仅启用邮箱认证。'; return }
   if (loginMode.value === 'wechat') loginIdentifier.value ||= 'wechat-demo'
-  if (!loginIdentifier.value.trim()) { loginError.value = '请填写手机号或邮箱。'; return }
-  if (loginMode.value !== 'wechat' && !loginProof.value.trim()) { loginError.value = loginMode.value.endsWith('code') || loginMode.value === 'email-signup' ? '请输入验证码。' : '请输入密码。'; return }
-  if (nativeTauriRuntime && loginMode.value !== 'email-password' && !emailVerificationId.value) { loginError.value = '请先获取邮箱验证码。'; return }
-  if (nativeTauriRuntime && loginMode.value !== 'email-password' && (emailChallengeFor.value !== loginIdentifier.value.trim().toLowerCase() || emailChallengeForSignup.value !== (loginMode.value === 'email-signup'))) { loginError.value = '邮箱或认证方式已变化，请重新获取验证码。'; emailVerificationId.value = ''; return }
-  if (loginMode.value === 'email-signup' && !signupPassword.value) { loginError.value = '请设置登录密码。'; return }
+  if (loginMode.value === 'email-password' && !loginIdentifier.value.trim()) { loginError.value = '请输入邮箱地址或用户名。'; return }
+  if (!loginIdentifier.value.trim()) { loginError.value = '请填写手机号。'; return }
+  if (!loginProof.value.trim()) { loginError.value = loginMode.value === 'email-password' ? '请输入密码。' : '请输入验证码。'; return }
   loginBusy.value = true
   try {
     if (nativeTauriRuntime) {
-      const identity = loginMode.value === 'email-password'
-        ? await passwordSignIn(loginIdentifier.value.trim(), loginProof.value)
-        : loginMode.value === 'email-signup'
-          ? await emailCodeSignUp(loginIdentifier.value.trim(), signupPassword.value, emailVerificationId.value, loginProof.value)
-          : await emailCodeSignIn(loginIdentifier.value.trim(), emailVerificationId.value, loginProof.value)
+      const identity = await passwordSignIn(loginIdentifier.value.trim(), loginProof.value)
       authState.value = { kind: 'cloud-session', subject: identity.ownerId, deviceId: identity.deviceId, expiresIn: identity.expiresIn, expiresAtUnix: identity.expiresAtUnix, identifier: identity.displayName }
     } else {
-      const mockLoginMode = loginMode.value === 'email-signup' ? 'email-code' : loginMode.value
-      authState.value = { kind: 'mock', user: await api.auth.login(mockLoginMode, loginIdentifier.value, loginProof.value || 'qr-confirmed') }
+      authState.value = { kind: 'mock', user: await api.auth.login(loginMode.value, loginIdentifier.value, loginProof.value || 'qr-confirmed') }
     }
     await loadData(); page.value = 'home'
   }
   catch (error) { loginError.value = typeof error === 'string' ? error : error instanceof Error ? error.message : '登录失败，请稍后重试。' }
-  finally { loginProof.value = ''; signupPassword.value = ''; loginBusy.value = false }
+  finally { loginProof.value = ''; loginBusy.value = false }
 }
 async function logout() {
   if (nativeTauriRuntime) await nativeSignOut()
   else await api.auth.logout()
-  authState.value = null; page.value = 'home'; loginProof.value = ''; signupPassword.value = ''; loginIdentifier.value = ''; emailVerificationId.value = ''; emailChallengeFor.value = ''; emailChallengeForSignup.value = false; loginMode.value = nativeTauriRuntime ? 'email-password' : 'wechat'
+  authState.value = null; page.value = 'home'; loginProof.value = ''; loginIdentifier.value = ''; loginMode.value = nativeTauriRuntime ? 'email-password' : 'wechat'
 }
-async function scanSource() { scanBusy.value = true; sources.value = (await api.backup.scan()).sources; scanBusy.value = false; say('扫描完成：发现 1 个可读来源（演示数据）。') }
-async function startBackup() { const task = await api.backup.start({ sourceId: sources.value[0]?.path || '/Volumes/SD_CARD/DCIM', destinations: backupTargets.value, presetId: backupPreset.value, verify: settings.verify }); backupTask.value = task; tasks.value = [task, ...tasks.value]; page.value = 'task'; selectedTaskId.value = task.id; taskDetail.value = task; say('演示任务已启动，不会读写本机文件。') }
+function describeError(error: unknown) { return typeof error === 'string' ? error : error instanceof Error ? error.message : '操作未完成，请稍后重试。' }
+function formatBytes(bytes: number) { return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB` }
+async function refreshBaiduStatus() {
+  if (!nativeTauriRuntime) return
+  try { baiduReady.value = (await baiduStatus()).authorized } catch { baiduReady.value = false }
+}
+async function scanSource() {
+  if (!nativeTauriRuntime) { scanBusy.value = true; sources.value = (await api.backup.scan()).sources; scanBusy.value = false; say('扫描完成：发现 1 个可读来源（演示数据）。'); return }
+  nativeBackupError.value = ''
+  scanBusy.value = true
+  try {
+    const picked = await pickDirectory('source')
+    if (!picked) return
+    nativeBackupSource.value = picked.path
+    nativeScan.value = await scanNativeSource(picked.path)
+    nativePlan.value = null
+    say(`已扫描 ${nativeScan.value.files} 个文件，共 ${formatBytes(nativeScan.value.bytes)}。`)
+  } catch (error) { nativeBackupError.value = describeError(error) }
+  finally { scanBusy.value = false }
+}
+async function addBackupDestination() {
+  nativeBackupError.value = ''
+  try {
+    const picked = await pickDirectory('destination')
+    if (!picked) return
+    if (!nativeDestinations.value.includes(picked.path)) nativeDestinations.value = [...nativeDestinations.value, picked.path]
+    nativePlan.value = null
+  } catch (error) { nativeBackupError.value = describeError(error) }
+}
+async function prepareNativePlan() {
+  if (!nativeBackupSource.value) throw new Error('请先选择并扫描来源目录。')
+  const plan = await previewBackup({ source: nativeBackupSource.value, destinations: nativeDestinations.value, name: `备份 ${new Date().toLocaleString('zh-CN')}`, verify: settings.verify })
+  nativePlan.value = plan
+  return plan
+}
+async function nextBackupStep() {
+  nativeBackupError.value = ''
+  if (backupStep.value === 1 && nativeTauriRuntime && !nativeScan.value) { await scanSource(); return }
+  if (backupStep.value === 3 && nativeTauriRuntime) {
+    try { await prepareNativePlan() } catch (error) { nativeBackupError.value = describeError(error); return }
+  }
+  if (backupStep.value === 2 && nativeTauriRuntime && !nativeDestinations.value.length) {
+    nativeBackupError.value = '请先授权至少一个本地备份目录。'
+    return
+  }
+  backupStep.value += 1
+}
+async function uploadVerifiedReplicas(job: BackupJob) {
+  baiduUploadBusy.value = true; baiduUploadError.value = ''
+  try {
+    const replicas = await listVerifiedReplicas()
+    const wanted = replicas.filter(replica => job.targets.some(target => replica.path.startsWith(target.path)))
+    if (!wanted.length) { baiduUploadError.value = '本次任务没有可上传的已校验副本。'; return }
+    const result = await queueVerifiedReplicasForBaidu(wanted.map(replica => replica.id), task => { baiduUploads.value = [...baiduUploads.value, task] })
+    baiduUploads.value = result.uploaded.length ? result.uploaded : baiduUploads.value
+    if (result.failed.length) baiduUploadError.value = `有 ${result.failed.length} 项上传未完成：${result.failed[0].error}`
+    else say('百度网盘上传已完成，远端 MD5 与大小已核对。')
+  } catch (error) { baiduUploadError.value = describeError(error) }
+  finally { baiduUploadBusy.value = false }
+}
+async function startBackup() {
+  if (!nativeTauriRuntime) { const task = await api.backup.start({ sourceId: sources.value[0]?.path || '/Volumes/SD_CARD/DCIM', destinations: backupTargets.value, presetId: backupPreset.value, verify: settings.verify }); backupTask.value = task; tasks.value = [task, ...tasks.value]; page.value = 'task'; selectedTaskId.value = task.id; taskDetail.value = task; say('演示任务已启动，不会读写本机文件。'); return }
+  nativeBackupError.value = ''
+  if (!nativeDestinations.value.length) { nativeBackupError.value = '请至少选择一个本地备份目录。'; return }
+  if (backupTargets.value.includes('baidu') && !baiduReady.value) { nativeBackupError.value = '百度网盘尚未授权，先完成授权或取消该目标。'; return }
+  nativeJobRunning.value = true
+  try {
+    const plan = nativePlan.value ?? await prepareNativePlan()
+    const started = await startBackupJob(plan.id)
+    nativeJob.value = started
+    const done = await waitForJob(started.id, job => { nativeJob.value = job })
+    say(`本机备份任务结束：${done.state}。副本校验状态见任务详情。`)
+    if (['success', 'partial'].includes(done.state) && backupTargets.value.includes('baidu')) await uploadVerifiedReplicas(done)
+  } catch (error) { nativeBackupError.value = describeError(error) }
+  finally { nativeJobRunning.value = false }
+}
 async function controlTask(action: 'pause'|'resume'|'cancel'|'retry') { if (!selectedTask.value) return; taskDetail.value = await api.backup.control(selectedTask.value.id, action); tasks.value = tasks.value.map(t => t.id === taskDetail.value?.id ? taskDetail.value! : t); say(`任务状态已更新：${selectedTask.value.phase}（演示）。`) }
 async function openTask(task: ArchiveTask) { selectedTaskId.value = task.id; taskDetail.value = await api.history.detail(task.id); page.value = 'task' }
 async function refreshHistory() { tasks.value = await api.history.list(query.value, filterState.value) }
@@ -265,7 +307,7 @@ async function clearHistory() { await api.history.clear(); tasks.value = []; sho
 async function renameTask(task: ArchiveTask) { const name = window.prompt('输入新的记录名称', task.name); if (!name?.trim()) return; await api.history.rename(task.id, name.trim()); task.name = name.trim(); say('记录名称已更新（演示）。') }
 async function connectProvider(provider: 'baidu') { say(await api.settings.connectProvider(provider)) }
 async function resetSettings() { const value = await api.settings.reset(); Object.assign(settings,value); document.documentElement.dataset.theme = value.theme; say('设置已恢复默认演示值。') }
-function setPage(next: Page) { page.value = next; taskDetail.value = next === 'task' ? selectedTask.value : null; if (next === 'history') void refreshHistory(); if (next === 'library') void searchFiles(); if (next === 'account') void refreshCloudDevices(); if (next === 'presets') void api.presets.list().then(value => presets.value = value) }
+function setPage(next: Page) { page.value = next; taskDetail.value = next === 'task' ? selectedTask.value : null; if (next === 'history') void refreshHistory(); if (next === 'library') void searchFiles(); if (next === 'account') void refreshCloudDevices(); if (next === 'backup') void refreshBaiduStatus(); if (next === 'presets') void api.presets.list().then(value => presets.value = value) }
 function toggleGlobalSearch() { globalSearchOpen.value = !globalSearchOpen.value; globalSearchQuery.value = '' }
 function chooseGlobalSearch(next: Page) { setPage(next); globalSearchOpen.value = false; globalSearchQuery.value = '' }
 function submitGlobalSearch() { const match = globalSearchMatches.value[0]; if (match) chooseGlobalSearch(match.id) }
@@ -276,37 +318,26 @@ function taskStateLabel(state: TaskState) { return ({ queued:'排队中', runnin
   <main v-if="!authState" class="login-shell">
     <div class="login-brand"><div class="brand-mark"><i></i><i></i><i></i><i></i></div><span>影序 <small>YINGXU</small></span></div>
     <section class="login-card">
-      <div class="login-intro"><span class="eyebrow">影序 · 桌面端 V2 草稿</span><h1>欢迎回到影序</h1><p>{{ nativeTauriRuntime ? '使用邮箱或密码验证账号，并建立本机影序短会话。照片原片不会上传到影序云端。' : '登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。' }}</p></div>
+      <div class="login-intro"><span class="eyebrow">影序 · 桌面端 V2 草稿</span><h1>欢迎回到影序</h1><p>{{ nativeTauriRuntime ? '使用账号密码验证身份，并建立本机影序短会话。照片原片不会上传到影序云端。' : '登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。' }}</p></div>
       <div class="login-tabs">
         <template v-if="nativeTauriRuntime">
-          <button :class="{chosen:loginMode==='email-password'}" @click="setLoginMode('email-password')">邮箱密码</button>
-          <button :class="{chosen:loginMode==='email-code'||loginMode==='email-signup'}" @click="setLoginMode('email-code')">邮箱验证码</button>
+          <button class="chosen">账号密码</button>
         </template>
         <template v-else>
           <button :class="{chosen:loginMode==='wechat'}" @click="setLoginMode('wechat')">微信扫码</button>
           <button :class="{chosen:loginMode==='phone-code'}" @click="setLoginMode('phone-code')">手机号</button>
-          <button :class="{chosen:loginMode==='email-code'||loginMode==='email-password'}" @click="setLoginMode('email-code')">邮箱</button>
         </template>
       </div>
-      <div v-if="loginMode==='wechat'" class="wechat-login"><div class="qr-frame"><div class="qr-code"><i v-for="n in 121" :key="n" :class="{quiet:(n*7+n%5)%4===0 || (n%11===0 && n>20)}"></i><b>影</b></div></div><strong>使用微信扫描二维码登录</strong><span>请使用与影序 Pocket 相同的账号</span><button class="text-button" @click="loginMode='phone-code'">改用验证码登录</button></div>
+      <div v-if="loginMode==='wechat' && !nativeTauriRuntime" class="wechat-login"><div class="qr-frame"><div class="qr-code"><i v-for="n in 121" :key="n" :class="{quiet:(n*7+n%5)%4===0 || (n%11===0 && n>20)}"></i><b>影</b></div></div><strong>使用微信扫描二维码登录</strong><span>请使用与影序 Pocket 相同的账号</span><button class="text-button" @click="loginMode='phone-code'">改用验证码登录</button></div>
       <div v-else class="login-fields">
-        <label>{{ loginMode==='phone-code'?'手机号':nativeTauriRuntime && loginMode==='email-password'?'邮箱或用户名':'邮箱' }}</label><input v-model="loginIdentifier" :type="nativeTauriRuntime && loginMode!=='email-password'?'email':'text'" :placeholder="loginMode==='phone-code'?'请输入手机号':nativeTauriRuntime && loginMode==='email-password'?'请输入邮箱地址或用户名':'请输入邮箱地址'" autocomplete="username" />
-        <label>{{ loginMode==='email-password'?'密码':'邮箱验证码' }}</label>
+        <label>{{ loginMode==='phone-code'?'手机号':'邮箱或用户名' }}</label><input v-model="loginIdentifier" :type="loginMode==='phone-code'?'tel':'text'" :placeholder="loginMode==='phone-code'?'请输入手机号':'请输入邮箱地址或用户名'" autocomplete="username" />
+        <label>{{ loginMode==='email-password'?'密码':'短信验证码' }}</label>
         <div class="proof-field">
-          <input v-model="loginProof" :type="loginMode==='email-password'?'password':'text'" :placeholder="loginMode==='email-password'?'请输入密码':'请输入6位验证码'" :autocomplete="loginMode==='email-password'?'current-password':'one-time-code'" />
-          <button v-if="loginMode==='email-code'||loginMode==='email-signup'" class="text-button" :disabled="codeBusy||emailCodeCooldown>0" @click="sendEmailCode">{{ codeBusy?'发送中…':emailCodeCooldown>0?`${emailCodeCooldown} 秒后重试`:'获取验证码' }}</button>
-        </div>
-        <template v-if="loginMode==='email-signup'">
-          <label>设置登录密码</label><input v-model="signupPassword" type="password" autocomplete="new-password" placeholder="请设置登录密码" />
-          <div class="form-foot"><button class="text-button" @click="setLoginMode('email-code')">已有账号？返回邮箱登录</button></div>
-        </template>
-        <div v-else-if="loginMode==='email-code'" class="form-foot">
-          <button v-if="nativeTauriRuntime" class="text-button" @click="setLoginMode('email-signup')">注册新账号</button>
-          <button v-else class="text-button" @click="setLoginMode('email-password')">使用邮箱密码</button>
+          <input v-model="loginProof" :type="loginMode==='email-password'?'password':'text'" :placeholder="loginMode==='email-password'?'请输入密码':'请输入验证码'" :autocomplete="loginMode==='email-password'?'current-password':'one-time-code'" />
         </div>
       </div>
       <p v-if="loginError" class="error-note">{{ loginError }}</p>
-      <button class="primary-button login-submit" @click="signIn" :disabled="loginBusy">{{ loginBusy?'正在登录…':nativeTauriRuntime?'验证 CloudBase 账号':'登录影序（演示）' }}</button>
+      <button class="primary-button login-submit" @click="signIn" :disabled="loginBusy">{{ loginBusy?'正在登录…':nativeTauriRuntime?'登录影序账号':'登录影序（演示）' }}</button>
       <p class="login-disclaimer">{{ nativeTauriRuntime?'认证和会话交换均通过本机 Tauri HTTPS 通道；当前业务页面数据仍在逐步接入云端。':'V2 草稿预览 · 登录仅为界面演示，不会连接认证服务' }}</p>
     </section>
     <footer class="login-footer"><span><LockKeyhole :size="14" /> 安全同步 · 原片留在你的设备</span><span>Windows / macOS</span></footer>
@@ -338,11 +369,11 @@ function taskStateLabel(state: TaskState) { return ({ queued:'排队中', runnin
           <PageHeading eyebrow="安全导入" title="复制新内容" description="检测来源、预检目的地并预览命名；只有你确认后才开始备份。"/>
           <div class="stepper"><button v-for="(label,index) in ['来源扫描','备份目的地','命名预览','确认摘要']" :key="label" :class="{current:backupStep===index+1,done:backupStep>index+1}" @click="backupStep=index+1"><i>{{ backupStep>index+1?'✓':index+1 }}</i>{{ label }}</button></div>
           <section class="panel flow-panel">
-            <template v-if="backupStep===1"><div class="panel-heading"><div><h3>选择来源设备</h3><p>来源以只读方式扫描，不自动开始写入。</p></div><button class="secondary-button" @click="scanSource" :disabled="scanBusy">{{ scanBusy?'扫描中…':'重新扫描来源' }}</button></div><div v-if="sources.length" class="source-card"><HardDrive :size="22"/><div><b>{{ sources[0].name }} · 已连接</b><span>{{ sources[0].path }} · {{ sources[0].files.toLocaleString() }} 个文件 · {{ sources[0].size }}</span></div><CheckCircle2 :size="18"/></div><div v-else class="empty-state"><HardDrive :size="28"/><b>尚未扫描来源</b><span>插入存储卡或移动盘后手动开始预检。</span><button class="primary-button" @click="scanSource" :disabled="scanBusy">{{ scanBusy?'扫描中…':'开始扫描（演示）' }}</button></div><div class="scan-note"><ShieldCheck :size="16"/>扫描仅读取文件信息；未连接真实磁盘。</div></template>
-            <template v-else-if="backupStep===2"><div class="panel-heading"><div><h3>选择备份目的地</h3><p>支持本地磁盘、移动硬盘和百度网盘；不支持 NAS/局域网目录。</p></div></div><div class="option-list"><label v-for="item in [{id:'local',name:'本机硬盘',meta:'Mac Studio / 摄影归档 · 可用 616 GB'},{id:'baidu',name:'百度网盘',meta:'应用已上线（个人场景）；API 权限与授权待验收'}]" :key="item.id" class="option-row"><input v-model="backupTargets" type="checkbox" :value="item.id" :disabled="item.id!=='local'"/><span><b>{{ item.name }}</b><small>{{ item.meta }}</small></span><span class="demo-label">{{ item.id==='local'?'可用':'待接入' }}</span></label></div><div class="scan-note">当前为前端演示页面；百度网盘目标尚未连接，不能执行真实网盘上传。</div></template>
+            <template v-if="backupStep===1"><div class="panel-heading"><div><h3>选择来源设备</h3><p>来源以只读方式扫描，不自动开始写入。</p></div><button class="secondary-button" @click="scanSource" :disabled="scanBusy">{{ scanBusy?'扫描中…':'重新扫描来源' }}</button></div><div v-if="sources.length" class="source-card"><HardDrive :size="22"/><div><b>{{ sources[0].name }} · 已连接</b><span>{{ sources[0].path }} · {{ sources[0].files.toLocaleString() }} 个文件 · {{ sources[0].size }}</span></div><CheckCircle2 :size="18"/></div><div v-else class="empty-state"><HardDrive :size="28"/><b>尚未扫描来源</b><span>插入存储卡或移动盘后手动开始预检。</span><button class="primary-button" @click="scanSource" :disabled="scanBusy">{{ scanBusy?'扫描中…':nativeTauriRuntime?'选择来源目录并扫描':'开始扫描（演示）' }}</button></div><div v-if="nativeTauriRuntime && nativeScan" class="source-card"><HardDrive :size="22"/><div><b>{{ nativeScan.path }}</b><span>{{ nativeScan.files.toLocaleString() }} 个文件 · {{ formatBytes(nativeScan.bytes) }} · 只读扫描</span></div><CheckCircle2 :size="18"/></div><div class="scan-note"><ShieldCheck :size="16"/>{{ nativeTauriRuntime?'扫描只读取文件信息；目录授权仅本次运行有效。':'扫描仅读取文件信息；未连接真实磁盘。' }}</div><p v-if="nativeBackupError" class="error-note" role="alert">{{ nativeBackupError }}</p></template>
+            <template v-else-if="backupStep===2"><div class="panel-heading"><div><h3>选择备份目的地</h3><p>支持本地磁盘、移动硬盘和百度网盘；不支持 NAS/局域网目录。</p></div></div><div class="option-list"><label v-for="item in [{id:'local',name:'本机硬盘',meta:'本机目录 · 需逐个授权'},{id:'baidu',name:'百度网盘',meta:baiduReady?'已授权 · 仅在本地副本通过 SHA-256 校验后上传':'尚未授权，先在偏好设置连接'}]" :key="item.id" class="option-row"><input v-model="backupTargets" type="checkbox" :value="item.id" :disabled="item.id==='baidu' && (!nativeTauriRuntime || !baiduReady)"/><span><b>{{ item.name }}</b><small>{{ item.meta }}</small></span><span class="demo-label">{{ item.id==='local'?'可用':baiduReady?'可用':'待授权' }}</span></label></div><div v-if="nativeTauriRuntime" class="panel-heading"><div><h3>本地备份目录</h3><p>必须逐个授权；未授权目录不能写入。</p></div><button class="secondary-button" @click="addBackupDestination">选择目录</button></div><ul v-if="nativeDestinations.length" class="summary-list"><li v-for="path in nativeDestinations" :key="path"><span>{{ path }}</span></li></ul><p v-else-if="nativeTauriRuntime" class="table-foot">还没有授权本地备份目录。</p><div class="scan-note">{{ nativeTauriRuntime?'本机备份任务真实写入所选目录；百度网盘上传只在你勾选并确认后排队。':'当前为前端演示页面；百度网盘目标尚未连接，不能执行真实网盘上传。' }}</div><p v-if="nativeBackupError" class="error-note" role="alert">{{ nativeBackupError }}</p></template>
             <template v-else-if="backupStep===3"><div class="panel-heading"><div><h3>命名规则与目录预览</h3><p>可应用导入预设，并在执行前检查层级名称。</p></div><button class="text-button" @click="setPage('presets')">管理预设 <ArrowRight :size="13"/></button></div><label class="field-label">导入预设</label><select v-model="backupPreset" class="select-field"><option v-for="preset in presets" :key="preset.id" :value="preset.id">{{ preset.name }} · {{ preset.pattern }}</option></select><div class="rule-chips"><span>拍摄日期</span><ChevronRight :size="13"/><span>事件名称</span><ChevronRight :size="13"/><span>设备型号</span><button class="secondary-button compact" @click="say('规则编辑表单已在 V2 预览中留位，复杂规则由本机任务接口生成。')"><Plus :size="13"/>编辑规则</button></div><div class="path-preview"><Folder :size="15"/>摄影归档 / 2025 / 04-21_海边日落 / Sony_A7_IV</div><label class="check-row"><input v-model="settings.verify" type="checkbox"/>完成复制后执行 SHA-256 完整性校验</label></template>
-            <template v-else><div class="panel-heading"><div><h3>确认备份任务</h3><p>确认后才会启动演示任务；本页不会操作真实文件。</p></div><span class="state-pill queued">等待确认</span></div><dl class="summary-list"><div><dt>来源</dt><dd>{{ sources[0]?.path || 'SD_CARD/DCIM（示例）' }}</dd></div><div><dt>备份目标</dt><dd>{{ backupTargets.map(id=>id==='local'?'本机硬盘':'百度网盘').join('、') || '请选择目标' }}</dd></div><div><dt>命名预设</dt><dd>{{ presets.find(p=>p.id===backupPreset)?.name || '默认规则' }}</dd></div><div><dt>文件与校验</dt><dd>1,248 个 · 42.8 GB · {{ settings.verify?'SHA-256':'按设置跳过校验' }}</dd></div></dl><div class="consent-box"><ShieldCheck :size="18"/><span>普通备份只复制；同名不覆盖。网盘上传必须等本地副本校验后执行。</span></div></template>
-            <div class="panel-actions"><button class="secondary-button" v-if="backupStep>1" @click="backupStep--">上一步</button><span v-else></span><button v-if="backupStep<4" class="primary-button" @click="backupStep===1&&!sources.length?scanSource():backupStep++">{{ backupStep===1&&!sources.length?'先扫描来源':'继续' }} <ArrowRight :size="15"/></button><button v-else class="primary-button" @click="startBackup" :disabled="!backupTargets.length"><Play :size="15"/>确认并开始（演示）</button></div>
+            <template v-else><div class="panel-heading"><div><h3>确认备份任务</h3><p>{{ nativeTauriRuntime?'确认后才写入本机目录；百度上传在本副本校验通过后独立排队。':'确认后才会启动演示任务；本页不会操作真实文件。' }}</p></div><span class="state-pill queued">{{ nativeJobRunning?'执行中':'等待确认' }}</span></div><dl class="summary-list"><div><dt>来源</dt><dd>{{ nativeTauriRuntime?(nativeBackupSource||'请先选择来源'):(sources[0]?.path||'SD_CARD/DCIM（示例）') }}</dd></div><div><dt>备份目标</dt><dd>{{ backupTargets.map(id=>id==='local'?(nativeTauriRuntime?nativeDestinations.join('、')||'未选择本机目录':'本机硬盘'):'百度网盘').join('；') || '请选择目标' }}</dd></div><div><dt>命名预设</dt><dd>{{ presets.find(p=>p.id===backupPreset)?.name || '默认规则' }}</dd></div><div><dt>文件与校验</dt><dd>{{ nativeTauriRuntime?(nativePlan?`${nativePlan.files.length} 个 · ${formatBytes(nativePlan.totalBytes)}`:'未生成计划'):'1,248 个 · 42.8 GB' }} · {{ settings.verify?'SHA-256':'按设置跳过校验' }}</dd></div></dl><div class="consent-box"><ShieldCheck :size="18"/><span>普通备份只复制；同名不覆盖。网盘上传必须等本地副本校验后执行。</span></div><p v-if="nativeBackupError" class="error-note" role="alert">{{ nativeBackupError }}</p><div v-if="nativeJob" class="native-job"><div class="panel-heading"><div><h3>{{ nativeJob.name }}</h3><p>{{ nativeJob.phase }} · {{ Math.round(nativeJob.progress) }}% · {{ nativeJob.files }} 个文件</p></div><span :class="['state-pill',nativeJob.state==='success'?'success':nativeJob.state==='failed'?'failed':'queued']">{{ nativeJob.state }}</span></div><article v-for="target in nativeJob.targets" :key="target.id" class="destination-row"><Cloud :size="17"/><span><b>{{ target.path }}</b><small>复制 {{ target.copied }} · 跳过 {{ target.skipped }} · 校验 {{ target.verified }} · 失败 {{ target.failed }}</small></span><span :class="['state-pill',target.state==='success'?'success':target.failed?'failed':'queued']">{{ target.state }}</span></article><p v-if="nativeJob.error" class="error-note">{{ nativeJob.error }}</p><div v-if="backupTargets.includes('baidu')" class="baidu-upload-result"><b>{{ baiduUploadBusy?'正在上传已校验副本到百度网盘…':'百度网盘上传结果' }}</b><p v-if="baiduUploadError" class="error-note" role="alert">{{ baiduUploadError }}</p><article v-for="upload in baiduUploads" :key="upload.taskId" class="destination-row"><Cloud :size="17"/><span><b>{{ upload.remotePath }}</b><small>{{ upload.state }} · {{ formatBytes(upload.bytes) }} · {{ upload.verification==='provider_md5_and_size'?'远端 MD5/大小已核对':'远端结果待核对' }}</small></span></article><p v-if="!baiduUploads.length && !baiduUploadBusy && !baiduUploadError" class="table-foot">本地副本校验通过后会自动排队上传；本地备份结论不受上传失败影响。</p></div></div></template>
+            <div class="panel-actions"><button class="secondary-button" v-if="backupStep>1" @click="backupStep--">上一步</button><span v-else></span><button v-if="backupStep<4" class="primary-button" @click="nextBackupStep">{{ backupStep===1&&((nativeTauriRuntime&&!nativeScan)||(!nativeTauriRuntime&&!sources.length))?'先扫描来源':'继续' }} <ArrowRight :size="15"/></button><button v-else class="primary-button" @click="startBackup" :disabled="!backupTargets.length||nativeJobRunning"><Play :size="15"/>{{ nativeJobRunning?'正在执行…':nativeTauriRuntime?'确认并开始备份':'确认并开始（演示）' }}</button></div>
           </section>
         </template>
 
