@@ -1,6 +1,8 @@
-# CloudBase 控制台配置清单（待用户操作）
+# CloudBase 控制台配置清单（进行中）
 
 适用环境：`yingxu-dev`。此清单只描述待配置项；本地代码准备和 schema v16 回读不代表这些项目已配置、函数已部署或登录已验收。不要把任何密钥值写进仓库或聊天。
+
+2026-10-28 更新：用户已在控制台创建 API Key `yingxu`；Codex 已为 `yingxu-agent-api` 选择该 Key 并保存注入配置。函数更新后已恢复正常。没有读取、复制或记录 Key 明文；没有部署候选函数代码。
 
 ## 一、登录方式（控制台已核实，2026-10-27）
 
@@ -53,13 +55,13 @@
 5. 邮箱验证码与用户名/密码保持启用；短信与微信登录保持关闭。
 6. 配置完成后告知维护者“登录方式和函数变量已配置”，不要发送 Secret 值。后续再单独进行本地包复核、云端部署授权和部署后验收。
 
-## 当前需用户在控制台确认的项目
+## 当前待完成项
 
-- `yingxu-dev` API Key 配置页当前只列出一个已过期 Key（过期时间 2026-10-26 20:55:25）；函数编辑表单也曾将现有注入值明文提供给辅助功能树。请在「环境管理 → API Key 配置 → 生成」创建新 Key，并在 `yingxu-agent-api` 的 API Key 注入项选择新 Key。本轮未保存修改或部署；不要把新 Key 发到聊天、截图或仓库。
+- 新 API Key 已注入，但旧 `yingxu-codex-dev` Key 仍在控制台且已过期；暂不删除，待新版部署并验收后再决定是否清理。
+- 需要配置影序短会话的 RSA 私钥 `SESSION_PRIVATE_KEY`（至少 2048 位）、对应非秘密 `SESSION_KEY_ID`、HTTPS `JWT_ISSUER` 与 `JWT_AUDIENCE`。这是独立于 CloudBase API Key 的应用签名密钥；请在本地安全生成并仅录入 CloudBase 服务端 Secret，不要发送到聊天或提交仓库。
+- 将函数 `AUTH_MODE` 切换为 `cloudbase`，并设置 `CLOUDBASE_CLIENT_ORIGINS`、精确 `CORS_ORIGINS`；保存后再由维护者部署 schema v16 候选并验收。
 - 邮箱代发的实际收件投递仍待真实邮箱登录验收；本轮没有发送验证码。
-- `yingxu-dev` 环境 ID 与服务端 API Key。
-- 正式 client ID 到 `desktop`/`mobile` 的映射。
-- HTTPS issuer、audience、会话签名私钥和 key ID。
-- 桌面端的精确 Tauri CORS origins；移动端来源留待朋友交付真实 origin 后再添加。
+- 正式 client ID 到 `desktop`/`mobile` 的映射；桌面默认 ID 按环境 ID，移动端来源留待移动端接入时再登记。
+- 桌面端精确 Tauri CORS origins 已在文档确定；当前函数里仍需实际保存该配置。
 
 所有秘密由用户留在控制台；助手不需要接收或读取其值。
