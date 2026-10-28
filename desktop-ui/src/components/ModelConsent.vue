@@ -9,7 +9,7 @@ const controller=props.service ? createModelConsent(props.service) : null
 const status=ref<ModelStatus|null>(null), busy=ref(false), plan=ref<ModelPlan|null>(null)
 const statusTimedOut=ref(false)
 const statusView=computed(()=>statusTimedOut.value
- ? { label:'本机 Agent 检查超时', detail:'macOS 系统凭据库没有返回。模型请求尚未发送；为避免重复访问，本次不再自动重试。处理系统提示后重启应用再检查。', ready:false, availability:'sidecar_unavailable' as const }
+ ? { label:'本机 Agent 检查超时', detail:'本机服务未及时响应。请处理可能出现的系统提示后重启影序，再检查状态。本次查询尚未发送。', ready:false, availability:'sidecar_unavailable' as const }
  : localAgentStatusView(status.value,!!controller))
 const failure=ref<ReturnType<typeof modelFailure>|null>(null)
 const recoveryRequired=ref(false)
@@ -88,22 +88,22 @@ defineExpose({
  <section class="model-consent-panel" aria-label="模型服务状态">
   <div class="model-status-row"><strong>本机 Agent</strong><span :data-availability="statusView.availability" :class="{ 'status-ready': statusView.ready, 'status-unavailable': !statusView.ready }">{{ statusView.label }}</span><button class="text-button" :disabled="!controller||busy||statusTimedOut" @click="refresh">刷新状态</button></div>
   <p>{{ statusView.detail }}</p>
-  <p v-if="statusView.ready">Agent 与 LangGraph 编排运行在本机，Ollama 只通过本机 sidecar 调用。本轮最多 3 次模型请求、10 条脱敏摘要；不连接 CloudBase 模型接口，也不会静默切换云端。</p>
-  <button ref="review" class="secondary-button compact" :disabled="!controller||!statusView.ready||busy||recoveryRequired||!query.trim()" @click="prepare()">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '新建模型轮次并查看发送内容' }}</button>
+  <p v-if="statusView.ready">Agent 使用本机 Ollama 模型，最多查询 10 条脱敏摘要。照片内容、完整路径和 GPS 不会发送给模型。</p>
+  <button ref="review" class="secondary-button compact" :disabled="!controller||!statusView.ready||busy||recoveryRequired||!query.trim()" @click="prepare()">{{ recoveryRequired ? '等待本轮恢复' : busy ? '处理中…' : '查看查询内容并确认' }}</button>
   <button v-if="recoveryAvailable" class="secondary-button compact" :disabled="busy" @click="openRecovery">{{ busy ? '处理中…' : '查看并恢复本轮' }}</button>
   <p v-if="failure" role="alert" class="model-failure">{{ failure.message }}</p>
  </section>
  <div v-if="plan" class="model-consent-overlay" @keydown="keyboard">
   <section ref="dialog" role="dialog" aria-modal="true" aria-labelledby="model-consent-title" class="model-consent-dialog">
    <h2 id="model-consent-title">确认在本机运行 Agent</h2>
-   <dl><dt>Agent / 模型</dt><dd>本机 LangGraph / {{ plan.model }} ({{ plan.provider }})</dd><dt>数据目的地</dt><dd>本机 sidecar 与本机 Ollama；不连接云端 Agent</dd><dt>本次查询</dt><dd class="model-query">{{ plan.query }}</dd><dt>本机工具与调用上限</dt><dd>最多 3 次模型请求、10 条脱敏查询摘要。不发送照片内容、完整路径或 GPS。素材打开会单独显示文件名并再次确认。</dd><dt>权限</dt><dd>本轮仅允许本机索引素材、脱敏元数据和备份任务查询。文件打开由桌面本机授权检查；不授权改名、移动、删除或上传。取消、超时和失败不会静默重发或切换云端。</dd></dl>
+   <dl><dt>本机模型</dt><dd>{{ plan.model }} ({{ plan.provider }})</dd><dt>数据目的地</dt><dd>此设备上的 Ollama</dd><dt>本次查询</dt><dd class="model-query">{{ plan.query }}</dd><dt>查询范围</dt><dd>最多 3 次模型请求、10 条脱敏查询摘要。不发送照片内容、完整路径或 GPS。打开素材会单独显示文件名并再次确认。</dd><dt>权限</dt><dd>本轮仅允许查询本机索引、脱敏元数据和备份任务，不授权改名、移动、删除或上传。取消、超时和失败不会自动重发或切换云端。</dd></dl>
    <div class="model-consent-actions"><button ref="cancel" class="secondary-button" :disabled="busy" @click="confirm(false)">取消，本机不运行</button><button class="primary-button" :disabled="busy" @click="confirm(true)">{{ busy ? '等待本机结果…' : '确认本机运行' }}</button></div>
   </section>
  </div>
  <div v-if="recoveryReview" class="model-consent-overlay" @keydown="keyboard">
   <section ref="recoveryDialog" role="dialog" aria-modal="true" aria-labelledby="model-recovery-title" class="model-consent-dialog">
    <h2 id="model-recovery-title">确认恢复同一轮次</h2>
-   <dl><dt>本次查询</dt><dd class="model-query">{{ recoveryReview.query }}</dd><dt>恢复范围</dt><dd>向服务端发送 resume:true，继续使用原会话和轮次编号；不会创建新轮次，也不会自动重发。本轮最多 3 次模型请求；恢复可能继续尚未完成的模型处理，新增用量取决于服务端本轮状态和供应商计费规则。</dd><dt>发送与权限</dt><dd>本请求只用于恢复当前轮次。只读工具只查询任务摘要，不获得文件执行权限。若服务端无法恢复，将显示明确错误并保持新轮次锁定。</dd></dl>
+   <dl><dt>本次查询</dt><dd class="model-query">{{ recoveryReview.query }}</dd><dt>恢复范围</dt><dd>继续本机尚未完成的这次查询，保留原会话和记录，不会创建新查询。本轮最多 3 次模型请求；恢复可能继续运行本机模型。</dd><dt>查询权限</dt><dd>仅查询本机素材索引和任务摘要，不获得文件执行权限。无法恢复时会显示原因，并保留当前记录。</dd></dl>
    <div class="model-consent-actions"><button ref="recoveryCancel" class="secondary-button" :disabled="busy" @click="resume(false)">取消</button><button class="primary-button" :disabled="busy" @click="resume(true)">{{ busy ? '正在请求恢复…' : '确认恢复本轮' }}</button></div>
   </section>
  </div>

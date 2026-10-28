@@ -4,7 +4,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, workbuddy/dev]
+    branches: [main, workbuddy/dev, other-windows-qa]
   workflow_dispatch:
 
 concurrency:
@@ -55,6 +55,21 @@ jobs:
         working-directory: desktop-ui
       - run: pnpm build
         working-directory: desktop-ui
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: desktop-ui
+      - run: pnpm verify:desktop
+        working-directory: desktop-ui
+
+  windows-core:
+    name: Windows 文件操作回归
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+      - run: cargo test --locked --manifest-path backend/Cargo.toml -p yingxu-core --all-targets
 
   versions-and-site:
     name: 版本一致性与静态站点检查

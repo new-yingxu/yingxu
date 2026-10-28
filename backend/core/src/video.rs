@@ -396,6 +396,11 @@ fn wait_with_timeout(child: &mut Child, limit: Duration) -> bool {
 fn grab_frame(bin: &str, file: &Path, at: f64, keyframe_only: bool) -> Option<Vec<u8>> {
     let tmp = std::env::temp_dir().join(format!("yingxu-frame-{}.jpg", id()));
     let mut cmd = Command::new(bin);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW for background frame extraction.
+    }
     cmd.args(["-v", "error", "-nostdin"]);
     if keyframe_only {
         // 只解 I 帧：定位到 seek 点之后的第一帧关键帧，避免逐帧解码

@@ -160,3 +160,77 @@ body{min-width:0}
 .local-mode-banner span{color:var(--muted)}
 .cloud-disabled-note{padding:12px 14px;border-radius:10px;background:var(--page);color:var(--muted);font-size:12px;line-height:1.6}
 .nav-item:disabled{opacity:.52;cursor:not-allowed}
+
+/* Customer desktop: readable Windows fonts, long paths and short viewports. */
+:root{font-family:'Segoe UI','Microsoft YaHei UI','Microsoft YaHei','PingFang SC','Noto Sans SC',sans-serif}
+.login-shell{display:grid;grid-template-rows:auto 1fr auto;min-height:100dvh;padding:24px 32px;gap:24px;align-items:center}
+.login-brand{position:static;justify-self:start}
+.login-card{justify-self:center;align-self:center;min-width:0}
+.login-footer{position:static;width:100%;margin:0;padding:0;gap:16px;flex-wrap:wrap}
+.welcome-features{display:grid;gap:14px;margin:26px 0;color:var(--muted);font-size:13px}
+.welcome-features>span{display:flex;gap:10px;align-items:center}
+.welcome-features .ui-symbol{color:var(--green)}
+.local-entry{min-height:44px}
+.local-mode-note{background:var(--card-soft);border:1px solid var(--line)}
+.workspace-switch{cursor:default}
+.workspace-switch>span:nth-child(2){min-width:0;overflow-wrap:anywhere}
+.panel,.settings-content,.task-detail-layout>*,.delivery-layout>*,.content-grid>*{min-width:0}
+.page-heading-row>div,.welcome-row>div,.panel-heading>div{min-width:0;overflow-wrap:anywhere}
+.panel-heading,.panel-actions,.modal-actions,.suggestion-tags,.rule-chips{flex-wrap:wrap}
+.task-name,.history-row .task-name,.task-dests,.history-row .task-dests{min-width:0;overflow-wrap:anywhere}
+.task-name{flex:1 1 180px}.task-dests{flex:1 1 180px}
+.task-row,.history-row{flex-wrap:wrap}
+.task-name b,.task-name small,.destination-row b,.destination-row small,.media-copy small,.table-row>*{overflow-wrap:anywhere}
+.destination-row>span:nth-child(2),.setting-row>span:first-child{min-width:0;overflow-wrap:anywhere}
+.table-row>*{min-width:0}.table-row small{white-space:normal;overflow:visible}
+.media-copy>b,.delivery-file-main b{white-space:normal;overflow-wrap:anywhere}
+.media-card{min-width:0}
+.source-card,.path-preview,.option-row,.check-row,.consent-box,.scan-note{overflow-wrap:anywhere}
+.summary-list>div{grid-template-columns:minmax(90px,140px) minmax(0,1fr)}
+.path-preview{display:block;line-height:1.7}.path-preview>.ui-symbol{vertical-align:middle;margin-right:7px}
+.two-column-fields input,.two-column-fields select{min-width:0;width:100%}
+.setting-row>input[type=checkbox],.check-row>input,.option-row>input{flex:none}
+.detail-stats{gap:12px}.detail-stats>*{min-width:0;overflow-wrap:anywhere}
+.result-banner{flex-wrap:wrap}.current-file{white-space:normal;overflow-wrap:anywhere}
+.confirm-modal{max-height:calc(100dvh - 40px);overflow:auto}
+.toast{max-width:calc(100vw - 40px);overflow-wrap:anywhere;white-space:normal;line-height:1.6}
+.inline-toast{transform:none;left:auto;max-width:100%}
+.statusbar>span{min-width:0}.statusbar>span:first-child{flex:none}
+.statusbar-right{white-space:nowrap}
+.cloud-disabled-note{margin:0;background:var(--card-soft)}
+.settings-nav a{min-height:36px}
+.agent-layout{height:auto;min-height:0;align-items:start}
+.agent-aside{position:sticky;top:0}
+.chat-panel{min-width:0;min-height:0}
+.chat-scroll{flex:none;max-height:420px;min-height:150px}
+.message-content{min-width:0;overflow-wrap:anywhere}
+.composer{background:var(--card);padding-bottom:12px}
+.local-file-actions{--surface:var(--card-soft)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+:root[data-theme=dark] .local-mode-note,:root[data-theme=dark] .local-mode-banner{background:var(--card-soft);color:var(--text);border-color:var(--line)}
+:root[data-theme=dark] .state-pill.success,:root[data-theme=dark] .result-banner.success{background:#243d2c;color:#a4d5ad}
+:root[data-theme=dark] .state-pill.running,:root[data-theme=dark] .state-pill.partial,:root[data-theme=dark] .state-pill.queued,:root[data-theme=dark] .result-banner.partial{background:#3d3524;color:#e3c993}
+:root[data-theme=dark] .state-pill.failed,:root[data-theme=dark] .state-pill.cancelled,:root[data-theme=dark] .result-banner.failed{background:#422d2a;color:#f0aaa0}
+:root[data-theme=dark] .state-pill,:root[data-theme=dark] .result-banner.cancelled{background:#303831;color:#c8cec7}
+@media(max-width:1100px){
+  .preset-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .panel-heading{align-items:flex-start}
+}
+@media(max-width:960px){
+  .settings-nav{position:static;display:flex;flex-wrap:wrap;gap:4px}
+  .settings-nav a{flex:0 1 auto}
+  .agent-layout{grid-template-columns:minmax(0,1fr)}
+  .agent-aside{min-height:0;gap:8px}
+  .agent-aside{position:static}
+  .safety-callout{margin-top:8px}
+}
+@media(max-width:760px){
+  .login-shell{padding:20px;gap:22px}
+  .preset-grid{grid-template-columns:minmax(0,1fr)}
+  .history-row .task-name{min-width:0;flex-basis:calc(100% - 50px)}
+  .history-row .task-dests{min-width:0;flex-basis:100%;padding-left:43px}
+  .setting-row{flex-wrap:wrap}.range-control{max-width:100%}
+  .audit-summary{gap:18px;flex-wrap:wrap}
+  .detail-progress{flex-wrap:wrap}
+  .statusbar>span:nth-child(2){flex:1}
+}

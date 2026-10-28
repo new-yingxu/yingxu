@@ -1,10 +1,27 @@
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
-from verify_sidecar import verify_manifest
+from verify_sidecar import read_ready_line, verify_manifest
+
+
+class ReadyLineTest(unittest.TestCase):
+    def test_reads_ready_line_from_pipe(self):
+        import subprocess
+        import sys
+        child = subprocess.Popen([sys.executable, "-c", "print('ready', flush=True)"], stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(read_ready_line(child.stdout, timeout=5).strip(), "ready")
+        finally:
+            child.wait(timeout=5)
+            child.stdout.close()
+
+    def test_eof_is_an_explicit_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "exited"):
+            read_ready_line(io.StringIO(""), timeout=1)
 
 
 class VerifySidecarManifest(unittest.TestCase):
@@ -77,7 +94,12 @@ class VerifySidecarManifest(unittest.TestCase):
         outside.write_text("{}", encoding="utf-8")
         manifest = self.bundle / "sidecar-manifest.json"
         manifest.unlink()
-        manifest.symlink_to(outside)
+        try:
+            manifest.symlink_to(outside)
+        except OSError as error:
+            if getattr(error, 'winerror', None) == 1314:
+                self.skipTest('Windows symlink privilege is unavailable')
+            raise
         with self.assertRaisesRegex(RuntimeError, "manifest is missing or escaping"):
             verify_manifest(self.bundle)
 

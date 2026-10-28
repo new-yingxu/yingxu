@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { version as appVersion } from "../package.json";
 import ScanSummary from "./components/ScanSummary.vue";
 import NetdiskPanel from "./components/NetdiskPanel.vue";
 import ModelConsent from "./components/ModelConsent.vue";
@@ -60,12 +61,10 @@ import {
   Archive,
   ArrowDownToLine,
   ArrowRight,
-  Bell,
   Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CircleHelp,
   Clock3,
   Cloud,
   Copy,
@@ -121,9 +120,9 @@ const displayName = computed(
     session.value?.displayName ||
     (localWorkspace.value ? "本机模式" : "未登录"),
 );
-const displayEmail = computed(() => session.value?.email || "云端未登录");
+const displayEmail = computed(() => session.value?.email || "离线使用");
 const localCapabilities = ref<LocalCapabilities | null>(null);
-const hostStatus = ref("正在检查本地后端");
+const hostStatus = ref("正在检查本机服务…");
 const operationBusy = ref(false);
 const analysis = ref<MediaAnalysis | null>(null);
 const analysisTitle = ref("");
@@ -170,6 +169,8 @@ const loginError = ref("");
 const loginBusy = ref(false);
 const notice = ref("");
 const showModal = ref("");
+const renameRecord = ref<ArchiveTask | null>(null);
+const renameValue = ref("");
 const globalSearchOpen = ref(false);
 const globalSearchQuery = ref("");
 const query = ref("");
@@ -318,6 +319,10 @@ const wizardContext = computed(() => ({
   busy: operationBusy.value || scanBusy.value,
 }));
 const activeTitle = computed(() => pageLabels[page.value]);
+watch(page, async () => {
+  await nextTick();
+  document.querySelector(".page-scroll")?.scrollTo({ top: 0, left: 0 });
+});
 const globalSearchItems = computed(() => [
   ...navGroups.flatMap((group) =>
     group.items.map((item) => ({ ...item, group: group.title })),
@@ -551,8 +556,8 @@ onMounted(async () => {
       const health = await api.local.health();
       hostStatus.value =
         health.workerReady === false
-          ? "本地 worker 未就绪"
-          : "已连接 Rust / SQLite";
+          ? "本机任务服务尚未就绪，请重启影序后重试"
+          : "本机服务已就绪";
     } catch (error) {
       hostStatus.value = errorText(error);
     }
@@ -567,7 +572,7 @@ onMounted(async () => {
         if (selectedTaskId.value === task.id) taskDetail.value = task;
       }, showError, say);
     } catch (error) {
-      say(`使用轮询：${errorText(error)}`);
+      if (import.meta.env.DEV) console.warn("任务事件订阅失败，使用轮询", error);
     }
     polling = window.setInterval(async () => {
       if (
@@ -1040,11 +1045,21 @@ async function clearHistory() {
   });
 }
 async function renameTask(task: ArchiveTask) {
-  const name = window.prompt("输入新的记录名称", task.name);
-  if (name?.trim()) {
-    await api.history.rename(task.id, name.trim());
-    task.name = name.trim();
-  }
+  renameRecord.value = task;
+  renameValue.value = task.name;
+  await nextTick();
+  document.querySelector<HTMLInputElement>("#rename-record-name")?.focus();
+}
+async function saveRecordName() {
+  const task = renameRecord.value;
+  const name = renameValue.value.trim();
+  if (!task || !name) return;
+  renameRecord.value = null;
+  await runAction(async () => {
+    await api.history.rename(task.id, name);
+    task.name = name;
+    say("记录名称已更新，素材文件名保持不变。");
+  });
 }
 async function connectProvider(provider: "baidu" | "quark") {
   try {
@@ -1116,7 +1131,7 @@ function taskStateLabel(state: TaskState) {
   <main
     v-if="!session && !localWorkspace"
     class="login-shell"
-    :inert="!!pendingConfirmation || !!analysis || !!taskReport"
+    :inert="!!pendingConfirmation || !!analysis || !!taskReport || !!renameRecord"
   >
     <div class="login-brand">
       <div class="brand-mark"><i></i><i></i><i></i><i></i></div>
@@ -1124,12 +1139,13 @@ function taskStateLabel(state: TaskState) {
     </div>
     <section class="login-card">
       <div class="login-intro">
-        <span class="eyebrow">影序 · 桌面端 V2 草稿</span>
+        <span class="eyebrow">影序 · 影像资料管理</span>
         <h1>欢迎回到影序</h1>
         <p>
-          登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。
+          无需账号，即可在本机导入、备份和整理照片与视频。原片保留在你的设备上。
         </p>
       </div>
+      <template v-if="isMock">
       <div class="login-tabs">
         <button
           :class="{ chosen: loginMode === 'wechat' }"
@@ -1224,23 +1240,32 @@ function taskStateLabel(state: TaskState) {
                 : "登录影序（演示）"
         }}
       </button>
+      </template>
+      <div v-if="!isMock" class="welcome-features">
+        <span><ShieldCheck :size="18" />复制后逐文件校验</span>
+        <span><Image :size="18" />本机素材检索与整理</span>
+        <span><LockKeyhole :size="18" />文件操作由你确认</span>
+      </div>
       <p v-if="canEnterLocalWorkspace" class="local-mode-note">
-        本机模式无需登录，照片、任务和 Agent 留在此设备；账号、云同步与网盘功能将停用。
+        照片、索引和任务记录保存在此设备；本机模式不启用账号同步或网盘上传。
       </p>
       <button
         v-if="canEnterLocalWorkspace"
-        class="secondary-button full-width local-entry"
+        class="primary-button full-width local-entry"
         @click="enterLocalWorkspace"
         :disabled="operationBusy"
       >
-        进入本机模式（不登录、不云同步）
+        开始使用
       </button>
-      <p class="login-disclaimer">
+      <p v-if="!isMock && !canEnterLocalWorkspace" class="error-note" role="alert">
+        本机服务暂不可用，请重启影序后重试。
+      </p>
+      <p class="login-disclaimer" role="status">
         {{ isMock ? "浏览器预览 · 登录仅为界面演示" : hostStatus }}
       </p>
     </section>
     <footer class="login-footer">
-      <span><LockKeyhole :size="14" /> 安全同步 · 原片留在你的设备</span
+      <span><LockKeyhole :size="14" /> 本机处理 · 原片留在你的设备</span
       ><span>Windows / macOS</span>
     </footer>
     <div v-if="notice" class="toast" role="status" aria-live="polite">
@@ -1252,7 +1277,7 @@ function taskStateLabel(state: TaskState) {
     v-else
     class="app-shell"
     :data-api-mode="api.mode"
-    :inert="!!pendingConfirmation || !!analysis || !!taskReport"
+    :inert="!!pendingConfirmation || !!analysis || !!taskReport || !!renameRecord"
   >
     <aside class="sidebar">
       <div class="brand-row">
@@ -1262,15 +1287,14 @@ function taskStateLabel(state: TaskState) {
           ><span>智能影像管理</span>
         </div>
       </div>
-      <button class="workspace-switch">
+      <div class="workspace-switch" aria-label="当前工作空间">
         <span class="workspace-avatar">{{ displayName.slice(0, 1) }}</span
         ><span
-          ><b>{{ displayName }} 的空间</b
+          ><b>{{ localWorkspace ? "本机工作空间" : `${displayName} 的空间` }}</b
           ><small>{{
-            isMock ? "本机设备 · Mac Studio" : "本地设备 · 云端未登录"
-          }}</small></span
-        ><ChevronDown :size="14" />
-      </button>
+            isMock ? "界面预览" : "本机工作空间"
+          }}</small></span>
+      </div>
       <nav class="side-nav">
         <section v-for="group in navGroups" :key="group.title">
           <h2>{{ group.title }}</h2>
@@ -1296,6 +1320,7 @@ function taskStateLabel(state: TaskState) {
         <button
           class="nav-item"
           :class="{ active: page === 'account' }"
+          v-if="canUseCloud"
           aria-label="账号与设备"
           :title="localWorkspace ? '本机模式下不可用' : '账号与设备'"
           :disabled="localWorkspace"
@@ -1328,9 +1353,9 @@ function taskStateLabel(state: TaskState) {
           <span>影序</span><ChevronRight :size="13" /><b>{{ activeTitle }}</b>
         </div>
         <div class="top-actions">
-          <span v-if="!localWorkspace" class="draft-chip"><i></i> V2 草稿预览</span
+          <span v-if="isMock" class="draft-chip"><i></i> 界面预览</span
           ><span class="demo-chip"
-            ><i></i>{{ isMock ? "演示数据" : localWorkspace ? "本机模式 · 云端已停用" : "本地真实数据" }}</span
+            ><i></i>{{ isMock ? "演示数据" : "本机模式" }}</span
           >
           <div class="search-action-wrap">
             <button
@@ -1397,15 +1422,8 @@ function taskStateLabel(state: TaskState) {
               </div>
             </div>
           </div>
+          <span class="top-divider"></span>
           <button
-            class="icon-button"
-            aria-label="通知"
-            title="通知"
-            @click="say('当前没有新的演示通知。')"
-          >
-            <Bell :size="17" /></button
-          ><span class="top-divider"></span
-          ><button
             class="theme-button"
             @click="
               updateSetting(
@@ -1423,17 +1441,15 @@ function taskStateLabel(state: TaskState) {
       </header>
       <div class="page-scroll">
         <div class="page-content">
-          <div v-if="notice" class="toast inline-toast">{{ notice }}</div>
-          <div v-if="localWorkspace" class="local-mode-banner" role="status">
-            <b>本机模式已开启</b><span>无需账号；本地 Agent、素材索引和备份仅在此设备运行。云账号、跨设备同步与网盘入口均已停用。</span>
-          </div>
+          <div v-if="notice" class="toast inline-toast" role="status" aria-live="polite">{{ notice }}</div>
+
           <ScanSummary :report="page === 'backup' ? backupScan : page === 'transfer' ? transferScan : page === 'library' ? indexScan : null" />
 
           <template v-if="page === 'home' && !isMock"
             ><PageHeading
-              :eyebrow="localWorkspace ? '本机模式 · 未登录、不云同步' : '本地联调工作区 · 云端未登录'"
+              eyebrow="本机工作空间"
               title="工作台"
-              :description="props.testTransport || hostStatus"
+              :description="hostStatus"
             />
             <section class="panel">
               <div class="native-metrics">
@@ -1445,7 +1461,7 @@ function taskStateLabel(state: TaskState) {
                   ><b>{{ summary.reviewCount }}</b> 待复核</span
                 >
               </div>
-              <p>{{ localWorkspace ? "本地 Rust / SQLite；Agent、素材索引和备份仅在此设备运行，云账号与同步已停用。" : "结果来自本地 Rust / SQLite；云端身份、Agent、设备同步未连接。" }}</p>
+              <p>素材索引、备份和任务记录均在此设备处理。开始备份前，请先连接来源和目标磁盘。</p>
               <button class="primary-button" @click="setPage('backup')">
                 开始本地备份</button
               ><button class="secondary-button" @click="setPage('library')">
@@ -1618,7 +1634,7 @@ function taskStateLabel(state: TaskState) {
               description="检测来源、预检目的地并预览命名；只有你确认后才开始备份。"
             />
             <p v-if="!isMock" class="integration-banner">
-              真实文件模式：扫描只读，后端预检后再次确认才写入。
+              扫描不会修改来源文件；请核对预检摘要后再开始备份。
             </p>
             <div class="stepper">
               <button
@@ -1820,7 +1836,7 @@ function taskStateLabel(state: TaskState) {
                   <Folder :size="15" />{{
                     isMock
                       ? "摄影归档 / 2025 / 04-21_海边日落 / Sony_A7_IV"
-                      : "最终命名目录将在后端预检确认框显示"
+                      : "完整目标路径将在确认摘要中显示"
                   }}
                 </div>
                 <label class="check-row"
@@ -1838,7 +1854,7 @@ function taskStateLabel(state: TaskState) {
                       {{
                         isMock
                           ? "确认后启动演示任务。"
-                          : "下一步展示后端实际预检结果，再次确认后开始真实写入。"
+                          : "下一步核对来源、目标路径和可用空间，确认后开始备份。"
                       }}
                     </p>
                   </div>
@@ -1989,7 +2005,7 @@ function taskStateLabel(state: TaskState) {
                   /><span
                     ><b>{{ file.name }}</b
                     ><small>{{ file.path }}</small></span
-                  ><span>{{ file.kind }} · {{ file.size }}</span
+                  ><span>{{ file.kind === 'photo' ? '照片' : file.kind === 'video' ? '视频' : '其他文件' }} · {{ file.size }}</span
                   ><span>{{ file.quality }}</span
                   ><span>校验后待确认</span></label
                 >
@@ -2002,8 +2018,7 @@ function taskStateLabel(state: TaskState) {
                 ><input
                   v-model="transferConfirmSource"
                   type="checkbox"
-                />我确认：仅在目标副本 SHA-256
-                校验成功且来源未变化后，移除已转移来源文件</label
+                />我理解：副本 SHA-256 校验成功且来源未变化后，仍需再次确认才会暂存来源文件</label
               >
               <div class="panel-actions">
                 <span class="demo-label"
@@ -2011,9 +2026,9 @@ function taskStateLabel(state: TaskState) {
                 ><button
                   class="primary-button"
                   @click="beginTransfer"
-                  :disabled="!selectedTransfer.length"
+                  :disabled="!selectedTransfer.length || !transferTarget || !transferConfirmSource || operationBusy"
                 >
-                  <ArrowRight :size="15" />预览并启动转移（演示）
+                  <ArrowRight :size="15" />{{ isMock ? "预览并启动转移（演示）" : "预检并查看转移摘要" }}
                 </button>
               </div>
             </section>
@@ -2397,7 +2412,7 @@ function taskStateLabel(state: TaskState) {
                 <dl class="summary-list">
                   <div>
                     <dt>版本</dt>
-                    <dd>V2 本地联调草稿</dd>
+                    <dd>{{ appVersion }}</dd>
                   </div>
                   <div>
                     <dt>完整性</dt>
@@ -2432,7 +2447,7 @@ function taskStateLabel(state: TaskState) {
 
           <template v-else-if="page === 'agent'"
             ><p v-if="showLocalAgentAdapterNotice" class="integration-banner">
-              当前桌面环境未接入本机 Agent 模型适配器，Agent 对话不可用。
+              本机 Agent 暂不可用，请重启影序后重试。素材检索和备份仍可使用。
             </p>
             <PageHeading
               eyebrow="受限工具 · 操作需确认"
@@ -2448,7 +2463,7 @@ function taskStateLabel(state: TaskState) {
                 >
                   <Plus :size="15" />新建对话
                 </button>
-                <h4>最近对话</h4>
+                <h4 v-if="isMock">最近对话</h4>
                 <button v-if="isMock" class="conversation-link">
                   <Sparkles :size="14" />查找海边日落照片
                   <small>今天 10:12</small></button
@@ -2479,11 +2494,11 @@ function taskStateLabel(state: TaskState) {
                     :key="index"
                     :class="['message-row', message.role]"
                   >
-                    <b v-if="message.role === 'user'">{{ displayName }}</b
+                    <b v-if="message.role === 'user'">{{ displayName.slice(0, 1) }}</b
                     ><span v-else class="agent-mini">✦</span>
                     <div class="message-content">
                       <p>{{ message.text }}</p>
-                      <small v-if="message.reply?.historySync === 'not_synced'">未同步历史（已关闭 Agent 历史同步）</small>
+                      <small v-if="message.reply?.historySync === 'not_synced'">对话保留在本机</small>
                       <div
                         v-if="message.reply?.matches.length"
                         class="match-list"
@@ -2536,13 +2551,14 @@ function taskStateLabel(state: TaskState) {
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"
-                    placeholder="例如：把今天的 RAW 文件整理到项目目录…"
-                  /><button class="primary-button" type="submit">
+                    placeholder="查找素材，或询问备份任务状态…"
+                    :disabled="!isMock && !api.model"
+                  /><button class="primary-button" type="submit" :disabled="!agentInput.trim() || (!isMock && !api.model) || modelConsentRef?.isBusy()">
                     <Send :size="15" />发送
                   </button>
                 </form>
                 <p class="table-foot centered">
-                  {{ isMock ? "演示 Agent 使用合成素材。" : "本机 LangGraph Agent 仅调用白名单工具；打开素材须经本机确认，模型请求不会自动切换到云端。" }}
+                  {{ isMock ? "演示 Agent 使用合成素材。" : "Agent 仅在本机运行；打开或修改素材前会请你确认。" }}
                 </p>
               </div>
             </section>
@@ -2760,7 +2776,7 @@ function taskStateLabel(state: TaskState) {
                 <p>{{ preset.pattern }}</p>
                 <div class="preset-meta">
                   <span>{{
-                    isMock ? "本机保存 · 演示规则" : "本机 SQLite 持久保存"
+                    isMock ? "本机保存 · 演示规则" : "已保存在此设备"
                   }}</span>
                   <div>
                     <button
@@ -2855,6 +2871,7 @@ function taskStateLabel(state: TaskState) {
                       }}</small
                     ></span
                   ><button
+                    v-if="isMock"
                     class="secondary-button compact"
                     @click="
                       say(
@@ -2897,7 +2914,8 @@ function taskStateLabel(state: TaskState) {
                 先运行审计，再选择健康副本。输出目录通过原生选择器确定，并在写入前确认。
               </p>
               <label class="field-label">健康副本</label
-              ><select v-model="restorePath" class="select-field">
+              ><select v-model="restorePath" class="select-field" :disabled="!healthyReplicas.length">
+                <option v-if="!healthyReplicas.length" value="">请先运行健康审计</option>
                 <option
                   v-for="replica in healthyReplicas"
                   :key="replica.id"
@@ -2919,7 +2937,7 @@ function taskStateLabel(state: TaskState) {
           <template v-else-if="page === 'delivery'">
             <PageHeading
               eyebrow="原片保持不变"
-              title="客户交付包"
+              title="交付包"
               description="将选中素材副本写入独立目录，可附联系表、清单与 SHA-256 校验文件。"
             />
             <section class="delivery-layout">
@@ -3008,7 +3026,7 @@ function taskStateLabel(state: TaskState) {
             <PageHeading
               eyebrow="桌面端配置"
               title="偏好设置"
-              description="配置主题、备份、智能整理、云盘、通知、同步和隐私偏好。"
+              description="设置外观、备份校验与本机数据处理方式。更改会自动保存。"
               ><button class="secondary-button" @click="resetSettings">
                 恢复默认值
               </button></PageHeading
@@ -3017,9 +3035,9 @@ function taskStateLabel(state: TaskState) {
               <nav class="panel settings-nav">
                 <a href="#general">通用</a
                 ><a href="#backup-settings">备份与校验</a
-                ><a href="#naming">命名与 AI</a><a href="#quality">质量分析</a
-                ><a href="#cloud">云盘与同步</a
-                ><a href="#advanced">通知与高级</a
+                ><a href="#naming">命名与整理</a><a href="#quality">质量分析</a
+                ><a v-if="!localWorkspace" href="#cloud">云盘与同步</a
+                ><a v-if="isMock" href="#advanced">通知与高级</a
                 ><a href="#privacy">隐私安全</a>
               </nav>
               <div class="settings-content">
@@ -3031,7 +3049,7 @@ function taskStateLabel(state: TaskState) {
                     </div>
                   </div>
                   <label class="setting-row"
-                    ><span><b>外观主题</b><small>保持移动端语义色</small></span
+                    ><span><b>外观主题</b><small>选择适合当前环境的外观</small></span
                     ><select
                       class="select-field small-select"
                       :value="settings.theme"
@@ -3046,7 +3064,7 @@ function taskStateLabel(state: TaskState) {
                       <option value="light">浅色</option>
                       <option value="dark">深色</option>
                     </select></label
-                  ><label class="setting-row"
+                  ><label v-if="isMock" class="setting-row"
                     ><span
                       ><b>登录桌面后启动</b
                       ><small>{{
@@ -3066,7 +3084,7 @@ function taskStateLabel(state: TaskState) {
                   ><label class="setting-row"
                     ><span
                       ><b>关闭窗口后后台运行</b
-                      ><small>托盘/菜单栏生命周期由 Tauri 宿主接入</small></span
+                      ><small>关闭主窗口后，可从系统托盘重新打开影序</small></span
                     ><input
                       type="checkbox"
                       :checked="settings.backgroundOnClose"
@@ -3123,7 +3141,7 @@ function taskStateLabel(state: TaskState) {
                       <p>命名先预览；模型不直接执行文件操作</p>
                     </div>
                   </div>
-                  <label v-if="!localWorkspace" class="setting-row"
+                  <label v-if="isMock" class="setting-row"
                     ><span
                       ><b>AI 命名建议</b
                       ><small>离线备份不依赖 AI；执行前仍需确认</small></span
@@ -3151,6 +3169,8 @@ function taskStateLabel(state: TaskState) {
                   </div>
                 </section>
                 <section id="quality" class="panel settings-section">
+                  <p v-if="!isMock" class="cloud-disabled-note">在影像资料库中选择素材并点击“分析”。质量结果仅供人工复核，不会自动删除文件。</p>
+                  <template v-if="isMock">
                   <div class="panel-heading">
                     <div>
                       <h3>影像质量与相似度</h3>
@@ -3194,8 +3214,9 @@ function taskStateLabel(state: TaskState) {
                         )
                       "
                   /></label>
+                  </template>
                 </section>
-                <section id="cloud" class="panel settings-section">
+                <section v-if="!localWorkspace" id="cloud" class="panel settings-section">
                   <div class="panel-heading">
                     <div>
                       <h3>{{ localWorkspace ? "百度网盘与云同步（已停用）" : "百度网盘与云同步" }}</h3>
@@ -3215,7 +3236,7 @@ function taskStateLabel(state: TaskState) {
                     <button class="text-button" @click="setPage('account')">管理同步范围与设备 <ArrowRight :size="13" /></button>
                   </template>
                 </section>
-                <section id="advanced" class="panel settings-section">
+                <section v-if="isMock" id="advanced" class="panel settings-section">
                   <div class="panel-heading">
                     <div>
                       <h3>通知与高级选项</h3>
@@ -3280,14 +3301,12 @@ function taskStateLabel(state: TaskState) {
       <footer class="statusbar">
         <span
           ><i class="status-dot online"></i
-          >{{ isMock ? "浏览器演示模式" : localWorkspace ? "本机模式 · 不登录、不云同步" : "本地后端" }}</span
+          >{{ isMock ? "浏览器演示模式" : "本机模式" }}</span
         ><span>{{
-          isMock
-            ? "MockDesktopApi · 不读取磁盘"
-            : localWorkspace ? "Rust / SQLite · 云账号、同步和网盘功能已停用" : "Rust / SQLite · 云端账号和 Agent 未连接"
+          isMock ? "演示数据 · 不读取磁盘" : "本机数据 · 原片保留在设备"
         }}</span
         ><span class="statusbar-right"
-          ><CircleHelp :size="13" />帮助与反馈 <i></i>{{ localWorkspace ? "本机模式" : "V2 草稿预览" }}</span
+          >影序 {{ appVersion }}</span
         >
       </footer>
     </section>
@@ -3303,6 +3322,18 @@ function taskStateLabel(state: TaskState) {
         </div>
       </section>
     </div>
+  </div>
+  <div v-if="renameRecord" class="modal-backdrop" @keydown.esc="renameRecord = null">
+    <form class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="rename-record-heading" @submit.prevent="saveRecordName">
+      <h2 id="rename-record-heading">修改归档记录名称</h2>
+      <p>仅修改任务记录名称，素材文件名保持不变。</p>
+      <label class="field-label" for="rename-record-name">记录名称</label>
+      <input id="rename-record-name" v-model="renameValue" class="full-width" maxlength="200" required />
+      <div class="modal-actions">
+        <button type="button" class="secondary-button" @click="renameRecord = null">取消</button>
+        <button type="submit" class="primary-button" :disabled="!renameValue.trim() || operationBusy">下一步</button>
+      </div>
+    </form>
   </div>
   <div v-if="pendingConfirmation" class="modal-backdrop" @keydown="modalKeys">
     <section

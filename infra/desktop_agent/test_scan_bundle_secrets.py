@@ -35,7 +35,12 @@ class ScanBundleSecrets(unittest.TestCase):
             root.mkdir()
             outside = Path(temp) / "outside.bin"
             outside.write_bytes(b"not in bundle")
-            (root / "outside.bin").symlink_to(outside)
+            try:
+                (root / "outside.bin").symlink_to(outside)
+            except OSError as error:
+                if getattr(error, 'winerror', None) == 1314:
+                    self.skipTest('Windows symlink privilege is unavailable')
+                raise
             with self.assertRaisesRegex(ValueError, "escaping"):
                 scan_bundle(root)
 

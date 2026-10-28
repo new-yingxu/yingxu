@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "影序桌面开发版",
+  "productName": "影序",
   "version": "0.2.0-draft.1",
   "identifier": "app.yingxu.desktop.next",
   "build": {
@@ -11,7 +11,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "影序 YINGXU · 开发版",
+        "title": "影序 YINGXU",
         "width": 1280,
         "height": 840,
         "minWidth": 760,
@@ -24,7 +24,9 @@
   },
   "bundle": {
     "active": true,
-    "resources": ["agent-sidecar/yingxu-local-agent/"],
+    "resources": [
+      "agent-sidecar/yingxu-local-agent/"
+    ],
     "targets": [
       "dmg",
       "nsis"

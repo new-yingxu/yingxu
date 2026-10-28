@@ -6,12 +6,33 @@ import os
 from pathlib import Path
 import re
 import secrets
-import selectors
+import queue
 import subprocess
 import tempfile
+import threading
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+def read_ready_line(stream, timeout: float = 45) -> str:
+    """Pipes cannot be passed to select() on Windows; bound the blocking read."""
+    lines = queue.Queue(maxsize=1)
+
+    def read():
+        try:
+            lines.put(stream.readline())
+        except (OSError, ValueError):
+            lines.put("")
+
+    threading.Thread(target=read, daemon=True).start()
+    try:
+        line = lines.get(timeout=timeout)
+    except queue.Empty:
+        raise RuntimeError("sidecar did not announce readiness within timeout") from None
+    if not line:
+        raise RuntimeError("sidecar exited before announcing readiness")
+    return line
 
 def verify_manifest(bundle: Path) -> dict[str, Any]:
     """Verify every packaged file against the generated manifest before launch."""
@@ -148,11 +169,7 @@ def verify(bundle: Path, *, with_ollama: bool) -> dict:
         shutdown_ok = False
         model_requests = 0
         try:
-            selector = selectors.DefaultSelector()
-            selector.register(process.stdout, selectors.EVENT_READ)
-            if not selector.select(timeout=45):
-                raise RuntimeError("sidecar did not announce readiness within 45 seconds")
-            ready = json.loads(process.stdout.readline())
+            ready = json.loads(read_ready_line(process.stdout))
             if ready.get("event") != "ready" or ready.get("host") != "127.0.0.1":
                 raise RuntimeError("sidecar returned an invalid readiness message")
             base = f"http://127.0.0.1:{ready['port']}"

@@ -25,3 +25,8 @@ venv/
 
 # 工作区 agent 数据（本地保留，不入库）
 .workbuddy/
+
+# Local Windows QA toolchain, fixtures and screenshots
+/work/
+/outputs/
+/backend/tauri-host/agent-sidecar/yingxu-local-agent/

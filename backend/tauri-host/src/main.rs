@@ -116,7 +116,13 @@ fn resolve_local_agent_executable(
 fn stable_agent_signing_key() -> Result<String, CoreError> {
     let entry = keyring::Entry::new("app.yingxu.desktop.next.local-agent", "signing-key")
         .map_err(|_| CoreError::new("LOCAL_AGENT_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
-    match entry.get_password() {
+    #[cfg(windows)]
+    let stored = entry.get_secret().and_then(|bytes| {
+        decode_agent_signing_key(&bytes).map_err(|_| keyring::Error::BadEncoding(bytes))
+    });
+    #[cfg(not(windows))]
+    let stored = entry.get_password();
+    match stored {
         Ok(key) => Ok(key),
         Err(keyring::Error::NoEntry) => {
             use rsa::pkcs8::EncodePrivateKey;
@@ -129,7 +135,13 @@ fn stable_agent_signing_key() -> Result<String, CoreError> {
                     CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥编码失败")
                 })?
                 .to_string();
-            entry.set_password(&pem).map_err(|_| {
+            // Windows credentials are limited in bytes: UTF-16 password storage
+            // doubles this PEM beyond the limit. Store its ASCII/UTF-8 bytes.
+            #[cfg(windows)]
+            let saved = entry.set_secret(pem.as_bytes());
+            #[cfg(not(windows))]
+            let saved = entry.set_password(&pem);
+            saved.map_err(|_| {
                 CoreError::new(
                     "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
                     "无法保存本机 Agent 密钥",
@@ -142,6 +154,27 @@ fn stable_agent_signing_key() -> Result<String, CoreError> {
             "无法读取系统凭据库中的本机 Agent 密钥",
         )),
     }
+}
+
+#[cfg(windows)]
+fn decode_agent_signing_key(bytes: &[u8]) -> Result<String, ()> {
+    use rsa::pkcs8::DecodePrivateKey;
+    if let Ok(pem) = String::from_utf8(bytes.to_vec())
+        && rsa::RsaPrivateKey::from_pkcs8_pem(&pem).is_ok()
+    {
+        return Ok(pem);
+    }
+    // Preserve an existing key saved by the old Windows password format.
+    if !bytes.len().is_multiple_of(2) {
+        return Err(());
+    }
+    let wide: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let pem = String::from_utf16(&wide).map_err(|_| ())?;
+    rsa::RsaPrivateKey::from_pkcs8_pem(&pem).map_err(|_| ())?;
+    Ok(pem)
 }
 
 fn start_local_agent(
@@ -185,6 +218,11 @@ fn spawn_local_agent_with_timeout(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let mut command = Command::new(executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW: background Agent, no console flash.
+    }
     command
         .env_clear()
         .env("YINGXU_LOCAL_AGENT_MODE", "1")
@@ -1653,6 +1691,26 @@ mod agent_action_tests {
         assert!(tooltip.contains("剩余约 45秒"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_signing_key_fits_secret_storage_and_reads_legacy_format() {
+        use rsa::pkcs8::EncodePrivateKey;
+        let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+        let pem = key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
+        assert!(pem.len() <= 2560);
+        assert!(pem.encode_utf16().count() * 2 > 2560);
+        assert_eq!(
+            super::decode_agent_signing_key(pem.as_bytes()).unwrap(),
+            pem
+        );
+        let legacy: Vec<u8> = pem.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(super::decode_agent_signing_key(&legacy).unwrap(), pem);
+        assert!(super::decode_agent_signing_key(b"invalid key").is_err());
+    }
+
     #[test]
     fn tray_progress_handles_unknown_speed_and_idle_jobs() {
         let (_, running) = tray_progress(&tray_job("running", 0.0, 0));
@@ -1862,8 +1920,11 @@ mod agent_action_tests {
 
     #[test]
     fn packaged_local_agent_status_and_shutdown_round_trip() {
-        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("agent-sidecar/yingxu-local-agent/yingxu-local-agent");
+        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+            "agent-sidecar/yingxu-local-agent/yingxu-local-agent.exe"
+        } else {
+            "agent-sidecar/yingxu-local-agent/yingxu-local-agent"
+        });
         if !executable.is_file() {
             return;
         }
@@ -1933,8 +1994,11 @@ mod agent_action_tests {
         if std::env::var("YINGXU_RUN_OLLAMA_HOST_TESTS").as_deref() != Ok("1") {
             return;
         }
-        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("agent-sidecar/yingxu-local-agent/yingxu-local-agent");
+        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(if cfg!(windows) {
+            "agent-sidecar/yingxu-local-agent/yingxu-local-agent.exe"
+        } else {
+            "agent-sidecar/yingxu-local-agent/yingxu-local-agent"
+        });
         assert!(
             executable.is_file(),
             "stage the platform sidecar package first"

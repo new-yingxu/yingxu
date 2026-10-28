@@ -370,6 +370,7 @@ fn cred_file(provider: &str) -> PathBuf {
 #[cfg(windows)]
 pub fn store_token(provider: &str, token: &str) -> CoreResult<()> {
     // PowerShell + DPAPI：密文只有当前用户能解开，明文不落盘
+    use std::os::windows::process::CommandExt;
     let file = cred_file(provider);
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
@@ -379,6 +380,7 @@ pub fn store_token(provider: &str, token: &str) -> CoreResult<()> {
         file.display()
     );
     let out = std::process::Command::new("powershell")
+        .creation_flags(0x08000000)
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .env("YINGXU_TOKEN", token)
         .output()?;
@@ -391,6 +393,7 @@ pub fn store_token(provider: &str, token: &str) -> CoreResult<()> {
 
 #[cfg(windows)]
 pub fn load_token(provider: &str) -> CoreResult<Option<String>> {
+    use std::os::windows::process::CommandExt;
     let file = cred_file(provider);
     if !file.is_file() {
         return Ok(None);
@@ -400,6 +403,7 @@ pub fn load_token(provider: &str) -> CoreResult<Option<String>> {
         file.display()
     );
     let out = std::process::Command::new("powershell")
+        .creation_flags(0x08000000)
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()?;
     if !out.status.success() {

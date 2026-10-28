@@ -215,7 +215,7 @@ uvicorn==0.38.0
     # via
     #   -c cloud-service/requirements.lock
     #   -r cloud-service/requirements.txt
-uvloop==0.23.0
+uvloop==0.23.0 ; sys_platform != "win32"
     # via
     #   -c cloud-service/requirements.lock
     #   uvicorn

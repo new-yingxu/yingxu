@@ -8,7 +8,8 @@
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "verify:adapter": "vite build --ssr src/api/tauri.ts --outDir evidence/adapter-module && vite build --ssr src/api/local-agent.ts --outDir evidence/local-agent-module && vite build --ssr src/api/model-consent.ts --outDir evidence/model-consent-module && vite build --ssr src/api/local-file-actions.ts --outDir evidence/local-file-actions-module && node tests/local-agent.mjs && node tests/native-adapter.mjs && node tests/local-file-actions.mjs",
-    "verify:agent-conversation": "vite build --ssr src/api/model-consent.ts --outDir evidence/model-consent-module && node tests/new-agent-conversation.mjs"
+    "verify:agent-conversation": "vite build --ssr src/api/model-consent.ts --outDir evidence/model-consent-module && node tests/new-agent-conversation.mjs",
+    "verify:desktop": "vite build --config tests/desktop-qa.vite.ts && node tests/desktop-qa.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
@@ -17,6 +18,7 @@
     "vue": "latest"
   },
   "devDependencies": {
+    "playwright": "^1.64.1",
     "typescript": "~5.9.3",
     "vue-tsc": "latest"
   }

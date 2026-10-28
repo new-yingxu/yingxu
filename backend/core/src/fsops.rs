@@ -21,17 +21,11 @@ pub fn fingerprint(m: &fs::Metadata) -> Fingerprint {
         // Windows 上没有稳定的「卷序列号 + 文件索引」接口：
         // `MetadataExt::volume_serial_number()/file_index()` 仍属不稳定特性
         // `windows_by_handle`，直接用会让 Windows 目标编译失败。
-        // 这里退化为「创建时间 + 最后写时间 + 属性 + 大小」组合，仍能区分
-        // 「换了一块盘 / 换了一个文件」；真正的差异检测还有 bytes + modified_ns，
-        // 以及每次读写前的重新指纹比对，不单靠 identity。
+        // 这里以创建时间与属性作标识；内容变化另由 bytes、modified_ns 和
+        // SHA-256 检查。不能把写入时间/大小放入 identity，否则写临时文件后
+        // 无法识别并清理同一个文件，创建子项也会误判根目录已被替换。
         use std::os::windows::fs::MetadataExt;
-        format!(
-            "{:?}:{:?}:{:?}:{}",
-            m.creation_time(),
-            m.last_write_time(),
-            m.file_attributes(),
-            m.len()
-        )
+        format!("{}:{}", m.creation_time(), m.file_attributes())
     };
     #[cfg(not(any(unix, windows)))]
     let identity = format!("{:?}", m.created().ok());
@@ -65,10 +59,18 @@ pub fn relative(path: &Path) -> CoreResult<()> {
     Ok(())
 }
 pub fn local_directory(path: &Path) -> CoreResult<PathBuf> {
-    if !path.is_absolute()
-        || path.to_string_lossy().starts_with("//")
-        || path.to_string_lossy().starts_with("\\\\")
-    {
+    // canonicalize() returns \\?\C:\... on Windows. A verbatim drive path is
+    // still local; UNC shares and device namespaces must remain rejected.
+    #[cfg(windows)]
+    let local_prefix = matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_))
+    );
+    #[cfg(not(windows))]
+    let local_prefix =
+        !path.to_string_lossy().starts_with("//") && !path.to_string_lossy().starts_with("\\\\");
+    if !path.is_absolute() || !local_prefix {
         return Err(CoreError::new(
             "LOCAL_PATH_REQUIRED",
             "请选择本机/移动磁盘的绝对路径，不支持网络共享",
@@ -80,6 +82,11 @@ pub fn local_directory(path: &Path) -> CoreResult<PathBuf> {
     let mut walked = PathBuf::new();
     for c in path.components() {
         walked.push(c.as_os_str());
+        // A prefix such as \\?\D: is not a filesystem entry until the root
+        // separator has been added. Querying it fails with ERROR_INVALID_FUNCTION.
+        if matches!(c, Component::Prefix(_)) {
+            continue;
+        }
         let m = fs::symlink_metadata(&walked)?;
         if m.file_type().is_symlink() {
             return Err(CoreError::new("SYMLINK_REJECTED", walked.display()));
@@ -505,7 +512,18 @@ pub fn scan_report(root: &Path) -> CoreResult<ScanReport> {
         if e.file_type().is_dir() {
             continue;
         }
-        if let Some(detail) = unportable_reason(&shown) {
+        // Inspect names rather than the rendered relative path: backslashes
+        // separate directories on Windows and are not part of a filename.
+        if let Some(detail) = e
+            .path()
+            .strip_prefix(&dir.path)
+            .unwrap_or(e.path())
+            .components()
+            .find_map(|part| match part {
+                Component::Normal(name) => unportable_reason(&name.to_string_lossy()),
+                _ => None,
+            })
+        {
             skipped.push(SkippedEntry {
                 relative: shown,
                 reason: "unportable_name",
@@ -774,6 +792,8 @@ mod scan_tests {
         dir
     }
 
+    // A colon is an alternate data stream on NTFS, not a normal filename.
+    #[cfg(unix)]
     #[test]
     fn unportable_names_are_skipped_not_fatal() {
         let dir = unique("colon");
@@ -787,6 +807,46 @@ mod scan_tests {
         // 旧接口保持"只给文件列表"的语义
         assert_eq!(scan(&dir).unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_windows_paths_round_trip_and_network_paths_stay_rejected() {
+        let root = unique("windows-local");
+        let canonical = root.canonicalize().unwrap();
+        assert_eq!(local_directory(&root).unwrap(), canonical);
+        assert_eq!(local_directory(&canonical).unwrap(), canonical);
+        for path in [
+            r"\\server\share",
+            r"\\?\UNC\server\share",
+            r"\\.\PhysicalDrive0",
+            r"relative\folder",
+        ] {
+            assert_eq!(
+                local_directory(Path::new(path)).unwrap_err().code,
+                "LOCAL_PATH_REQUIRED"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn creating_children_does_not_invalidate_the_windows_directory_root() {
+        let root = unique("windows-root");
+        let dir = SafeDir::open(&root).unwrap();
+        let before = fingerprint(&std::fs::metadata(&root).unwrap()).identity;
+        write_new(&dir, Path::new("child/data.txt"), b"backup sample").unwrap();
+        dir.check_root().unwrap();
+        assert_eq!(
+            fingerprint(&std::fs::metadata(&root).unwrap()).identity,
+            before
+        );
+        assert_eq!(
+            std::fs::read(root.join("child/data.txt")).unwrap(),
+            b"backup sample"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]

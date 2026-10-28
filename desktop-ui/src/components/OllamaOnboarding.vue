@@ -53,7 +53,7 @@ onUnmounted(() => { mounted = false })
     <p v-if="failure" class="setup-error" role="alert">{{ failure }}</p>
     <p v-else class="state-detail">{{ view.detail }}</p>
 
-    <ol class="setup-steps">
+    <ol v-if="view.state !== 'ready'" class="setup-steps">
       <li>
         <div><b>手动安装并启动 Ollama</b><p>打开 Ollama 官方下载页，选择与你的电脑匹配的安装方式。安装完成后启动 Ollama 应用。</p></div>
         <a class="secondary-button" href="https://ollama.com/download" target="_blank" rel="noreferrer">打开官方下载页</a>
@@ -68,7 +68,7 @@ onUnmounted(() => { mounted = false })
       </li>
     </ol>
 
-    <aside class="hardware-note">
+    <aside v-if="view.state !== 'ready'" class="hardware-note">
       <b>设备与隐私提示</b>
       <p>模型文件约 4.7 GB，运行时还需要额外内存；内存或图形资源紧张时响应可能较慢。建议先确认磁盘空间充足，并关闭暂时不用的大型应用。照片、视频、完整路径和 GPS 不会发送给 Ollama 云端服务。</p>
     </aside>
@@ -76,7 +76,7 @@ onUnmounted(() => { mounted = false })
 </template>
 
 <style scoped>
-.ollama-onboarding{margin:0 0 14px;padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:var(--card)}
+.ollama-onboarding{--surface:var(--card-soft);--soft-green:var(--card-soft);margin:0 0 14px;padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:var(--card);min-width:0}
 .onboarding-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}.eyebrow{margin:0 0 4px;color:var(--muted);font-size:12px}.onboarding-heading h3{margin:0 0 6px;font-size:17px}.onboarding-heading p:last-child,.state-detail{margin:0;color:var(--muted);line-height:1.55;font-size:13px}.state-pill{padding:6px 10px;border-radius:999px;background:var(--surface,#f3f2ed);font-size:12px;font-weight:700;color:var(--text)}.state-pill[data-state=ready]{color:var(--green)}.state-pill[data-state=ollama_unavailable],.state-pill[data-state=model_not_installed]{color:var(--amber,#936b28)}.state-pill[data-state=sidecar_unavailable],.state-pill[data-state=unknown]{color:var(--red)}.state-detail,.setup-error{margin:12px 0}.setup-error{color:var(--red)}
 .setup-steps{list-style:none;padding:0;margin:14px 0;display:grid;gap:0}.setup-steps li{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-top:1px solid var(--line)}.setup-steps li>div:first-child{min-width:0}.setup-steps b{font-size:13px}.setup-steps p{margin:4px 0 0;color:var(--muted);font-size:12px;line-height:1.5}.secondary-button,.text-button{flex:none}.command-row{display:flex;align-items:center;gap:12px;max-width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface,#f8f7f3)}.command-row code{overflow-wrap:anywhere;font-size:12px}.hardware-note{padding:11px 13px;border-radius:10px;background:var(--soft-green,#eef3ed);font-size:12px}.hardware-note p{margin:4px 0 0;color:var(--muted);line-height:1.55}
 @media(max-width:700px){.ollama-onboarding{padding:15px}.setup-steps li{align-items:flex-start;flex-direction:column}.command-row{width:100%;box-sizing:border-box;justify-content:space-between}.onboarding-heading{display:block}.state-pill{display:inline-block;margin-top:10px}}
