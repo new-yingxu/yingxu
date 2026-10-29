@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     Emitter, Manager, WebviewUrl,
@@ -330,7 +330,7 @@ const MODEL_CREDENTIAL_ACCOUNT: &str = "byok-profile";
 const LOCAL_MODEL_ACCOUNT: &str = "local-model-profile";
 const ACTIVE_MODEL_ACCOUNT: &str = "active-provider";
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ModelProviderProfile {
     provider: String,
@@ -440,15 +440,68 @@ fn store_model_profile(account: &str, profile: &ModelProviderProfile) -> Result<
         .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "无法保存到系统凭据库"))
 }
 
-fn active_model_provider_profile() -> Result<Option<ModelProviderProfile>, CoreError> {
+#[derive(Clone)]
+struct ModelCredentialSnapshot {
+    cloud: Option<ModelProviderProfile>,
+    local: Option<ModelProviderProfile>,
+    active: Option<String>,
+}
+
+type CachedModelCredentialSnapshot = Option<(Instant, Result<ModelCredentialSnapshot, CoreError>)>;
+static MODEL_CREDENTIAL_SNAPSHOT: OnceLock<Mutex<CachedModelCredentialSnapshot>> = OnceLock::new();
+const MODEL_CREDENTIAL_ERROR_CACHE_TTL: Duration = Duration::from_secs(30);
+
+fn load_model_credential_snapshot() -> Result<ModelCredentialSnapshot, CoreError> {
     let cloud = read_model_provider_profile()?;
     let local = read_local_model_profile()?;
     let active = read_active_model_provider()?;
-    if matches!(active.as_deref(), Some("deepseek" | "dashscope")) {
-        return Ok(cloud);
+    Ok(ModelCredentialSnapshot {
+        cloud,
+        local,
+        active,
+    })
+}
+
+fn model_credential_snapshot() -> Result<ModelCredentialSnapshot, CoreError> {
+    let cache = MODEL_CREDENTIAL_SNAPSHOT.get_or_init(|| Mutex::new(None));
+    cached_model_credential_snapshot(cache, load_model_credential_snapshot)
+}
+
+fn cached_model_credential_snapshot(
+    cache: &Mutex<CachedModelCredentialSnapshot>,
+    load: impl FnOnce() -> Result<ModelCredentialSnapshot, CoreError>,
+) -> Result<ModelCredentialSnapshot, CoreError> {
+    let mut cached = cache
+        .lock()
+        .map_err(|_| CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "系统凭据读取状态不可用"))?;
+    if let Some((loaded_at, value)) = cached.as_ref()
+        && (value.is_ok() || loaded_at.elapsed() < MODEL_CREDENTIAL_ERROR_CACHE_TTL)
+    {
+        return value.clone();
     }
-    if active.as_deref() == Some("ollama") {
-        return Ok(local.or_else(|| {
+
+    // Keep the lock during the first read so concurrent Tauri commands share one
+    // keychain interaction instead of opening overlapping authorization dialogs.
+    let value = load();
+    *cached = Some((Instant::now(), value.clone()));
+    value
+}
+
+fn invalidate_model_credential_snapshot() {
+    if let Some(cache) = MODEL_CREDENTIAL_SNAPSHOT.get()
+        && let Ok(mut cached) = cache.lock()
+    {
+        *cached = None;
+    }
+}
+
+fn active_model_provider_profile() -> Result<Option<ModelProviderProfile>, CoreError> {
+    let snapshot = model_credential_snapshot()?;
+    if matches!(snapshot.active.as_deref(), Some("deepseek" | "dashscope")) {
+        return Ok(snapshot.cloud);
+    }
+    if snapshot.active.as_deref() == Some("ollama") {
+        return Ok(snapshot.local.or_else(|| {
             Some(ModelProviderProfile {
                 provider: "ollama".into(),
                 model: "qwen2.5:7b".into(),
@@ -458,7 +511,7 @@ fn active_model_provider_profile() -> Result<Option<ModelProviderProfile>, CoreE
     }
     // Backward compatibility: a previously saved BYOK profile remains active
     // until the user explicitly selects a local model.
-    Ok(cloud.or(local))
+    Ok(snapshot.cloud.or(snapshot.local))
 }
 
 fn validate_model_provider_profile(
@@ -524,19 +577,17 @@ async fn agent_model_provider_config(
         let state = app.state::<HostState>();
         match action.as_str() {
             "status" => {
-                let cloud = read_model_provider_profile()?;
-                let local = read_local_model_profile()?;
-                let local_model = local.as_ref().map_or_else(|| "qwen2.5:7b".to_string(), |value| value.model.clone());
-                let active = read_active_model_provider()?;
-                if active.as_deref().is_some_and(|value| value == "deepseek" || value == "dashscope")
-                    || (active.is_none() && cloud.is_some())
+                let snapshot = model_credential_snapshot()?;
+                let local_model = snapshot.local.as_ref().map_or_else(|| "qwen2.5:7b".to_string(), |value| value.model.clone());
+                if snapshot.active.as_deref().is_some_and(|value| value == "deepseek" || value == "dashscope")
+                    || (snapshot.active.is_none() && snapshot.cloud.is_some())
                 {
-                    let value = cloud.ok_or_else(|| CoreError::new("MODEL_CONFIGURATION_INVALID", "云端模型配置不存在"))?;
+                    let value = snapshot.cloud.ok_or_else(|| CoreError::new("MODEL_CONFIGURATION_INVALID", "云端模型配置不存在"))?;
                     Ok(serde_json::json!({"configured": true, "provider": &value.provider, "model": &value.model, "secretStorage": "os_keychain", "cloudKeyStored": true, "localModel": local_model, "cloudProvider": &value.provider, "cloudModel": &value.model}))
                 } else {
-                    let cloud_provider = cloud.as_ref().map(|value| value.provider.as_str());
-                    let cloud_model = cloud.as_ref().map(|value| value.model.as_str());
-                    Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": local_model.clone(), "secretStorage": "os_keychain", "cloudKeyStored": cloud.is_some(), "localModel": local_model, "cloudProvider": cloud_provider, "cloudModel": cloud_model}))
+                    let cloud_provider = snapshot.cloud.as_ref().map(|value| value.provider.as_str());
+                    let cloud_model = snapshot.cloud.as_ref().map(|value| value.model.as_str());
+                    Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": local_model.clone(), "secretStorage": "os_keychain", "cloudKeyStored": snapshot.cloud.is_some(), "localModel": local_model, "cloudProvider": cloud_provider, "cloudModel": cloud_model}))
                 }
             }
             "save" => {
@@ -547,6 +598,7 @@ async fn agent_model_provider_config(
                 let value = ModelProviderProfile { provider: provider.to_string(), model: model.to_string(), api_key: api_key.to_string() };
                 store_model_profile(MODEL_CREDENTIAL_ACCOUNT, &value)?;
                 set_active_model_provider(provider)?;
+                invalidate_model_credential_snapshot();
                 restart_local_agent_if_running(&state)?;
                 Ok(serde_json::json!({"configured": true, "provider": provider, "model": model, "secretStorage": "os_keychain", "cloudKeyStored": true}))
             }
@@ -555,28 +607,32 @@ async fn agent_model_provider_config(
                 if !valid_local_model_name(model) {
                     return Err(CoreError::new("INVALID_MODEL_CONFIGURATION", "本机模型名称无效"));
                 }
+                let cloud_key_stored = model_credential_snapshot()?.cloud.is_some();
                 let value = ModelProviderProfile { provider: "ollama".into(), model: model.into(), api_key: String::new() };
                 store_model_profile(LOCAL_MODEL_ACCOUNT, &value)?;
                 set_active_model_provider("ollama")?;
+                invalidate_model_credential_snapshot();
                 restart_local_agent_if_running(&state)?;
-                let cloud = read_model_provider_profile()?;
-                Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": model, "secretStorage": "os_keychain", "cloudKeyStored": cloud.is_some(), "localModel": model, "cloudProvider": cloud.as_ref().map(|profile| profile.provider.as_str()), "cloudModel": cloud.as_ref().map(|profile| profile.model.as_str())}))
+                Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": model, "secretStorage": "os_keychain", "cloudKeyStored": cloud_key_stored, "localModel": model}))
             }
             "activate_cloud_model" => {
-                let value = read_model_provider_profile()?.ok_or_else(|| CoreError::new("MODEL_CONFIGURATION_MISSING", "尚未配置云端模型，请先在 Agent 设置中保存模型和 API Key"))?;
+                let snapshot = model_credential_snapshot()?;
+                let value = snapshot.cloud.ok_or_else(|| CoreError::new("MODEL_CONFIGURATION_MISSING", "尚未配置云端模型，请先在 Agent 设置中保存模型和 API Key"))?;
                 set_active_model_provider(&value.provider)?;
                 restart_local_agent_if_running(&state)?;
-                let local = read_local_model_profile()?;
+                invalidate_model_credential_snapshot();
+                let local = snapshot.local;
                 Ok(serde_json::json!({"configured": true, "provider": &value.provider, "model": &value.model, "secretStorage": "os_keychain", "cloudKeyStored": true, "localModel": local.map_or_else(|| "qwen2.5:7b".to_string(), |profile| profile.model.clone()), "cloudProvider": &value.provider, "cloudModel": &value.model}))
             }
             "remove" => {
+                let local = model_credential_snapshot()?.local;
                 match entry.delete_credential() {
                     Ok(()) | Err(keyring::Error::NoEntry) => {},
                     Err(_) => return Err(CoreError::new("MODEL_KEYSTORE_UNAVAILABLE", "无法从系统凭据库移除模型密钥")),
                 }
                 set_active_model_provider("ollama")?;
+                invalidate_model_credential_snapshot();
                 restart_local_agent_if_running(&state)?;
-                let local = read_local_model_profile()?;
                 Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": local.map_or_else(|| "qwen2.5:7b".to_string(), |value| value.model.clone()), "secretStorage": "os_keychain", "cloudKeyStored": false}))
             }
             _ => Err(CoreError::new("INVALID_MODEL_ACTION", "模型配置操作无效")),
@@ -2461,9 +2517,10 @@ fn main() {
 #[cfg(test)]
 mod agent_action_tests {
     use super::{
-        HostState, cached_agent_signing_key, check_paths, local_agent_request,
-        local_agent_status_or_unavailable, resolve_local_agent_executable, spawn_local_agent,
-        spawn_local_agent_with_timeout, stop_local_agent_process, tray_progress,
+        CachedModelCredentialSnapshot, HostState, ModelCredentialSnapshot,
+        cached_agent_signing_key, cached_model_credential_snapshot, check_paths,
+        local_agent_request, local_agent_status_or_unavailable, resolve_local_agent_executable,
+        spawn_local_agent, spawn_local_agent_with_timeout, stop_local_agent_process, tray_progress,
         validate_action_expiry, validate_local_turn_request, validate_local_turn_response,
     };
     use std::collections::{HashMap, HashSet};
@@ -2506,6 +2563,46 @@ mod agent_action_tests {
             })
             .unwrap_err();
             assert_eq!(error.code, "KEYCHAIN_LOCKED");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn model_credential_snapshot_is_shared_across_concurrent_status_reads() {
+        let cache: Mutex<CachedModelCredentialSnapshot> = Mutex::new(None);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        for _ in 0..2 {
+            let snapshot = cached_model_credential_snapshot(&cache, || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(ModelCredentialSnapshot {
+                    cloud: None,
+                    local: None,
+                    active: Some("ollama".into()),
+                })
+            })
+            .unwrap();
+            assert_eq!(snapshot.active.as_deref(), Some("ollama"));
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn failed_model_credential_read_is_cached_to_avoid_prompt_loop() {
+        let cache: Mutex<CachedModelCredentialSnapshot> = Mutex::new(None);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        for _ in 0..2 {
+            let result = cached_model_credential_snapshot(&cache, || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(yingxu_core::CoreError::new(
+                    "MODEL_KEYSTORE_UNAVAILABLE",
+                    "synthetic keychain denial",
+                ))
+            });
+            let error = match result {
+                Ok(_) => panic!("expected keychain read failure"),
+                Err(error) => error,
+            };
+            assert_eq!(error.code, "MODEL_KEYSTORE_UNAVAILABLE");
         }
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
