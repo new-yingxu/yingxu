@@ -41,6 +41,7 @@ interface Options {
   invoke?: Invoke;
   listen?: typeof listen;
   confirm?: (value: Confirmation) => Promise<boolean>;
+  confirmModelUse?: (value: Confirmation) => Promise<boolean>;
 }
 interface RawPreset {
   id: string;
@@ -87,6 +88,7 @@ function mapPreset(p: RawPreset): NamePreset {
 export function createTauriApi(options: Options = {}): AppApi {
   const invoke = options.invoke || nativeInvoke;
   const confirm = options.confirm || (() => Promise.resolve(false));
+  const confirmModelUse = options.confirmModelUse || confirm;
   const presetCache = new Map<string, RawPreset>();
   const transferSelections = new Map<
     string,
@@ -129,7 +131,7 @@ export function createTauriApi(options: Options = {}): AppApi {
         throw new ApiError("INVALID_REPLY", "本机操作回执无效", "agent_confirm_action");
       return receipt;
     },
-    confirmModelUse: confirm,
+    confirmModelUse,
   });
   async function rpc<T>(method: string, params: unknown = {}): Promise<T> {
     const requestId = `desktop-${Date.now()}-${++counter}`;

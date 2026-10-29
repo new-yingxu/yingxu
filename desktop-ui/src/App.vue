@@ -112,6 +112,7 @@ const api = (props.createApi || createDesktopApi)(
       pendingConfirmation.value = value;
       resolveConfirmation = resolve;
     }),
+  async () => true,
 );
 const isMock = api.mode === "mock";
 const localWorkspace = ref(false);
@@ -2558,7 +2559,7 @@ function taskStateLabel(state: TaskState) {
                 <p v-if="agentHasArchivedUnresolvedTurn" role="status" class="safety-callout">
                   上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。
                 </p>
-                <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" :hide-status="true" @reply="appendModelReply" @unavailable="say" />
+                <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" :hide-status="true" :auto-confirm="true" @reply="appendModelReply" @unavailable="say" />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"

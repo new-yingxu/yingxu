@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import type { AgentReply, ModelService, ModelStatus } from '../api/contracts'
-import { createModelConsent, modelFailure, type ModelPlan } from '../api/model-consent'
+import { createModelConsent, executeModelSend, modelFailure, type ModelPlan } from '../api/model-consent'
 import { localAgentStatusView, withLocalAgentStatusTimeout } from '../api/local-agent'
-const props=defineProps<{ service?: ModelService; query: string; hideStatus?: boolean }>()
+const props=defineProps<{ service?: ModelService; query: string; hideStatus?: boolean; autoConfirm?: boolean }>()
 const emit=defineEmits<{
   reply: [value: { query: string; reply: AgentReply }]
   unavailable: [message: string]
@@ -49,6 +49,16 @@ async function prepare(query=props.query) {
 }
 async function submit(query:string) {
   if(!query.trim())return
+  if(props.autoConfirm){
+    if(!controller||busy.value||plan.value||recoveryReview.value)return
+    busy.value=true;failure.value=null
+    try{
+      const reply=await executeModelSend(controller,query.trim(),{sessionId,turnId:crypto.randomUUID()})
+      if(reply&&mounted)emit('reply',{query:query.trim(),reply})
+    }catch(error){if(mounted){failure.value=modelFailure(error);if(props.hideStatus)emit('unavailable',failure.value.message);recoveryRequired.value=controller.requiresRecovery();recoveryAvailable.value=controller.canResume()}}
+    finally{if(mounted)busy.value=false}
+    return
+  }
   await prepare(query.trim())
 }
 async function confirm(accepted:boolean) {

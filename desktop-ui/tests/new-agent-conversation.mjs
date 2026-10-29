@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-import { createModelConsent } from '../evidence/model-consent-module/model-consent.js'
+import { createModelConsent, executeModelSend } from '../evidence/model-consent-module/model-consent.js'
 
 const configured = {
   configured: true,
@@ -53,8 +53,7 @@ oldConsent.stop()
 // The UI remounts ModelConsent only after the user accepts the separate new-chat warning.
 const newIdentity = { sessionId: 'new-session', turnId: 'new-turn' }
 const newConsent = createModelConsent(service)
-const newPlan = await newConsent.prepare('只查合成索引 IMG_2048.jpg', newIdentity)
-const reply = await newConsent.confirm(newPlan, true)
+const reply = await executeModelSend(newConsent, '只查合成索引 IMG_2048.jpg', newIdentity)
 assert.equal(reply.text, '合成素材已找到。')
 assert.notEqual(newIdentity.sessionId, oldIdentity.sessionId)
 assert.notEqual(newIdentity.turnId, oldIdentity.turnId)
@@ -79,8 +78,13 @@ assert.match(consentComponent, /const sessionId=crypto\.randomUUID\(\)/)
 assert.match(consentComponent, /turnId:crypto\.randomUUID\(\)/)
 assert.match(consentComponent, /requiresRecovery:\s*\(\)\s*=>/)
 assert.match(consentComponent, /isBusy:\s*\(\)\s*=>/)
+assert.match(consentComponent, /if\(props\.autoConfirm\)/)
+assert.match(app, /:auto-confirm="true"/)
+const tray = await readFile(new URL('../src/components/TrayAgentPanel.vue', import.meta.url), 'utf8')
+assert.match(tray, /confirmModelUse: async \(\) => true/)
+assert.match(tray, /:auto-confirm="true"/)
 
 console.log('PASS unresolved old turn is not replayed')
-console.log('PASS a user-confirmed new conversation receives a separate session and turn')
+console.log('PASS Send dispatches one new turn with a separate session and turn')
 console.log('PASS old ledger record remains unchanged')
 console.log(`PASS provider request count is bounded to ${providerRequests} synthetic local calls`)

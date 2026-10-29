@@ -144,3 +144,13 @@ export function createModelConsent(service: ModelService) {
     },
   }
 }
+
+/** The explicit Send action is the user's authorization to dispatch this turn. */
+export async function executeModelSend(
+  controller: Pick<ReturnType<typeof createModelConsent>, 'prepare' | 'confirm'>,
+  query: string,
+  identity: { sessionId: string; turnId: string },
+) {
+  const plan = await controller.prepare(query, identity)
+  return controller.confirm(plan, true)
+}

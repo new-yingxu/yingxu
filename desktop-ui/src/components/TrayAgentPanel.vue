@@ -8,7 +8,7 @@ import type { AgentReply, ModelProviderConfig } from "../api/contracts";
 
 type Message = { role: "user" | "assistant"; text: string; reply?: AgentReply; actionId?: string };
 type JobStatus = { active: boolean; state?: string; progress?: number; speedBytesPerSecond?: number; remainingSeconds?: number | null };
-const api = createTauriApi({ confirm: async () => false });
+const api = createTauriApi({ confirm: async () => false, confirmModelUse: async () => true });
 const input = ref("");
 const busy = ref(false);
 const consent = ref<InstanceType<typeof ModelConsent> | null>(null);
@@ -170,7 +170,7 @@ onUnmounted(() => {
           </div>
         </article>
       </div>
-      <ModelConsent ref="consent" :service="api.model" :query="input" @reply="appendReply" />
+      <ModelConsent ref="consent" :service="api.model" :query="input" :auto-confirm="true" @reply="appendReply" />
       <form class="tray-composer" @submit.prevent="send">
         <input v-model="input" maxlength="500" placeholder="问问本机素材或备份…" />
         <button type="submit" :disabled="busy || !input.trim()">{{ busy ? '等待…' : '发送' }}</button>
