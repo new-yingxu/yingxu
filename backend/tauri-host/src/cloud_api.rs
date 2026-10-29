@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt,
     io::Read,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -12,9 +13,16 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 const EXCHANGE_PATH: &str = "/v1/auth/session/exchange";
 const LOGOUT_PATH: &str = "/v1/auth/logout";
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+const MAX_DOH_RESPONSE_BYTES: u64 = 32 * 1024;
 const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 const KEYRING_SERVICE: &str = "app.yingxu.desktop.cloud";
 const KEYRING_ACCOUNT: &str = "device-session-v1";
+const DOH_HOST: &str = "cloudflare-dns.com";
+const DOH_ENDPOINT: &str = "https://cloudflare-dns.com/dns-query";
+const DOH_BOOTSTRAP_ADDRESSES: &[SocketAddr] = &[
+    SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(1, 1, 1, 1)), 443),
+    SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::new(1, 0, 0, 1)), 443),
+];
 
 #[derive(Clone)]
 pub struct CloudApiConfig {
@@ -192,13 +200,20 @@ impl CloudApiClient {
 
     pub fn from_embedded_config() -> Result<Self, CloudApiError> {
         let config = CloudApiConfig::from_embedded_config()?;
-        let client = Client::builder()
+        let host = config
+            .origin
+            .host_str()
+            .ok_or(CloudApiError::InvalidConfiguration)?;
+        let resolved_addresses = resolve_api_host_over_doh(host).ok();
+        let mut builder = Client::builder()
             .https_only(true)
             .redirect(Policy::none())
             .timeout(Duration::from_secs(20))
-            .no_proxy()
-            .build()
-            .map_err(|_| CloudApiError::Unavailable)?;
+            .no_proxy();
+        if let Some(addresses) = resolved_addresses.as_deref() {
+            builder = builder.resolve_to_addrs(host, addresses);
+        }
+        let client = builder.build().map_err(|_| CloudApiError::Unavailable)?;
         Ok(Self::new(
             config,
             Arc::new(NativeCloudApiTransport { client }),
@@ -426,6 +441,83 @@ impl CloudApiClient {
         }
         Ok(url)
     }
+}
+
+#[derive(Deserialize)]
+struct DohResponse {
+    #[serde(rename = "Status")]
+    status: u8,
+    #[serde(default, rename = "Answer")]
+    answers: Vec<DohAnswer>,
+}
+
+#[derive(Deserialize)]
+struct DohAnswer {
+    #[serde(rename = "type")]
+    record_type: u16,
+    data: String,
+}
+
+/// Resolve only the configured Yingxu API origin through an HTTPS DNS query.
+/// The bootstrap address is pinned so this lookup still works when the VPN's
+/// configured recursive DNS servers cannot resolve the API hostname. TLS is
+/// verified against `cloudflare-dns.com`; all other host lookups remain native.
+fn resolve_api_host_over_doh(host: &str) -> Result<Vec<SocketAddr>, CloudApiError> {
+    let mut url = Url::parse(DOH_ENDPOINT).map_err(|_| CloudApiError::InvalidEndpoint)?;
+    url.query_pairs_mut()
+        .append_pair("name", host)
+        .append_pair("type", "A");
+    let client = Client::builder()
+        .https_only(true)
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(6))
+        .no_proxy()
+        .resolve_to_addrs(DOH_HOST, DOH_BOOTSTRAP_ADDRESSES)
+        .build()
+        .map_err(|_| CloudApiError::Unavailable)?;
+    let mut response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/dns-json")
+        .send()
+        .map_err(|_| CloudApiError::Unavailable)?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_DOH_RESPONSE_BYTES)
+    {
+        return Err(CloudApiError::Unavailable);
+    }
+    let mut bytes = Vec::new();
+    (&mut response)
+        .take(MAX_DOH_RESPONSE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CloudApiError::Unavailable)?;
+    if bytes.len() as u64 > MAX_DOH_RESPONSE_BYTES {
+        return Err(CloudApiError::InvalidResponse);
+    }
+    let answer: DohResponse =
+        serde_json::from_slice(&bytes).map_err(|_| CloudApiError::InvalidResponse)?;
+    if answer.status != 0 {
+        return Err(CloudApiError::Unavailable);
+    }
+    let mut addresses = answer
+        .answers
+        .into_iter()
+        .filter(|record| record.record_type == 1 || record.record_type == 28)
+        .filter_map(|record| {
+            record
+                .data
+                .parse::<IpAddr>()
+                .ok()
+                .map(|ip| SocketAddr::new(ip, 443))
+        })
+        .collect::<Vec<_>>();
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() {
+        return Err(CloudApiError::Unavailable);
+    }
+    Ok(addresses)
 }
 
 fn valid_route_id(value: &str) -> bool {

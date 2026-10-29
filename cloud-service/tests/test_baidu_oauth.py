@@ -2,6 +2,7 @@
 import json
 import os
 import unittest
+from urllib.error import HTTPError
 from dataclasses import replace
 from unittest.mock import patch, MagicMock
 import test_graph_checkpoint_http as fixtures
@@ -60,6 +61,7 @@ class BaiduOAuthHTTP(unittest.TestCase):
         opener.open.assert_called_once()
         request = opener.open.call_args.args[0]
         self.assertTrue(request.full_url.startswith(baidu_oauth.TOKEN_ENDPOINT+'?'))
+        self.assertIn('openapi=xpansdk', request.full_url)
         self.assertIn('redirect_uri=http%3A%2F%2F127.0.0.1%3A8765%2Fcallback',request.full_url)
         self.assertNotIn('never-return',result.text)
 
@@ -80,6 +82,21 @@ class BaiduOAuthHTTP(unittest.TestCase):
         with patch('app.main._device',side_effect=__import__('fastapi').HTTPException(403)),patch('app.baidu_oauth.exchange') as exchange:
             self.assertEqual(self.client.post('/v1/netdisk/baidu/token',json=payload,headers=self.headers).status_code,403)
             exchange.assert_not_called()
+
+    def test_provider_http_rejections_are_safely_classified_without_echoing_body(self):
+        self.configured()
+        payload={'grant_type':'authorization_code','credential':'synthetic-code'}
+        for provider_error, expected in [('invalid_client','BAIDU_CLIENT_REJECTED'),
+                                         ('invalid_grant','BAIDU_AUTHORIZATION_REJECTED')]:
+            response=HTTPError(baidu_oauth.TOKEN_ENDPOINT,400,'rejected',{},__import__('io').BytesIO(
+                json.dumps({'error':provider_error,'error_description':'contains-sensitive-provider-detail'}).encode()))
+            opener=MagicMock();opener.open.side_effect=response
+            with patch('app.baidu_oauth.build_opener', return_value=opener):
+                result=self.client.post('/v1/netdisk/baidu/token',json=payload,headers=self.headers)
+            self.assertEqual(result.status_code,502)
+            self.assertEqual(result.json()['detail']['code'],expected)
+            self.assertNotIn('contains-sensitive',result.text)
+            self.assertNotIn('synthetic-code',result.text)
 
     def test_secret_repr_and_folder_traversal(self):
         self.configured()
