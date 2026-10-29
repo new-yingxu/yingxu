@@ -549,7 +549,7 @@ impl Engine {
             let part_size = bytes.len() as f64;
             let part_started = std::time::Instant::now();
             let value = transport.call("upload", token, &fields, Some(bytes))?;
-            if value["md5"].as_str() != Some(task.blocks[index].as_str()) {
+            if !md5_matches(value["md5"].as_str(), &task.blocks[index]) {
                 return Err(error("BAIDU_REMOTE_HASH_MISMATCH"));
             }
             task.chunks_done.push(index);
@@ -583,7 +583,7 @@ fn verify(task: &mut BaiduTask, value: &Value) -> CoreResult<()> {
     if task.remote_id.is_none()
         || value["path"] != task.remote_path
         || value["size"].as_u64() != Some(task.bytes)
-        || value["md5"].as_str() != Some(task.md5.as_str())
+        || !md5_matches(value["md5"].as_str(), &task.md5)
     {
         return Err(error("BAIDU_REMOTE_HASH_MISMATCH"));
     }
@@ -591,6 +591,10 @@ fn verify(task: &mut BaiduTask, value: &Value) -> CoreResult<()> {
     task.error = None;
     task.verification = Some("provider_md5_and_size".into());
     Ok(())
+}
+
+fn md5_matches(actual: Option<&str>, expected: &str) -> bool {
+    actual.is_some_and(|value| value.eq_ignore_ascii_case(expected))
 }
 
 #[cfg(test)]
@@ -602,6 +606,7 @@ mod tests {
         fail_part: Cell<bool>,
         lose_create: Cell<bool>,
         bad_md5: Cell<bool>,
+        uppercase_md5: Cell<bool>,
         uploads: RefCell<Vec<usize>>,
         creates: Cell<usize>,
         value: RefCell<Value>,
@@ -612,6 +617,7 @@ mod tests {
                 fail_part: Cell::new(false),
                 lose_create: Cell::new(false),
                 bad_md5: Cell::new(false),
+                uppercase_md5: Cell::new(false),
                 uploads: RefCell::new(vec![]),
                 creates: Cell::new(0),
                 value: RefCell::new(Value::Null),
@@ -644,9 +650,17 @@ mod tests {
                     }
                     let data = part.unwrap();
                     assert!(data.len() <= CHUNK);
-                    Ok(
-                        json!({"md5":if self.bad_md5.get(){"wrong".into()}else{format!("{:x}",Md5::digest(data))}}),
-                    )
+                    let md5 = if self.bad_md5.get() {
+                        "wrong".into()
+                    } else {
+                        let value = format!("{:x}", Md5::digest(data));
+                        if self.uppercase_md5.get() {
+                            value.to_ascii_uppercase()
+                        } else {
+                            value
+                        }
+                    };
+                    Ok(json!({"md5":md5}))
                 }
                 "create" => {
                     self.creates.set(self.creates.get() + 1);
@@ -711,6 +725,20 @@ mod tests {
         assert_eq!(mock.creates.get(), 1);
         let raw = fs::read_to_string(task_path(&e.store.root, &task).unwrap()).unwrap();
         assert!(!raw.contains("synthetic-token"));
+    }
+    #[test]
+    fn md5_comparison_accepts_hex_case_variants() {
+        let (_dir, e, replica, task) = fixture(b"synthetic");
+        let mock = Mock::new();
+        mock.uppercase_md5.set(true);
+        prepare(&e, &replica, &task, &mock);
+        let value = mock.value.borrow().clone();
+        mock.value.borrow_mut()["md5"] = value["md5"].as_str().unwrap().to_ascii_uppercase().into();
+        let result = e
+            .baidu_run("owner", &task, "synthetic-token", &mock)
+            .unwrap();
+        assert_eq!(result["state"], "completed");
+        assert_eq!(result["verification"], "provider_md5_and_size");
     }
     #[test]
     fn refuse_unverified_or_changed_replica_before_any_network() {
