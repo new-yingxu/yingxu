@@ -367,6 +367,7 @@ export function createTauriApi(options: Options = {}): AppApi {
     modelProviderConfig: {
       status: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "status" }),
       selectLocalModel: (model) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "select_local_model", model }),
+      activateCloudModel: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "activate_cloud_model" }),
       save: (provider, model, apiKey) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "save", provider, model, apiKey }),
       remove: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "remove" }),
     },

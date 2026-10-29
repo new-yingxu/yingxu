@@ -269,7 +269,8 @@ async fn agent_model_provider_config(
     api_key: Option<String>,
 ) -> Result<serde_json::Value, CoreError> {
     let allowed_window = window.label() == "main"
-        || (window.label() == "tray-agent" && matches!(action.as_str(), "status" | "select_local_model"));
+        || (window.label() == "tray-agent"
+            && matches!(action.as_str(), "status" | "select_local_model"));
     if !allowed_window {
         return Err(CoreError::new(
             "PERMISSION_DENIED",
@@ -290,9 +291,11 @@ async fn agent_model_provider_config(
                     || (active.is_none() && cloud.is_some())
                 {
                     let value = cloud.ok_or_else(|| CoreError::new("MODEL_CONFIGURATION_INVALID", "云端模型配置不存在"))?;
-                    Ok(serde_json::json!({"configured": true, "provider": &value.provider, "model": &value.model, "secretStorage": "os_keychain", "cloudKeyStored": true, "localModel": local_model}))
+                    Ok(serde_json::json!({"configured": true, "provider": &value.provider, "model": &value.model, "secretStorage": "os_keychain", "cloudKeyStored": true, "localModel": local_model, "cloudProvider": &value.provider, "cloudModel": &value.model}))
                 } else {
-                    Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": local_model.clone(), "secretStorage": "os_keychain", "cloudKeyStored": cloud.is_some(), "localModel": local_model}))
+                    let cloud_provider = cloud.as_ref().map(|value| value.provider.as_str());
+                    let cloud_model = cloud.as_ref().map(|value| value.model.as_str());
+                    Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": local_model.clone(), "secretStorage": "os_keychain", "cloudKeyStored": cloud.is_some(), "localModel": local_model, "cloudProvider": cloud_provider, "cloudModel": cloud_model}))
                 }
             }
             "save" => {
@@ -315,7 +318,15 @@ async fn agent_model_provider_config(
                 store_model_profile(LOCAL_MODEL_ACCOUNT, &value)?;
                 set_active_model_provider("ollama")?;
                 restart_local_agent_if_running(&state)?;
-                Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": model, "secretStorage": "os_keychain", "cloudKeyStored": read_model_provider_profile()?.is_some()}))
+                let cloud = read_model_provider_profile()?;
+                Ok(serde_json::json!({"configured": false, "provider": "ollama", "model": model, "secretStorage": "os_keychain", "cloudKeyStored": cloud.is_some(), "localModel": model, "cloudProvider": cloud.as_ref().map(|profile| profile.provider.as_str()), "cloudModel": cloud.as_ref().map(|profile| profile.model.as_str())}))
+            }
+            "activate_cloud_model" => {
+                let value = read_model_provider_profile()?.ok_or_else(|| CoreError::new("MODEL_CONFIGURATION_MISSING", "尚未配置云端模型，请先在 Agent 设置中保存模型和 API Key"))?;
+                set_active_model_provider(&value.provider)?;
+                restart_local_agent_if_running(&state)?;
+                let local = read_local_model_profile()?;
+                Ok(serde_json::json!({"configured": true, "provider": &value.provider, "model": &value.model, "secretStorage": "os_keychain", "cloudKeyStored": true, "localModel": local.map_or_else(|| "qwen2.5:7b".to_string(), |profile| profile.model.clone()), "cloudProvider": &value.provider, "cloudModel": &value.model}))
             }
             "remove" => {
                 match entry.delete_credential() {

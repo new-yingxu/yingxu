@@ -201,3 +201,4 @@ body{min-width:0}
 .chat-panel>.agent-footnote{margin:auto 0 0}
 .chat-panel>.chat-scroll.chat-scroll-empty{display:flex;flex:1 1 auto;flex-direction:column;justify-content:center}
 .chat-scroll-empty>.agent-welcome{width:100%;margin:auto 0}
+.composer .agent-composer-model{box-sizing:border-box;flex:0 1 190px;min-width:118px;max-width:220px;height:38px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit;font-size:11px;text-overflow:ellipsis}.composer .agent-composer-model:disabled{opacity:.72}@media(max-width:620px){.composer{flex-wrap:wrap}.composer input{flex-basis:100%}.composer .agent-composer-model{flex:1;max-width:none}}

@@ -364,10 +364,13 @@ export interface ModelProviderConfig {
   secretStorage: "os_keychain";
   cloudKeyStored?: boolean;
   localModel?: string;
+  cloudProvider?: "dashscope" | "deepseek";
+  cloudModel?: string;
 }
 export interface ModelProviderConfigService {
   status(): Promise<ModelProviderConfig>;
   selectLocalModel(model: string): Promise<ModelProviderConfig>;
+  activateCloudModel(): Promise<ModelProviderConfig>;
   save(provider: "dashscope" | "deepseek", model: string, apiKey: string): Promise<ModelProviderConfig>;
   remove(): Promise<ModelProviderConfig>;
 }

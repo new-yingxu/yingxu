@@ -31,6 +31,7 @@ import type {
   LocalCapabilities,
   MediaAnalysis,
   AppApi,
+  ModelProviderConfig,
   ScanReport, IndexResult,
 } from "./api/contracts";
 import { createDesktopApi } from "./api";
@@ -214,6 +215,10 @@ const backupPreset = ref("preset-camera");
 const backupTask = ref<ArchiveTask | null>(null);
 const newPresetName = ref("");
 const agentInput = ref("");
+const agentModelConfig = ref<ModelProviderConfig | null>(null);
+const agentLocalModels = ref<string[]>([]);
+const agentSelectedModel = ref("");
+const agentModelBusy = ref(false);
 const agentSettingsOpen = ref(false);
 const agentActionBusy = ref(false);
 const agentConversationKey = ref(0);
@@ -231,6 +236,17 @@ type AgentMessage = {
   actionId?: string;
 };
 const agentMessages = ref<AgentMessage[]>([]);
+const agentModelValue = computed(() => agentModelConfig.value?.configured && agentModelConfig.value.provider !== "ollama"
+  ? `cloud:${agentModelConfig.value.provider}:${agentModelConfig.value.model}`
+  : `local:${agentModelConfig.value?.localModel || agentModelConfig.value?.model || ""}`);
+const agentModelLabel = computed(() => {
+  const config = agentModelConfig.value;
+  if (!config) return "读取模型…";
+  if (config.configured && config.provider !== "ollama") {
+    return `云端 · ${config.provider === "deepseek" ? "DeepSeek" : "通义千问"} · ${config.model}`;
+  }
+  return `本机 · ${config.localModel || config.model}`;
+});
 const latestAgentMatches = computed(() => {
   for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
     const message = agentMessages.value[index];
@@ -917,6 +933,49 @@ async function askAgent() {
     showError(error);
   }
 }
+
+async function refreshAgentModelChoices() {
+  const providerConfig = api.modelProviderConfig;
+  if (!providerConfig || agentModelBusy.value) return;
+  agentModelBusy.value = true;
+  try {
+    const [config, catalog] = await Promise.all([
+      providerConfig.status(),
+      api.model?.listLocalModels() ?? Promise.resolve({ available: false, models: [] as string[] }),
+    ]);
+    agentModelConfig.value = config;
+    agentLocalModels.value = catalog.models;
+    agentSelectedModel.value = agentModelValue.value;
+  } catch {
+    say("读取模型配置失败，请稍后重试。");
+  } finally {
+    agentModelBusy.value = false;
+  }
+}
+
+async function selectAgentModel() {
+  const providerConfig = api.modelProviderConfig;
+  if (!providerConfig || agentModelBusy.value || !agentSelectedModel.value) return;
+  agentModelBusy.value = true;
+  try {
+    if (agentSelectedModel.value.startsWith("cloud:")) {
+      agentModelConfig.value = await providerConfig.activateCloudModel();
+    } else if (agentSelectedModel.value.startsWith("local:")) {
+      const model = agentSelectedModel.value.slice("local:".length);
+      if (model) agentModelConfig.value = await providerConfig.selectLocalModel(model);
+    }
+    agentSelectedModel.value = agentModelValue.value;
+  } catch (error) {
+    agentSelectedModel.value = agentModelValue.value;
+    say(error instanceof Error ? error.message : "切换模型失败，请在 Agent 设置中检查模型配置。");
+  } finally {
+    agentModelBusy.value = false;
+  }
+}
+
+watch(page, (next) => {
+  if (next === "agent") void refreshAgentModelChoices();
+});
 
 function appendModelReply(value: { query: string; reply: AgentReply }) {
   agentMessages.value.push({ role: "user", text: value.query });
@@ -2511,7 +2570,29 @@ function taskStateLabel(state: TaskState) {
                   <input
                     v-model="agentInput"
                     placeholder="例如：把今天的 RAW 文件整理到项目目录…"
-                  /><button class="primary-button" type="submit">
+                  />
+                  <select
+                    v-if="api.modelProviderConfig"
+                    v-model="agentSelectedModel"
+                    class="agent-composer-model"
+                    aria-label="切换 Agent 模型"
+                    :disabled="agentModelBusy || !agentModelConfig"
+                    @focus="refreshAgentModelChoices"
+                    @change="selectAgentModel"
+                  >
+                    <option v-if="!agentModelConfig" value="">{{ agentModelBusy ? '读取模型…' : '选择模型' }}</option>
+                    <option :value="agentModelValue">{{ agentModelBusy ? '切换中…' : agentModelLabel }}</option>
+                    <option
+                      v-if="agentModelConfig?.cloudKeyStored && !(agentModelConfig.configured && agentModelConfig.provider !== 'ollama')"
+                      :value="`cloud:${agentModelConfig.cloudProvider || agentModelConfig.provider}:${agentModelConfig.cloudModel || agentModelConfig.model}`"
+                    >
+                      云端 · {{ (agentModelConfig.cloudProvider || agentModelConfig.provider) === 'deepseek' ? 'DeepSeek' : '通义千问' }} · {{ agentModelConfig.cloudModel || agentModelConfig.model }}
+                    </option>
+                    <option v-for="model in agentLocalModels" :key="model" :value="`local:${model}`">
+                      本机 · {{ model }}
+                    </option>
+                  </select>
+                  <button class="primary-button" type="submit">
                     <Send :size="15" />发送
                   </button>
                 </form>
