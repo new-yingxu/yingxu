@@ -108,6 +108,23 @@ const api = createTauriApi({
 });
 const results = [];
 try {
+  let resolveProviderStatus;
+  let providerStatusCalls = 0;
+  const statusApi = createTauriApi({
+    invoke: async (command) => {
+      assert.equal(command, "agent_model_provider_config");
+      providerStatusCalls += 1;
+      return new Promise((resolve) => { resolveProviderStatus = resolve; });
+    },
+  });
+  const statusOne = statusApi.modelProviderConfig.status();
+  const statusTwo = statusApi.modelProviderConfig.status();
+  assert.equal(providerStatusCalls, 1);
+  const providerStatus = { configured: false, provider: "ollama", model: "qwen2.5:7b", secretStorage: "os_keychain" };
+  resolveProviderStatus(providerStatus);
+  assert.deepEqual(await Promise.all([statusOne, statusTwo]), [providerStatus, providerStatus]);
+  results.push("concurrent model settings share one keychain status IPC request");
+
   assert.equal((await api.local.health()).protocolVersion, 1);
   results.push("health protocol");
   const caps = await api.local.capabilities();

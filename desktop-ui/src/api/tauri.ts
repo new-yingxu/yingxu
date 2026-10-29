@@ -88,6 +88,22 @@ function mapPreset(p: RawPreset): NamePreset {
 }
 export function createTauriApi(options: Options = {}): AppApi {
   const invoke = options.invoke || nativeInvoke;
+  const dedupeInFlight = <T>(request: () => Promise<T>) => {
+    let inFlight: Promise<T> | null = null;
+    return () => {
+      if (inFlight) return inFlight;
+      const pending = request();
+      inFlight = pending;
+      void pending.then(
+        () => { if (inFlight === pending) inFlight = null; },
+        () => { if (inFlight === pending) inFlight = null; },
+      );
+      return pending;
+    };
+  };
+  const readLocalAgentStatus = dedupeInFlight(() => invoke<ModelStatus>("agent_local_status"));
+  const readLocalAgentModels = dedupeInFlight(() => invoke<{ available: boolean; models: string[] }>("agent_local_models"));
+  const readModelProviderConfig = dedupeInFlight(() => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "status" }));
   const confirm = options.confirm || (() => Promise.resolve(false));
   const confirmModelUse = options.confirmModelUse || confirm;
   const presetCache = new Map<string, RawPreset>();
@@ -103,8 +119,8 @@ export function createTauriApi(options: Options = {}): AppApi {
   const eventListen = options.listen || listen;
   const localAgent = createLocalAgentService({
     transport: {
-      status: () => invoke<ModelStatus>("agent_local_status"),
-      listLocalModels: () => invoke<{ available: boolean; models: string[] }>("agent_local_models"),
+      status: readLocalAgentStatus,
+      listLocalModels: readLocalAgentModels,
       startTurn: (request: LocalTurnRequest) =>
         invoke<LocalTurnResponse>("agent_local_turn", { request }),
       submitResults: (sessionId: string, turnId: string, request: { continuationToken: string; results: LocalToolResult[]; useModel: true }) =>
@@ -369,7 +385,7 @@ export function createTauriApi(options: Options = {}): AppApi {
     },
     model: localAgent.model,
     modelProviderConfig: {
-      status: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "status" }),
+      status: readModelProviderConfig,
       selectLocalModel: (model) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "select_local_model", model }),
       activateCloudModel: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "activate_cloud_model" }),
       save: (provider, model, apiKey) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "save", provider, model, apiKey }),

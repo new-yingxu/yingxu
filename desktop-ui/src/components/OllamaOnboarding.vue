@@ -28,12 +28,16 @@ async function refresh() {
   failure.value = ''
   notice.value = ''
   try {
-    const [nextStatus, catalog] = await Promise.all([props.service.status(), props.service.listLocalModels()])
+    const [nextStatus, catalog, providerConfig] = await Promise.all([
+      props.service.status(),
+      props.service.listLocalModels(),
+      props.providerConfig?.status() ?? Promise.resolve(null),
+    ])
     if (!mounted) return
     status.value = nextStatus
     available.value = catalog.available
     models.value = catalog.models
-    const current = nextStatus.configured && nextStatus.provider === 'ollama' ? nextStatus.model : props.providerConfig ? (await props.providerConfig.status()).localModel : ''
+    const current = providerConfig?.localModel || (nextStatus.configured && nextStatus.provider === 'ollama' ? nextStatus.model : '')
     selectedModel.value = current && catalog.models.includes(current) ? current : catalog.models[0] || ''
   } catch {
     if (mounted) failure.value = '读取 Ollama 模型列表失败。请确认本机 Ollama 已启动，再刷新。'
