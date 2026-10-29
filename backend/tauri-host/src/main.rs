@@ -628,36 +628,75 @@ fn cached_agent_signing_key(
         .map_err(Clone::clone)
 }
 
+/// 侧车（session_tokens.py）要求至少 2048 位的 RSA 私钥 PEM。
+/// 凭据库里残留的旧值/损坏值必须重新生成，否则每一轮 Agent 请求都会
+/// 以 HTTP 500「SessionTokenConfigurationError」被拒。
+fn signing_key_is_usable(pem: &str) -> bool {
+    use rsa::pkcs8::DecodePrivateKey;
+    use rsa::traits::PublicKeyParts;
+    match rsa::RsaPrivateKey::from_pkcs8_pem(pem.trim()) {
+        Ok(key) => key.n().bits() >= 2048,
+        Err(_) => false,
+    }
+}
+
+fn local_agent_signing_key_path() -> Option<PathBuf> {
+    local_agent_data_dir().map(|dir| dir.join("local-agent-signing-key.pem"))
+}
+
+fn local_agent_data_dir() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").map(|base| PathBuf::from(base).join("app.yingxu.desktop.next"))
+}
+
+/// 2048 位 RSA 的 PKCS#8 PEM 约 1.7k 字符，Windows 凭据管理器按 UTF-16 存
+/// 会撞上 2560 字节的 blob 上限并被截断——读回来就无法解析。所以主存储改用
+/// 应用数据目录下的文件，凭据库只做尽力而为的缓存。
+fn read_signing_key_file() -> Option<String> {
+    std::fs::read_to_string(local_agent_signing_key_path()?).ok()
+}
+
+fn write_signing_key_file(pem: &str) -> Result<(), CoreError> {
+    let path = local_agent_signing_key_path().ok_or_else(|| {
+        CoreError::new("LOCAL_AGENT_KEYSTORE_UNAVAILABLE", "无法定位本机 Agent 数据目录")
+    })?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|_| {
+            CoreError::new("LOCAL_AGENT_KEYSTORE_UNAVAILABLE", "无法创建本机 Agent 数据目录")
+        })?;
+    }
+    std::fs::write(&path, pem).map_err(|_| {
+        CoreError::new("LOCAL_AGENT_KEYSTORE_UNAVAILABLE", "无法保存本机 Agent 密钥文件")
+    })
+}
+
 fn stable_agent_signing_key() -> Result<String, CoreError> {
     cached_agent_signing_key(&LOCAL_AGENT_SIGNING_KEY, || {
-        let entry = keyring::Entry::new("app.yingxu.desktop.next.local-agent", "signing-key")
-            .map_err(|_| CoreError::new("LOCAL_AGENT_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
-        match entry.get_password() {
-            Ok(key) => Ok(key),
-            Err(keyring::Error::NoEntry) => {
-                use rsa::pkcs8::EncodePrivateKey;
-                let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).map_err(|_| {
-                    CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥生成失败")
-                })?;
-                let pem = key
-                    .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-                    .map_err(|_| {
-                        CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥编码失败")
-                    })?
-                    .to_string();
-                entry.set_password(&pem).map_err(|_| {
-                    CoreError::new(
-                        "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
-                        "无法保存本机 Agent 密钥",
-                    )
-                })?;
-                Ok(pem)
-            }
-            Err(_) => Err(CoreError::new(
-                "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
-                "无法读取系统凭据库中的本机 Agent 密钥",
-            )),
+        let entry = keyring::Entry::new("app.yingxu.desktop.next.local-agent", "signing-key").ok();
+        if let Some(entry) = &entry
+            && let Ok(key) = entry.get_password()
+            && signing_key_is_usable(&key)
+        {
+            return Ok(key);
         }
+        if let Some(key) = read_signing_key_file()
+            && signing_key_is_usable(&key)
+        {
+            return Ok(key);
+        }
+        use rsa::pkcs8::EncodePrivateKey;
+        let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048)
+            .map_err(|_| CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥生成失败"))?;
+        let pem = key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .map_err(|_| {
+                CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥编码失败")
+            })?
+            .to_string();
+        write_signing_key_file(&pem)?;
+        if let Some(entry) = &entry {
+            let _ = entry.set_password(&pem);
+        }
+        Ok(pem)
     })
 }
 
@@ -703,6 +742,21 @@ fn spawn_local_agent_with_timeout(
     )
 }
 
+// 侧车的崩溃/异常栈默认丢进 stdio::null，出问题时无从排查。
+// 把它落到应用数据目录，便于用户在 Agent 失败时提供证据。
+fn local_agent_stderr_log() -> Option<std::fs::File> {
+    let base = std::env::var_os("APPDATA")?;
+    let dir = PathBuf::from(base)
+        .join("app.yingxu.desktop.next")
+        .join("logs");
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("local-agent.stderr.log"))
+        .ok()
+}
+
 fn spawn_local_agent_with_profile(
     executable: &std::path::Path,
     database_path: &std::path::Path,
@@ -732,7 +786,7 @@ fn spawn_local_agent_with_profile(
         .env("YINGXU_LOCAL_AGENT_KEY_ID", "local-agent-rsa-v1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(local_agent_stderr_log().map_or(Stdio::null(), Stdio::from));
     for name in [
         "HOME",
         "TMPDIR",
@@ -919,9 +973,17 @@ fn local_agent_request(
         .ok_or_else(|| CoreError::new("LOCAL_AGENT_INVALID_RESPONSE", "本机 Agent 响应状态无效"))?;
     let payload = &response[header_end + 4..];
     if !(200..300).contains(&status) {
+        // 把侧车真实的拒绝原因带出来：否则前端只能看到「未接受请求」，
+        // 无法判断是模型名、密钥、额度还是网络的问题。
+        let body = String::from_utf8_lossy(payload);
+        let snippet: String = body
+            .chars()
+            .take(240)
+            .collect::<String>()
+            .replace(['\r', '\n'], " ");
         return Err(CoreError::new(
             "LOCAL_AGENT_REQUEST_REJECTED",
-            "本机 Agent 未接受请求",
+            format!("本机 Agent 未接受请求（HTTP {status}）：{snippet}"),
         ));
     }
     serde_json::from_slice(payload)

@@ -8,7 +8,20 @@ export interface ModelPlan {
   readonly model: string
   readonly region: string
 }
+// 明确表示「请求在本地就被拒绝、根本没进入模型」的错误码：不锁定新轮次。
+// 配置/可用性/契约类失败都属于这一类；把一次配置错误变成永久死锁是不可接受的。
+const notDispatchedCodes = new Set([
+  'LOCAL_AGENT_UNAVAILABLE', 'LOCAL_AGENT_REQUEST_REJECTED', 'LOCAL_AGENT_INVALID_RESPONSE',
+  'LOCAL_AGENT_CONTRACT_MISMATCH', 'LOCAL_AGENT_STATUS_TIMEOUT', 'LOCAL_AGENT_SIDECAR_MISSING',
+  'MODEL_NOT_CONFIGURED', 'MODEL_NOT_INSTALLED', 'OLLAMA_UNAVAILABLE',
+  'MODEL_CONSENT_REQUIRED', 'MODEL_CONFIGURATION_CHANGED', 'MODEL_REQUEST_ALREADY_SENT',
+  'AUTH_REQUIRED', 'OWNER_SESSION_STOPPED', 'INVALID_QUERY',
+])
 export function modelRecoveryRequired(error: unknown): boolean {
+  const code = error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : ''
+  if (notDispatchedCodes.has(code)) return false
   if (!(error instanceof CloudError)) return true
   return error.modelDispatched !== false
 }
@@ -49,6 +62,10 @@ export function modelFailure(error: unknown, dispatched = true) {
     : code === 'INVALID_QUERY' ? '查询或轮次编号无效，本轮未发送。'
     : code === 'AUTH_REQUIRED' || code === 'OWNER_SESSION_STOPPED' ? '身份未连接或账号会话已停止。'
     : code === 'SESSION_DELETED' ? '会话已删除，不能重试该会话。'
+    : code === 'LOCAL_AGENT_REQUEST_REJECTED'
+      ? (typeof record?.message === 'string' && record.message.trim()
+        ? String(record.message).replace(/^\[[A-Z0-9_]+\]\s*/, '')
+        : '本机 Agent 未接受请求；请重试，若持续失败请查看侧车日志。')
     : !dispatched ? '配置状态尚未确认，本轮未发送；请刷新状态后重新核对。'
     : '请求结果未确认，可能已经计费或回答未保存。请先核对本轮状态并保留当前轮次；不会自动重发，也不要新建替代轮次。'
   const diagnosticCode = typeof record?.diagnosticCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(record.diagnosticCode)
@@ -120,6 +137,15 @@ export function createModelConsent(service: ModelService) {
     requiresRecovery() { return recoveryRequired },
     canResume() { return recoveryAvailable && !!service.resume && !!recoveryPlan },
     getRecoveryPlan() { return recoveryPlan },
+    // 用户显式放弃本轮：无论服务端是否支持 resume，都必须有办法解锁。
+    // 这不是自动重发——只有用户确认后才会清空锁定。
+    abandon() {
+      guard()
+      recoveryRequired = false
+      recoveryAvailable = false
+      recoveryPlan = null
+    },
+    canAbandon() { return recoveryRequired },
     async resume(accepted: boolean) {
       guard()
       if (accepted !== true) throw new CloudError('MODEL_CONSENT_REQUIRED', '恢复本轮需要明确确认', 0, false)
