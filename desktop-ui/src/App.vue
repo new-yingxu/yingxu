@@ -2577,7 +2577,6 @@ function taskStateLabel(state: TaskState) {
                     class="agent-composer-model"
                     aria-label="切换 Agent 模型"
                     :disabled="agentModelBusy || !agentModelConfig"
-                    @focus="refreshAgentModelChoices"
                     @change="selectAgentModel"
                   >
                     <option v-if="!agentModelConfig" value="">{{ agentModelBusy ? '读取模型…' : '选择模型' }}</option>
