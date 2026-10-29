@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -374,35 +374,50 @@ fn resolve_local_agent_executable(
     ))
 }
 
+static LOCAL_AGENT_SIGNING_KEY: OnceLock<Result<Zeroizing<String>, CoreError>> = OnceLock::new();
+
+fn cached_agent_signing_key(
+    cache: &OnceLock<Result<Zeroizing<String>, CoreError>>,
+    load: impl FnOnce() -> Result<String, CoreError>,
+) -> Result<String, CoreError> {
+    cache
+        .get_or_init(|| load().map(Zeroizing::new))
+        .as_ref()
+        .map(|key| key.to_string())
+        .map_err(Clone::clone)
+}
+
 fn stable_agent_signing_key() -> Result<String, CoreError> {
-    let entry = keyring::Entry::new("app.yingxu.desktop.next.local-agent", "signing-key")
-        .map_err(|_| CoreError::new("LOCAL_AGENT_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
-    match entry.get_password() {
-        Ok(key) => Ok(key),
-        Err(keyring::Error::NoEntry) => {
-            use rsa::pkcs8::EncodePrivateKey;
-            let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).map_err(|_| {
-                CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥生成失败")
-            })?;
-            let pem = key
-                .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-                .map_err(|_| {
-                    CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥编码失败")
-                })?
-                .to_string();
-            entry.set_password(&pem).map_err(|_| {
-                CoreError::new(
-                    "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
-                    "无法保存本机 Agent 密钥",
-                )
-            })?;
-            Ok(pem)
+    cached_agent_signing_key(&LOCAL_AGENT_SIGNING_KEY, || {
+        let entry = keyring::Entry::new("app.yingxu.desktop.next.local-agent", "signing-key")
+            .map_err(|_| CoreError::new("LOCAL_AGENT_KEYSTORE_UNAVAILABLE", "系统凭据库不可用"))?;
+        match entry.get_password() {
+            Ok(key) => Ok(key),
+            Err(keyring::Error::NoEntry) => {
+                use rsa::pkcs8::EncodePrivateKey;
+                let key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).map_err(|_| {
+                    CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥生成失败")
+                })?;
+                let pem = key
+                    .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+                    .map_err(|_| {
+                        CoreError::new("LOCAL_AGENT_KEY_CREATE_FAILED", "本机 Agent 密钥编码失败")
+                    })?
+                    .to_string();
+                entry.set_password(&pem).map_err(|_| {
+                    CoreError::new(
+                        "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
+                        "无法保存本机 Agent 密钥",
+                    )
+                })?;
+                Ok(pem)
+            }
+            Err(_) => Err(CoreError::new(
+                "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
+                "无法读取系统凭据库中的本机 Agent 密钥",
+            )),
         }
-        Err(_) => Err(CoreError::new(
-            "LOCAL_AGENT_KEYSTORE_UNAVAILABLE",
-            "无法读取系统凭据库中的本机 Agent 密钥",
-        )),
-    }
+    })
 }
 
 fn start_local_agent(
@@ -2077,17 +2092,54 @@ fn main() {
 #[cfg(test)]
 mod agent_action_tests {
     use super::{
-        HostState, check_paths, local_agent_request, local_agent_status_or_unavailable,
-        resolve_local_agent_executable, spawn_local_agent, spawn_local_agent_with_timeout,
-        stop_local_agent_process, tray_progress, validate_action_expiry,
-        validate_local_turn_request, validate_local_turn_response,
+        HostState, cached_agent_signing_key, check_paths, local_agent_request,
+        local_agent_status_or_unavailable, resolve_local_agent_executable, spawn_local_agent,
+        spawn_local_agent_with_timeout, stop_local_agent_process, tray_progress,
+        validate_action_expiry, validate_local_turn_request, validate_local_turn_response,
     };
     use std::collections::{HashMap, HashSet};
     use std::{
         path::PathBuf,
-        sync::{Arc, Mutex, atomic::AtomicBool},
+        sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
+
+    #[test]
+    fn signing_key_lookup_is_attempted_once_per_host_process() {
+        let cache = OnceLock::new();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let first = cached_agent_signing_key(&cache, || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok("synthetic-private-key".to_string())
+        })
+        .unwrap();
+        let second = cached_agent_signing_key(&cache, || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok("unexpected-reload".to_string())
+        })
+        .unwrap();
+        assert_eq!(first, "synthetic-private-key");
+        assert_eq!(second, first);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn failed_signing_key_lookup_is_not_retried_until_host_restart() {
+        let cache = OnceLock::new();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        for _ in 0..2 {
+            let error = cached_agent_signing_key(&cache, || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(yingxu_core::CoreError::new(
+                    "KEYCHAIN_LOCKED",
+                    "synthetic locked keychain",
+                ))
+            })
+            .unwrap_err();
+            assert_eq!(error.code, "KEYCHAIN_LOCKED");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
     use yingxu_core::{
         Engine,
         agent::execute_read_tool,
