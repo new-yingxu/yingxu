@@ -72,7 +72,7 @@ jobs:
           python-version: '3.11'
       - name: 构建并暂存 macOS 本机 Agent sidecar
         run: |
-          python -m pip install -r cloud-service/requirements.lock -r cloud-service/requirements.desktop-build.txt
+          python -m pip install -r cloud-service/requirements.txt -c cloud-service/requirements.lock -r cloud-service/requirements.desktop-build.txt
           python infra/desktop_agent/build_sidecar.py \
             --output-dir "$RUNNER_TEMP/yingxu-agent-sidecar-macos" \
             --stage-to backend/tauri-host/agent-sidecar/yingxu-local-agent
@@ -126,7 +126,7 @@ jobs:
       - name: 构建并暂存 Windows 本机 Agent sidecar
         shell: pwsh
         run: |
-          python -m pip install -r cloud-service/requirements.lock -r cloud-service/requirements.desktop-build.txt
+          python -m pip install -r cloud-service/requirements.txt -c cloud-service/requirements.lock -r cloud-service/requirements.desktop-build.txt
           python infra/desktop_agent/build_sidecar.py `
             --output-dir "$env:RUNNER_TEMP\yingxu-agent-sidecar-windows" `
             --stage-to backend/tauri-host/agent-sidecar/yingxu-local-agent
