@@ -39,6 +39,13 @@ import type {
 import { createDesktopApi } from "./api";
 import { errorText } from "./api/tauri";
 import {
+  agentModelDisplayLabel,
+  agentModelSelection,
+  canSendAgent,
+  friendlyUiError,
+  presetDisplayName as displayPresetName,
+} from "./api/ui-safety";
+import {
   canControl,
   canEnterStep,
   canRetryTarget,
@@ -264,22 +271,9 @@ type AgentMessage = {
   actionId?: string;
 };
 const agentMessages = ref<AgentMessage[]>([]);
-const agentModelValue = computed(() => agentModelConfig.value?.configured && agentModelConfig.value.provider !== "ollama"
-  ? `cloud:${agentModelConfig.value.provider}:${agentModelConfig.value.model}`
-  : `local:${agentModelConfig.value?.localModel || agentModelConfig.value?.model || ""}`);
-const agentModelLabel = computed(() => {
-  const config = agentModelConfig.value;
-  if (!config) return "读取模型…";
-  if (config.configured && config.provider !== "ollama") {
-    return `云端 · ${config.provider === "deepseek" ? "DeepSeek" : "通义千问"} · ${config.model}`;
-  }
-  return `本机 · ${config.localModel || config.model}`;
-});
-const agentCanSend = computed(() => {
-  if (!localWorkspace.value) return true;
-  const config = agentModelConfig.value;
-  return !!config?.configured && config.provider === "ollama";
-});
+const agentModelValue = computed(() => agentModelSelection(agentModelConfig.value, localWorkspace.value));
+const agentModelLabel = computed(() => agentModelDisplayLabel(agentModelConfig.value, localWorkspace.value));
+const agentCanSend = computed(() => canSendAgent(localWorkspace.value, agentModelConfig.value));
 const latestAgentMatches = computed(() => {
   for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
     const message = agentMessages.value[index];
@@ -554,14 +548,9 @@ function say(text: string) {
   }, 6500);
 }
 function showError(error: unknown) {
-  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-  if (code === "USER_CANCELLED") {
-    const message = error instanceof Error ? error.message : "";
-    say(message.includes("目录选择") ? "已取消目录选择，尚未开始扫描。" : "已取消操作，未执行更改。");
-    return;
-  }
-  if (code === "REPORT_NOT_READY") {
-    say("当前任务尚未生成报告，请在任务完成后再查看。");
+  const friendlyMessage = friendlyUiError(error);
+  if (friendlyMessage) {
+    say(friendlyMessage);
     return;
   }
   say(errorText(error));
@@ -1215,6 +1204,13 @@ async function selectAgentModel() {
 watch(page, (next) => {
   if (next === "agent") void refreshAgentModelChoices();
 });
+watch(localWorkspace, (enabled) => {
+  if (!enabled) return;
+  // Clear any stale cloud selection immediately when entering offline mode.
+  if (agentModelConfig.value?.configured && agentModelConfig.value.provider !== "ollama") {
+    agentSelectedModel.value = "";
+  }
+});
 
 function appendModelReply(value: { query: string; reply: AgentReply }) {
   agentMessages.value.push({ role: "user", text: value.query });
@@ -1329,12 +1325,7 @@ async function savePreset() {
   });
 }
 function presetDisplayName(preset: NamePreset, index: number) {
-  const name = preset.name.trim();
-  const suffix = preset.id.trim().slice(-6) || String(index + 1);
-  const duplicate = name && presets.value.filter((item) => item.name.trim() === name).length > 1;
-  if (name && name !== "新建预设" && !duplicate) return name;
-  if (duplicate) return `${name} · ${suffix}`;
-  return `未命名预设 · ${suffix}`;
+  return displayPresetName(preset, index, presets.value);
 }
 async function removePreset(item: NamePreset) {
   if (item.isDefault) return;
@@ -2195,11 +2186,11 @@ function baiduTaskStateLabel(state: string) {
                 <label class="field-label">导入预设</label
                 ><select v-model="backupPreset" class="select-field">
                   <option
-                    v-for="preset in presets"
+                    v-for="(preset, index) in presets"
                     :key="preset.id"
                     :value="preset.id"
                   >
-                    {{ preset.name }} · {{ preset.pattern }}
+                    {{ presetDisplayName(preset, index) }} · {{ preset.pattern }}
                   </option>
                 </select>
                 <div v-if="!isMock" class="two-column-fields">
@@ -2958,7 +2949,10 @@ function baiduTaskStateLabel(state: string) {
                 <header class="agent-settings-modal-heading"><div><span class="eyebrow">模型与运行方式</span><h2 id="agent-settings-title">Agent 设置</h2></div><button class="icon-button agent-settings-close" type="button" aria-label="关闭 Agent 设置" @click="agentSettingsOpen = false"><X :size="18" /></button></header>
                 <div class="agent-settings-body">
                   <OllamaOnboarding :service="api.model" :provider-config="api.modelProviderConfig" />
-                  <CloudModelSettings :service="api.modelProviderConfig" />
+                  <CloudModelSettings v-if="!localWorkspace" :service="api.modelProviderConfig" />
+                  <p v-else class="integration-banner" role="status">
+                    本机模式已停用云端模型配置；现有云端 Key 保留在系统钥匙串中，不会被选择或调用。退出本机模式后可在此管理云端模型。
+                  </p>
                   <AgentLocalFileActions
                     v-if="api.fileActions"
                     :service="api.fileActions"
