@@ -2,23 +2,30 @@ import type { ModelProviderConfig, NamePreset } from "./contracts";
 
 export function agentModelSelection(config: ModelProviderConfig | null, localMode: boolean): string {
   if (!config) return "";
-  if (localMode && config.configured && config.provider !== "ollama") return "";
   return config.configured && config.provider !== "ollama"
     ? `cloud:${config.provider}:${config.model}`
     : `local:${config.localModel || config.model}`;
 }
 
-export function agentModelDisplayLabel(config: ModelProviderConfig | null, localMode: boolean): string {
+export function agentModelDisplayLabel(config: ModelProviderConfig | null, _localMode: boolean): string {
   if (!config) return "读取模型…";
-  if (localMode && config.configured && config.provider !== "ollama") return "本机模式 · 请选择 Ollama";
   if (config.configured && config.provider !== "ollama") {
     return `云端 · ${config.provider === "deepseek" ? "DeepSeek" : "通义千问"} · ${config.model}`;
   }
   return `本机 · ${config.localModel || config.model}`;
 }
 
-export function canSendAgent(localMode: boolean, config: ModelProviderConfig | null): boolean {
-  return !localMode || !!config?.configured && config.provider === "ollama";
+export function canSendAgent(
+  localMode: boolean,
+  config: ModelProviderConfig | null,
+  selectedModel = "",
+  installedLocalModels: readonly string[] = [],
+): boolean {
+  if (!localMode) return true;
+  if (config?.configured && config.provider !== "ollama") {
+    return selectedModel === `cloud:${config.provider}:${config.model}`;
+  }
+  return selectedModel.startsWith("local:") && installedLocalModels.includes(selectedModel.slice("local:".length));
 }
 
 export function presetDisplayName(preset: NamePreset, index: number, all: NamePreset[]): string {
