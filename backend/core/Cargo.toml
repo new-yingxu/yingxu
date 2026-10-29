@@ -17,7 +17,8 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 kamadak-exif = "0.6"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 webpki-roots = "1.0.11"
-md-5 = "0.11.0"
+md-5 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls"] }
 
 [dev-dependencies]
 tempfile = "3"
