@@ -159,6 +159,10 @@ export interface DeliveryPackage {
 export interface DesktopApi {
   fileActions: LocalFileActionService;
   auth: {
+    configuration(): { ready: boolean; emailOtp: boolean; usernamePassword: boolean; reason: string };
+    sendEmailCode(email: string, purpose: "login" | "register" | "forgot-password", registration?: { password: string; nickname?: string }): Promise<void>;
+    registerEmail(input: { email: string; verificationCode: string; nickname?: string; password: string }): Promise<UserSession>;
+    resetPassword(input: { email: string; verificationCode: string; password: string }): Promise<UserSession>;
     restore(): Promise<UserSession | null>;
     login(
       method: "wechat" | "phone-code" | "email-code" | "email-password",
@@ -246,7 +250,6 @@ export interface DesktopApi {
     get(): Promise<AppSettings>;
     update(settings: Partial<AppSettings>): Promise<AppSettings>;
     reset(): Promise<AppSettings>;
-    connectProvider(provider: "baidu" | "quark"): Promise<string>;
   };
   presets: {
     list(): Promise<NamePreset[]>;

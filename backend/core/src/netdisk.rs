@@ -1,6 +1,6 @@
-//! 网盘上传骨架（百度 / 夸克）。
+//! 网盘上传骨架（百度网盘）。
 //!
-//! 现状与闸门：两家开放平台的**应用资质未申请、未核实**，因此真实上传执行体不落地，
+//! 现状与闸门：百度开放平台**应用资质未申请、未核实**，因此真实上传执行体不落地，
 //! 厂商实现一律返回 `NETDISK_NOT_APPROVED`。本模块交付的是可联调、可测试的骨架：
 //!
 //! - OAuth：PKCE + loopback 回调（`http://127.0.0.1:<随机端口>/callback`），token 只进系统凭据库
@@ -53,17 +53,6 @@ pub fn providers() -> Vec<Provider> {
             max_chunk: 4 * 1024 * 1024,
         },
         Provider {
-            id: "quark",
-            display: "夸克网盘",
-            // 截至 2026-10：夸克网盘没有公开的第三方文件 API（developer/open 站点
-            // 只有浏览器插件与 AI 能力），endpoint 为占位，接口骨架保留待其开放。
-            approval: "no_public_api",
-            auth_endpoint: "https://open.quark.cn/oauth/authorize",
-            token_endpoint: "https://open.quark.cn/oauth/token",
-            scopes: &["file:write"],
-            max_chunk: 4 * 1024 * 1024,
-        },
-        Provider {
             id: "mock",
             display: "本地模拟服务器（仅联调）",
             approval: "local_only",
@@ -91,8 +80,6 @@ fn require_runnable(p: &Provider) -> CoreResult<()> {
     if !approved {
         let why = if p.id == "baidu" {
             "凭证未配置（需要 backend/.env 里的 YINGXU_BAIDU_APPKEY/SECRETKEY）"
-        } else if p.id == "quark" {
-            "夸克网盘暂无公开的第三方文件 API（截至 2026-10），官方开放后即可接入"
         } else {
             "开放平台应用资质未获批"
         };

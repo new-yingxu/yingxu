@@ -108,18 +108,35 @@ const api = createTauriApi({
 });
 const results = [];
 try {
-  let keychainReads = 0;
+  let resolveProviderStatus;
+  let providerStatusCalls = 0;
+  const statusApi = createTauriApi({
+    invoke: async (command) => {
+      assert.equal(command, "agent_model_provider_config");
+      providerStatusCalls += 1;
+      return new Promise((resolve) => { resolveProviderStatus = resolve; });
+    },
+  });
+  const statusOne = statusApi.modelProviderConfig.status();
+  const statusTwo = statusApi.modelProviderConfig.status();
+  assert.equal(providerStatusCalls, 1);
+  const providerStatus = { configured: false, provider: "ollama", model: "qwen2.5:7b", secretStorage: "os_keychain" };
+  resolveProviderStatus(providerStatus);
+  assert.deepEqual(await Promise.all([statusOne, statusTwo]), [providerStatus, providerStatus]);
+  results.push("concurrent model settings share one keychain status IPC request");
+
+  let timedOutKeychainReads = 0;
   const blockedSettingsApi = createTauriApi({
     statusTimeoutMs: 5,
     invoke: async (command) => {
       assert.equal(command, "agent_model_provider_config");
-      keychainReads += 1;
+      timedOutKeychainReads += 1;
       return new Promise(() => {});
     },
   });
   await assert.rejects(blockedSettingsApi.modelProviderConfig.status(), /DESKTOP_STATUS_TIMEOUT/);
   await assert.rejects(blockedSettingsApi.modelProviderConfig.status(), /DESKTOP_STATUS_TIMEOUT/);
-  assert.equal(keychainReads, 1);
+  assert.equal(timedOutKeychainReads, 1);
   results.push("timed-out keychain status never triggers repeated native prompts");
 
   assert.equal((await api.local.health()).protocolVersion, 1);
@@ -130,9 +147,9 @@ try {
   results.push("actual capabilities");
   await assert.rejects(
     api.auth.login("email-code", "fixture@example.invalid", "fixture"),
-    (e) => e.code === "CLOUD_ADAPTER_NOT_CONNECTED",
+    (e) => e.code === "AUTH_NOT_CONFIGURED",
   );
-  results.push("cloud login fails closed");
+  results.push("cloud login fails closed until console configuration is ready");
   const scan = await api.backup.scan();
   assert.equal(scan.sources[0].files, 3);
   assert.equal(scan.sources[0].path, source);

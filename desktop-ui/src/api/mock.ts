@@ -13,7 +13,7 @@ const fileData: MediaFile[] = [
 const taskData: ArchiveTask[] = [
   { id: 'YX-20250422-014', name: '春日人像 · 本地备份', state: 'running', createdAt: '今天 09:41', files: 1248, size: '42.8 GB', progress: 72, speed: '186 MB/s', phase: 'SHA-256 校验', source: 'SD_CARD/DCIM', destinations: [{ id: 'local', name: 'Mac Studio / 摄影归档', state: 'running', progress: 72 }] },
   { id: 'YX-20250421-009', name: '山野纪行 · 年度整理', state: 'success', createdAt: '昨天 16:28', files: 842, size: '28.4 GB', progress: 100, speed: '—', phase: '已完成', source: 'CFexpress/PRIVATE', destinations: [{ id: 'local', name: '本机硬盘', state: 'success', progress: 100 }, { id: 'baidu', name: '百度网盘', state: 'success', progress: 100 }] },
-  { id: 'YX-20250419-003', name: '城市漫步 · 副本同步', state: 'partial', createdAt: '4 月 19 日', files: 324, size: '12.1 GB', progress: 100, speed: '—', phase: '部分完成', source: '移动硬盘/DCIM', destinations: [{ id: 'local', name: '本机硬盘', state: 'success', progress: 100 }, { id: 'quark', name: '夸克网盘', state: 'failed', progress: 46, error: '授权已过期' }] },
+  { id: 'YX-20250419-003', name: '城市漫步 · 副本同步', state: 'partial', createdAt: '4 月 19 日', files: 324, size: '12.1 GB', progress: 100, speed: '—', phase: '部分完成', source: '移动硬盘/DCIM', destinations: [{ id: 'local', name: '本机硬盘', state: 'success', progress: 100 }] },
 ]
 const devices: Device[] = [
   { id: 'mac-1', name: 'Mac Studio · 影序桌面', platform: 'macOS', online: true, lastSeen: '当前设备', current: true },
@@ -86,6 +86,10 @@ export function createMockApi(): DesktopApi {
       async listQuarantine() { await delay(40); return demoQuarantine.map((item) => ({ ...item })) },
     },
     auth: {
+      configuration() { return { ready: false, emailOtp: false, usernamePassword: false, reason: "浏览器预览不会连接 CloudBase 或发送真实验证码。" } },
+      async sendEmailCode() { throw new Error("浏览器预览不会发送真实邮箱验证码。") },
+      async registerEmail() { throw new Error("浏览器预览不会创建真实账号。") },
+      async resetPassword() { throw new Error("浏览器预览不会重置真实账号密码。") },
       async restore() { await delay(80); return lastSession },
       async login(method, identifier) {
         await delay(260)
@@ -100,7 +104,7 @@ export function createMockApi(): DesktopApi {
       async scan() { await delay(340); return { sources: [{ id: 'sd-1', name: 'SD_CARD', path: '/Volumes/SD_CARD/DCIM', files: 1248, size: '42.8 GB', free: '84.6 GB' }] } },
       async start(payload) {
         await delay(220)
-        const task: ArchiveTask = { id: `YX-DEMO-${Date.now().toString().slice(-6)}`, name: '新建备份任务', state: 'running', createdAt: '刚刚', files: 1248, size: '42.8 GB', progress: 0, speed: '0 MB/s', phase: '准备复制', source: payload.sourceId, destinations: payload.destinations.map(id => ({ id, name: id === 'local' ? '本机硬盘' : id === 'baidu' ? '百度网盘' : '夸克网盘', state: 'queued', progress: 0 })) }
+        const task: ArchiveTask = { id: `YX-DEMO-${Date.now().toString().slice(-6)}`, name: '新建备份任务', state: 'running', createdAt: '刚刚', files: 1248, size: '42.8 GB', progress: 0, speed: '0 MB/s', phase: '准备复制', source: payload.sourceId, destinations: payload.destinations.map(id => ({ id, name: id === 'local' ? '本机硬盘' : id === 'baidu' ? '百度网盘' : '本地目录', state: 'queued', progress: 0 })) }
         tasks = [task, ...tasks]; return task
       },
       async control(id, action) {
@@ -152,7 +156,6 @@ export function createMockApi(): DesktopApi {
       async get() { await delay(70); return { ...settings } },
       async update(next) { settings = { ...settings, ...next }; await delay(80); return { ...settings } },
       async reset() { settings = { ...defaultSettings }; await delay(100); return { ...settings } },
-      async connectProvider(provider) { await delay(260); return `${provider === 'baidu' ? '百度网盘' : '夸克网盘'}授权入口由后端接入后开放。` },
     },
     presets: {
       async list() { await delay(60); return presets },

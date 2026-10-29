@@ -38,6 +38,7 @@ import type {
 } from "./api/contracts";
 import { createDesktopApi } from "./api";
 import { errorText } from "./api/tauri";
+import { loadAgentConversations, saveAgentConversations, type AgentConversation } from "./api/agent-conversations";
 import {
   agentModelDisplayLabel,
   agentModelSelection,
@@ -132,6 +133,7 @@ const localWorkspace = ref(false);
 const canEnterLocalWorkspace = canEnterNativeLocalMode(api.mode, !!api.local);
 const showLocalAgentAdapterNotice = shouldShowLocalAgentAdapterNotice(api.mode, !!api.model);
 const canUseCloud = computed(() => canUseCloudFeatures(session.value, localWorkspace.value));
+const canUseBaidu = computed(() => !!api.netdisk && (localWorkspace.value || !!session.value));
 const canShowLocalDiagnostics = canShowDevDiagnostics(api.mode, !!api.local, import.meta.env.DEV);
 const displayName = computed(
   () =>
@@ -189,8 +191,11 @@ const loginMode = ref<
 const loginIdentifier = ref("");
 const loginNickname = ref("");
 const loginProof = ref("");
+const loginPassword = ref("");
+const loginPasswordConfirm = ref("");
 const loginError = ref("");
 const loginBusy = ref(false);
+const emailCodeBusy = ref(false);
 const accountDialog = ref<"username" | "password" | "">("");
 const accountUsernameDraft = ref("");
 const accountUsername = ref("");
@@ -257,23 +262,32 @@ const agentModelBusy = ref(false);
 const agentSettingsOpen = ref(false);
 const agentActionBusy = ref(false);
 const agentConversationKey = ref(0);
+const savedAgentConversations = loadAgentConversations();
+if (!savedAgentConversations.length) savedAgentConversations.push({ id: crypto.randomUUID(), title: "新对话", updatedAt: new Date().toISOString(), messages: [] });
+const agentConversations = ref<AgentConversation[]>(savedAgentConversations);
+const activeAgentConversationId = ref(agentConversations.value[0]?.id ?? "");
 const agentNewConversationReview = ref(false);
-const agentHasArchivedUnresolvedTurn = ref(false);
+const agentHasArchivedUnresolvedTurn = computed(() => agentConversations.value.some(
+  (conversation) => conversation.unresolved && conversation.id !== activeAgentConversationId.value,
+));
+const agentChatScrollRef = ref<HTMLElement | null>(null);
 const modelConsentRef = ref<{
   submit(query: string): Promise<void>;
   requiresRecovery(): boolean;
   isBusy(): boolean;
 } | null>(null);
-type AgentMessage = {
-  role: "assistant" | "user";
-  text: string;
-  reply?: AgentReply;
-  actionId?: string;
-};
-const agentMessages = ref<AgentMessage[]>([]);
+type AgentMessage = AgentConversation["messages"][number];
+const restoreAgentMessage = (message: AgentMessage): AgentMessage => ({
+  ...message,
+  actionId: undefined,
+  reply: message.reply ? { ...message.reply, proposedAction: undefined } : undefined,
+});
+const activeStoredAgentConversation = agentConversations.value.find((item) => item.id === activeAgentConversationId.value);
+const agentMessages = ref<AgentMessage[]>(activeStoredAgentConversation?.messages.map(restoreAgentMessage) ?? []);
+const activeAgentConversation = computed(() => agentConversations.value.find((item) => item.id === activeAgentConversationId.value) ?? null);
 const agentModelValue = computed(() => agentModelSelection(agentModelConfig.value, localWorkspace.value));
 const agentModelLabel = computed(() => agentModelDisplayLabel(agentModelConfig.value, localWorkspace.value));
-const agentCanSend = computed(() => canSendAgent(localWorkspace.value, agentModelConfig.value));
+const agentCanSend = computed(() => !activeAgentConversation.value?.unresolved && canSendAgent(localWorkspace.value, agentModelConfig.value, agentSelectedModel.value, agentLocalModels.value));
 const latestAgentMatches = computed(() => {
   for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
     const message = agentMessages.value[index];
@@ -318,9 +332,8 @@ const dashboardBaiduCounts = computed(() => ({
   verified: dashboardBaiduTasks.value.filter((task) => task.state === "completed" && task.verifiedRemote).length,
 }));
 const dashboardBaiduStatus = computed(() => {
-  if (localWorkspace.value) return { label: "本机模式已停用", detail: "本机模式不会发起网盘请求。", tone: "queued" };
-  if (!session.value) return { label: "登录后连接", detail: "登录影序账号后可查看授权和上传任务。", tone: "queued" };
   if (!api.netdisk) return { label: "当前版本不可用", detail: "当前运行环境未提供原生网盘服务。", tone: "failed" };
+  if (!canUseBaidu.value) return { label: "登录后连接", detail: "登录影序账号后可查看授权和上传任务。", tone: "queued" };
   if (dashboardBaiduLoading.value && !dashboardBaiduProvider.value) return { label: "正在读取", detail: "正在读取百度网盘授权状态。", tone: "queued" };
   if (dashboardBaiduError.value) return { label: "状态暂不可读", detail: dashboardBaiduError.value, tone: "failed" };
   const provider = dashboardBaiduProvider.value;
@@ -625,7 +638,8 @@ async function loadData() {
   void refreshDashboardBaidu(true);
 }
 async function refreshDashboardBaidu(force = false) {
-  if (!api.netdisk || !session.value || localWorkspace.value) {
+  const netdisk = api.netdisk;
+  if (!netdisk || !canUseBaidu.value) {
     dashboardBaiduProvider.value = null;
     dashboardBaiduTasks.value = [];
     dashboardBaiduError.value = "";
@@ -637,8 +651,8 @@ async function refreshDashboardBaidu(force = false) {
   dashboardBaiduLastRefresh = Date.now();
   try {
     const [providers, tasks] = await Promise.all([
-      api.netdisk.providers(),
-      api.netdisk.tasks(),
+      netdisk.providers(),
+      netdisk.tasks(),
     ]);
     dashboardBaiduProvider.value = providers.find((provider) => provider.id === "baidu") || null;
     // The native API returns tasks in update order; preserve it for the latest-task summary.
@@ -765,7 +779,7 @@ async function signIn() {
     page.value = "home";
   } catch (error) {
     const message = errorText(error);
-    if (/\b(USER_NOT_FOUND|user_not_found|not_found)\b/.test(message)) {
+    if (/\b(USER_NOT_FOUND|ACCOUNT_NOT_FOUND|user_not_found|not_found)\b|尚未注册/.test(message)) {
       loginMode.value = "register";
       loginProof.value = "";
       loginError.value = "此邮箱尚未注册，已为你切换到注册页面。";
@@ -786,14 +800,60 @@ function showPasswordReset() {
   loginProof.value = "";
   loginError.value = "";
 }
+async function sendLoginCode() {
+  loginError.value = "";
+  if (!loginIdentifier.value.trim()) { loginError.value = "请先填写邮箱地址。"; return; }
+  if (loginMode.value === "register" && loginPassword.value.length < 8) { loginError.value = "请先设置至少 8 位密码，再获取注册验证码。"; return; }
+  if (loginMode.value === "register" && loginPassword.value !== loginPasswordConfirm.value) { loginError.value = "两次输入的密码不一致。"; return; }
+  emailCodeBusy.value = true;
+  try {
+    const purpose = loginMode.value === "register" ? "register" : loginMode.value === "forgot-password" ? "forgot-password" : "login";
+    await api.auth.sendEmailCode(loginIdentifier.value, purpose, purpose === "register" ? { password: loginPassword.value, nickname: loginNickname.value } : undefined);
+    loginError.value = purpose === "forgot-password" ? "重置验证码已发送，请检查邮箱和垃圾邮件。" : "验证码已发送，请检查邮箱和垃圾邮件。";
+  } catch (error) {
+    const message = errorText(error);
+    if (loginMode.value === "email-password" && /ACCOUNT_NOT_FOUND|not_found|尚未注册|不存在/i.test(message)) {
+      loginMode.value = "register";
+      loginProof.value = "";
+      loginError.value = "此邮箱尚未注册，请填写昵称和密码后创建账号。";
+    } else loginError.value = message;
+  }
+  finally { emailCodeBusy.value = false; }
+}
+async function registerAccount() {
+  loginError.value = "";
+  if (loginPassword.value.length < 8) { loginError.value = "密码至少需要 8 位。"; return; }
+  if (loginPassword.value !== loginPasswordConfirm.value) { loginError.value = "两次输入的密码不一致。"; return; }
+  if (!loginProof.value.trim()) { loginError.value = "请填写邮箱验证码。"; return; }
+  loginBusy.value = true;
+  try {
+    session.value = await api.auth.registerEmail({ email: loginIdentifier.value, verificationCode: loginProof.value, nickname: loginNickname.value, password: loginPassword.value });
+    await loadData();
+    page.value = "home";
+  } catch (error) { loginError.value = errorText(error); }
+  finally { loginBusy.value = false; }
+}
 function submitAuthView() {
   if (loginMode.value === "email-password" || loginMode.value === "email-code") {
     void signIn();
     return;
   }
-  loginError.value = loginMode.value === "forgot-password"
-    ? "密码重置服务尚未接入；当前不会发送邮件或修改账号。"
-    : "邮箱注册服务尚未接入；当前不会创建账号。";
+  if (loginMode.value === "register") { void registerAccount(); return; }
+  if (loginMode.value === "forgot-password") { void resetAccountPassword(); return; }
+  loginError.value = "邮箱注册服务尚未接入；当前不会创建账号。";
+}
+async function resetAccountPassword() {
+  loginError.value = "";
+  if (!loginIdentifier.value.trim()) { loginError.value = "请填写邮箱地址。"; return; }
+  if (!loginProof.value.trim()) { loginError.value = "请填写邮箱验证码。"; return; }
+  if (loginPassword.value.length < 8) { loginError.value = "新密码至少需要 8 位。"; return; }
+  loginBusy.value = true;
+  try {
+    session.value = await api.auth.resetPassword({ email: loginIdentifier.value, verificationCode: loginProof.value, password: loginPassword.value });
+    await loadData();
+    page.value = "home";
+  } catch (error) { loginError.value = errorText(error); }
+  finally { loginBusy.value = false; }
 }
 async function logout() {
   if (localWorkspace.value) {
@@ -1069,13 +1129,10 @@ async function beginTransfer() {
   });
 }
 async function queueBaidu(file: MediaFile) {
-  if (!api.netdisk) return;
+  if (!api.netdisk || !canUseBaidu.value) return;
   await runAction(async () => {
-    const allowed = await runCloudAction(session.value, localWorkspace.value, async () => {
-      await api.netdisk!.enqueue("baidu", file);
-      say("已加入上传队列，尚未上传；请到偏好设置确认上传。");
-    });
-    if (!allowed) say("本机模式已禁用网盘上传；不会发送云端请求。");
+    await api.netdisk!.enqueue("baidu", file);
+    say("已加入百度网盘上传队列，尚未上传；请在偏好设置核对并确认上传。");
   });
 }
 async function indexLibrary() {
@@ -1126,20 +1183,29 @@ async function stageSource() {
 async function askAgent() {
   const text = agentInput.value.trim();
   if (!text) return;
+  if (activeAgentConversation.value?.unresolved) {
+    say("这段对话有未确认的旧轮次，只能查看记录。请新建独立对话继续。");
+    return;
+  }
+  if (!activeAgentConversationId.value) createAgentConversation();
   if (api.model) {
     if (localWorkspace.value && !agentCanSend.value) {
-      say("本机模式仅使用 Ollama。请先在 Agent 设置中选择已安装的本机模型。");
+      say("请选择已安装的本机模型，或在 Agent 设置中配置并启用云端模型。");
       return;
     }
     if (!modelConsentRef.value) {
       showError(new Error("本机模型确认界面尚未就绪，请稍后重试"));
       return;
     }
+    agentMessages.value.push({ role: "user", text });
+    agentInput.value = "";
+    scrollAgentToLatest();
     await modelConsentRef.value.submit(text);
     return;
   }
   agentMessages.value.push({ role: "user", text });
   agentInput.value = "";
+  scrollAgentToLatest();
   try {
     const reply = await api.agent.ask(text);
     agentMessages.value.push({
@@ -1150,6 +1216,7 @@ async function askAgent() {
         ? reply.proposedAction.actionId
         : isMock && reply.proposedAction ? `act-${Date.now()}` : undefined,
     });
+    scrollAgentToLatest();
   } catch (error) {
     showError(error);
   }
@@ -1160,15 +1227,19 @@ async function refreshAgentModelChoices() {
   if (!providerConfig || agentModelBusy.value) return;
   agentModelBusy.value = true;
   try {
-    const [config, catalog] = await Promise.all([
-      providerConfig.status(),
-      api.model?.listLocalModels() ?? Promise.resolve({ available: false, models: [] as string[] }),
-    ]);
+    const config = await providerConfig.status();
     agentModelConfig.value = config;
-    agentLocalModels.value = catalog.models;
-    agentSelectedModel.value = localWorkspace.value && config.provider !== "ollama"
-      ? ""
-      : agentModelValue.value;
+    try {
+      const catalog = await api.model?.listLocalModels();
+      agentLocalModels.value = catalog?.models ?? [];
+    } catch {
+      agentLocalModels.value = [];
+    }
+    agentSelectedModel.value = config.configured && config.provider !== "ollama"
+      ? agentModelValue.value
+      : agentLocalModels.value.includes(config.localModel || config.model)
+        ? `local:${config.localModel || config.model}`
+        : "";
   } catch {
     say("读取模型配置失败，请稍后重试。");
   } finally {
@@ -1179,11 +1250,6 @@ async function refreshAgentModelChoices() {
 async function selectAgentModel() {
   const providerConfig = api.modelProviderConfig;
   if (!providerConfig || agentModelBusy.value || !agentSelectedModel.value) return;
-  if (localWorkspace.value && agentSelectedModel.value.startsWith("cloud:")) {
-    agentSelectedModel.value = "";
-    say("本机模式已停用云端模型，请选择本机 Ollama。");
-    return;
-  }
   agentModelBusy.value = true;
   try {
     if (agentSelectedModel.value.startsWith("cloud:")) {
@@ -1204,16 +1270,21 @@ async function selectAgentModel() {
 watch(page, (next) => {
   if (next === "agent") void refreshAgentModelChoices();
 });
-watch(localWorkspace, (enabled) => {
-  if (!enabled) return;
-  // Clear any stale cloud selection immediately when entering offline mode.
-  if (agentModelConfig.value?.configured && agentModelConfig.value.provider !== "ollama") {
-    agentSelectedModel.value = "";
+watch(localWorkspace, () => void refreshDashboardBaidu(true));
+watch(agentConversations, (value) => saveAgentConversations(value), { deep: true, immediate: true });
+watch(agentMessages, (value) => {
+  const conversation = agentConversations.value.find((item) => item.id === activeAgentConversationId.value);
+  if (!conversation) return;
+  conversation.messages = value.map((message) => ({ ...message }));
+  const firstQuery = value.find((message) => message.role === "user")?.text.trim();
+  if (firstQuery && conversation.title === "新对话") {
+    conversation.title = firstQuery.length > 26 ? `${firstQuery.slice(0, 26)}…` : firstQuery;
   }
-});
+  conversation.updatedAt = new Date().toISOString();
+  agentConversations.value.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}, { deep: true });
 
 function appendModelReply(value: { query: string; reply: AgentReply }) {
-  agentMessages.value.push({ role: "user", text: value.query });
   agentMessages.value.push({
     role: "assistant",
     text: value.reply.text,
@@ -1223,6 +1294,27 @@ function appendModelReply(value: { query: string; reply: AgentReply }) {
       : undefined,
   });
   if (agentInput.value === value.query) agentInput.value = "";
+  scrollAgentToLatest();
+}
+function scrollAgentToLatest() {
+  void nextTick(() => {
+    const scroller = agentChatScrollRef.value;
+    if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+  });
+}
+function createAgentConversation() {
+  const conversation: AgentConversation = {
+    id: crypto.randomUUID(),
+    title: "新对话",
+    updatedAt: new Date().toISOString(),
+    messages: [],
+  };
+  agentConversations.value.unshift(conversation);
+  activeAgentConversationId.value = conversation.id;
+  agentMessages.value = [];
+  agentInput.value = "";
+  agentConversationKey.value += 1;
+  agentNewConversationReview.value = false;
 }
 function requestNewAgentConversation() {
   if (modelConsentRef.value?.isBusy()) return;
@@ -1230,18 +1322,49 @@ function requestNewAgentConversation() {
     agentNewConversationReview.value = true;
     return;
   }
-  startNewAgentConversation();
+  createAgentConversation();
 }
-function startNewAgentConversation() {
+function confirmNewAgentConversation() {
+  if (!agentNewConversationReview.value) return;
+  const current = activeAgentConversation.value;
+  if (current) current.unresolved = true;
+  createAgentConversation();
+}
+function openAgentConversation(id: string) {
+  if (id === activeAgentConversationId.value || modelConsentRef.value?.isBusy()) return;
+  if (modelConsentRef.value?.requiresRecovery()) {
+    const current = activeAgentConversation.value;
+    if (current) current.unresolved = true;
+  }
+  const conversation = agentConversations.value.find((item) => item.id === id);
+  if (!conversation) return;
+  agentMessages.value.forEach((message) => { message.actionId = undefined; });
+  activeAgentConversationId.value = conversation.id;
+  agentMessages.value = conversation.messages.map(restoreAgentMessage);
+  agentInput.value = "";
+  agentConversationKey.value += 1;
+  scrollAgentToLatest();
+}
+function deleteAgentConversation(id: string) {
+  if (id === activeAgentConversationId.value && modelConsentRef.value?.isBusy()) return;
+  const conversation = agentConversations.value.find((item) => item.id === id);
+  if (!conversation) return;
+  const wasActive = id === activeAgentConversationId.value;
+  agentConversations.value = agentConversations.value.filter((item) => item.id !== id);
+  if (!wasActive) return;
   agentMessages.value = [];
   agentInput.value = "";
   agentConversationKey.value += 1;
   agentNewConversationReview.value = false;
-}
-function confirmNewAgentConversation() {
-  if (!agentNewConversationReview.value) return;
-  agentHasArchivedUnresolvedTurn.value = true;
-  startNewAgentConversation();
+  if (agentConversations.value.length) {
+    const nextConversation = agentConversations.value[0];
+    activeAgentConversationId.value = nextConversation.id;
+    agentMessages.value = nextConversation.messages.map(restoreAgentMessage);
+    scrollAgentToLatest();
+  } else {
+    activeAgentConversationId.value = "";
+    createAgentConversation();
+  }
 }
 async function confirmAgent(message: AgentMessage, accepted: boolean) {
   if (!message.actionId || agentActionBusy.value) return;
@@ -1418,16 +1541,6 @@ async function saveTaskRename() {
     say("归档记录名称已更新。");
   });
 }
-async function connectProvider(provider: "baidu" | "quark") {
-  try {
-    const allowed = await runCloudAction(session.value, localWorkspace.value, async () => {
-      say(await api.settings.connectProvider(provider));
-    });
-    if (!allowed) say("本机模式已禁用网盘授权；不会发送云端请求。");
-  } catch (error) {
-    showError(error);
-  }
-}
 async function resetSettings() {
   try {
     Object.assign(settings, await api.settings.reset());
@@ -1526,12 +1639,12 @@ function baiduTaskStateLabel(state: string) {
       </div>
       <div class="login-fields">
         <template v-if="loginMode === 'email-password' || loginMode === 'email-code'">
-          <label>邮箱或用户名</label>
-          <input v-model="loginIdentifier" autocomplete="username" placeholder="请输入邮箱地址或用户名" />
+          <label>邮箱</label>
+          <input v-model="loginIdentifier" type="email" autocomplete="email" placeholder="请输入邮箱地址" />
           <label>{{ loginMode === 'email-password' ? '密码' : '邮箱验证码' }}</label>
           <div class="proof-field">
             <input v-model="loginProof" :type="loginMode === 'email-password' ? 'password' : 'text'" :autocomplete="loginMode === 'email-password' ? 'current-password' : 'one-time-code'" :placeholder="loginMode === 'email-password' ? '请输入密码' : '请输入邮箱验证码'" />
-            <button v-if="loginMode === 'email-code'" class="text-button" @click="loginError = '邮箱验证码服务尚未接入；当前不会发送邮件。'">获取验证码</button>
+            <button v-if="loginMode === 'email-code'" class="text-button" :disabled="emailCodeBusy" @click="sendLoginCode">{{ emailCodeBusy ? '发送中…' : '获取验证码' }}</button>
           </div>
           <div class="form-foot">
             <button class="text-button" @click="showPasswordReset">忘记密码？</button>
@@ -1553,23 +1666,25 @@ function baiduTaskStateLabel(state: string) {
           <label>邮箱验证码</label>
           <div class="proof-field">
             <input v-model="loginProof" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入邮箱验证码" />
-            <button class="text-button" @click="loginError = '邮箱验证服务尚未接入；当前不会发送邮件。'">获取验证码</button>
+            <button class="text-button" :disabled="emailCodeBusy" @click="sendLoginCode">{{ emailCodeBusy ? '发送中…' : '获取验证码' }}</button>
           </div>
           <label>{{ loginMode === 'register' ? '设置密码' : '新密码' }}</label>
-          <input type="password" autocomplete="new-password" placeholder="至少 8 位" />
-          <label>确认密码</label>
-          <input type="password" autocomplete="new-password" placeholder="请再次输入密码" />
+          <input v-model="loginPassword" type="password" autocomplete="new-password" placeholder="至少 8 位" />
+          <template v-if="loginMode === 'register'">
+            <label>确认密码</label>
+            <input v-model="loginPasswordConfirm" type="password" autocomplete="new-password" placeholder="请再次输入密码" />
+          </template>
         </template>
       </div>
       <p v-if="loginError" class="error-note">{{ loginError }}</p>
       <p v-if="props.testTransport" class="integration-banner">
         {{ props.testTransport }}
       </p>
-      <p v-if="!isMock" class="auth-not-connected">真实认证接口尚未连接；不会伪造登录、发送验证码或创建账号。</p>
+      <p v-if="!isMock && !api.auth.configuration().ready" class="auth-not-connected">{{ api.auth.configuration().reason }}</p>
       <button
         class="primary-button login-submit"
         @click="submitAuthView"
-        :disabled="loginBusy || (!isMock && (loginMode === 'register' || loginMode === 'forgot-password'))"
+        :disabled="loginBusy || emailCodeBusy || (!isMock && !api.auth.configuration().ready)"
       >
         {{
           loginBusy ? "正在登录…" :
@@ -1579,7 +1694,7 @@ function baiduTaskStateLabel(state: string) {
         }}
       </button>
       <p v-if="canEnterLocalWorkspace" class="local-mode-note">
-        本机模式无需登录，照片、任务和 Agent 留在此设备；账号、云同步与网盘功能将停用。
+        本机模式无需登录；素材索引、任务和 Agent 留在此设备。百度网盘可单独授权并由你确认上传，影序账号与跨设备同步保持关闭。
       </p>
       <button
         v-if="canEnterLocalWorkspace"
@@ -1684,7 +1799,7 @@ function baiduTaskStateLabel(state: string) {
         <div class="top-actions">
           <span v-if="!localWorkspace" class="draft-chip"><i></i> V2 草稿预览</span
           ><span class="demo-chip"
-            ><i></i>{{ isMock ? "演示数据" : localWorkspace ? "本机模式 · 云端已停用" : "本地真实数据" }}</span
+            ><i></i>{{ isMock ? "演示数据" : localWorkspace ? "本机模式 · 账号同步停用" : "本地真实数据" }}</span
           >
           <div class="search-action-wrap">
             <button
@@ -1775,11 +1890,11 @@ function baiduTaskStateLabel(state: string) {
           </button>
         </div>
       </header>
-      <div class="page-scroll">
-        <div class="page-content">
+      <div :class="['page-scroll', { 'agent-page-scroll': page === 'agent' }]">
+        <div :class="['page-content', { 'agent-page-content': page === 'agent' }]">
           <div v-if="notice" class="toast inline-toast">{{ notice }}</div>
           <div v-if="localWorkspace" class="local-mode-banner" role="status">
-            <b>本机模式已开启</b><span>无需账号；本地 Agent、素材索引和备份仅在此设备运行。云账号、跨设备同步与网盘入口均已停用。</span>
+            <b>本机模式已开启</b><span>无需影序账号；素材索引、备份和 Agent 工具在本机运行。你可自带云端模型 Key，也可单独授权百度网盘并确认上传已校验副本；影序账号和跨设备同步保持关闭。</span>
           </div>
           <ScanSummary :report="page === 'backup' ? backupScan : page === 'transfer' ? transferScan : page === 'library' ? indexScan : null" />
 
@@ -1851,9 +1966,9 @@ function baiduTaskStateLabel(state: string) {
                 </div>
                 <p class="native-baidu-detail">{{ dashboardBaiduStatus.detail }}</p>
                 <div class="native-baidu-stats" aria-label="百度网盘上传统计">
-                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseCloud ? dashboardBaiduCounts.queued : "—" }}</b><small>等待上传</small></div>
-                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseCloud ? dashboardBaiduCounts.uploading : "—" }}</b><small>上传中</small></div>
-                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseCloud ? dashboardBaiduCounts.verified : "—" }}</b><small>已核验</small></div>
+                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseBaidu ? dashboardBaiduCounts.queued : "—" }}</b><small>等待上传</small></div>
+                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseBaidu ? dashboardBaiduCounts.uploading : "—" }}</b><small>上传中</small></div>
+                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseBaidu ? dashboardBaiduCounts.verified : "—" }}</b><small>已核验</small></div>
                 </div>
                 <div class="native-baidu-latest">
                   <b>最近上传</b>
@@ -1861,11 +1976,11 @@ function baiduTaskStateLabel(state: string) {
                     <span>{{ latestDashboardBaiduTask.name }}</span>
                     <small>{{ baiduTaskStateLabel(latestDashboardBaiduTask.state) }} · {{ latestDashboardBaiduTask.chunksTotal ? Math.round(latestDashboardBaiduTask.chunksDone / latestDashboardBaiduTask.chunksTotal * 100) : 0 }}%</small>
                   </span>
-                  <small v-else>{{ dashboardBaiduProvider?.authorized && canUseCloud ? "暂无上传记录" : "连接后显示上传记录" }}</small>
+                  <small v-else>{{ dashboardBaiduProvider?.authorized && canUseBaidu ? "暂无上传记录" : "连接后显示上传记录" }}</small>
                 </div>
                 <div class="native-baidu-actions">
                   <button class="secondary-button compact" @click="openBaiduSettings">管理网盘</button>
-                  <button class="primary-button compact" :disabled="!api.netdisk || !canUseCloud || !dashboardBaiduProvider?.authorized || !dashboardBaiduProvider.realUploadAvailable" @click="setPage('library')">选择素材上传</button>
+                  <button class="primary-button compact" :disabled="!canUseBaidu || !dashboardBaiduProvider?.authorized || !dashboardBaiduProvider.realUploadAvailable" @click="setPage('library')">选择素材上传</button>
                 </div>
               </div>
             </section>
@@ -2144,11 +2259,6 @@ function baiduTaskStateLabel(state: string) {
                         name: '百度网盘',
                         meta: '需要官方账号授权',
                       },
-                      {
-                        id: 'quark',
-                        name: '夸克网盘',
-                        meta: '官方 API 能力待核验',
-                      },
                     ]"
                     :key="item.id"
                     class="option-row"
@@ -2267,7 +2377,7 @@ function baiduTaskStateLabel(state: string) {
                                   ? "本机硬盘"
                                   : id === "baidu"
                                     ? "百度网盘"
-                                    : "夸克网盘",
+                                    : "百度网盘",
                               )
                               .join("、")
                           : backupTargets.join("、") || "请选择目标"
@@ -2507,7 +2617,7 @@ function baiduTaskStateLabel(state: string) {
                         {{
                           file.kind === "video" ? "分析视频" : "分析 / 预览"
                         }}</button
-                      ><button v-if="api.netdisk && !localWorkspace" class="text-button" @click="queueBaidu(file)">加入百度上传队列</button><button
+                      ><button v-if="canUseBaidu" class="text-button" @click="queueBaidu(file)">加入百度上传队列</button><button
                         v-if="isMock"
                         class="text-button"
                         @click="restoreFile(file)"
@@ -2842,19 +2952,22 @@ function baiduTaskStateLabel(state: string) {
                   <Plus :size="15" />新建对话
                 </button>
                 <h4>最近对话</h4>
-                <button v-if="isMock" class="conversation-link">
-                  <Sparkles :size="14" />查找海边日落照片
-                  <small>今天 10:12</small></button
-                ><button v-if="isMock" class="conversation-link">
-                  <Archive :size="14" />昨晚的备份任务结果
-                  <small>昨天 19:34</small>
-                </button>
+                <div class="agent-conversation-list">
+                  <div v-for="conversation in agentConversations" :key="conversation.id" :class="['conversation-item', { active: conversation.id === activeAgentConversationId }]">
+                    <button class="conversation-link" type="button" :disabled="modelConsentRef?.isBusy()" @click="openAgentConversation(conversation.id)">
+                      <Sparkles :size="14" /><span>{{ conversation.title }}</span>
+                      <small>{{ new Date(conversation.updatedAt).toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</small>
+                    </button>
+                    <button class="conversation-delete" type="button" :disabled="conversation.id === activeAgentConversationId && modelConsentRef?.isBusy()" :aria-label="`删除对话：${conversation.title}`" title="删除对话" @click="deleteAgentConversation(conversation.id)">删除</button>
+                  </div>
+                  <p v-if="!agentConversations.length" class="agent-conversation-empty">暂无对话，点击“新建对话”开始。</p>
+                </div>
                 <div class="safety-callout">
                   <ShieldCheck :size="16" />所有有副作用的操作都需你确认。
                 </div>
               </aside>
               <div class="panel chat-panel">
-                <div :class="['chat-scroll', { 'chat-scroll-empty': agentMessages.length === 0 }]">
+                <div ref="agentChatScrollRef" :class="['chat-scroll', { 'chat-scroll-empty': agentMessages.length === 0 }]">
                   <div class="agent-welcome">
                     <span class="agent-orb"><Sparkles :size="20" /></span
                     ><b>你好，{{ displayName }}</b>
@@ -2907,10 +3020,13 @@ function baiduTaskStateLabel(state: string) {
                     </div>
                   </div>
                 </div>
-                <p v-if="agentHasArchivedUnresolvedTurn" role="status" class="safety-callout">
-                  上一轮结果未确认，原记录仍保留在本机；当前是独立新会话。系统不会恢复或重发上一轮。
+                <p v-if="activeAgentConversation?.unresolved" role="status" class="safety-callout">
+                  这段对话含未确认的旧轮次，只读保留记录；系统不会恢复或重发上一轮。请新建独立对话继续。
                 </p>
-                <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :query="agentInput" :hide-status="true" :auto-confirm="true" @reply="appendModelReply" @unavailable="say" />
+                <p v-else-if="agentHasArchivedUnresolvedTurn" role="status" class="safety-callout">
+                  上一轮结果未确认，原记录仍保留在本机；当前是独立新对话。系统不会恢复或重发上一轮。
+                </p>
+                <ModelConsent :key="agentConversationKey" ref="modelConsentRef" :service="api.model" :conversation-id="activeAgentConversationId" :query="agentInput" :hide-status="true" :auto-confirm="true" @reply="appendModelReply" @unavailable="say" />
                 <form class="composer" @submit.prevent="askAgent">
                   <input
                     v-model="agentInput"
@@ -2921,15 +3037,14 @@ function baiduTaskStateLabel(state: string) {
                     v-model="agentSelectedModel"
                     class="agent-composer-model"
                     aria-label="切换 Agent 模型"
-                    :disabled="agentModelBusy || !agentModelConfig || (localWorkspace && agentLocalModels.length === 0)"
+                    :disabled="agentModelBusy || !agentModelConfig"
                     @change="selectAgentModel"
                   >
                     <option v-if="!agentModelConfig" value="">{{ agentModelBusy ? '读取模型…' : '选择模型' }}</option>
-                    <option v-else-if="localWorkspace && agentModelConfig.provider !== 'ollama'" value="" disabled>本机模式已停用云端模型 · 请选择本机 Ollama</option>
-                    <option v-else-if="localWorkspace && !agentModelConfig.configured" value="" disabled>本机 Ollama 尚未配置</option>
-                    <option v-else :value="agentModelValue">{{ agentModelBusy ? '切换中…' : agentModelLabel }}</option>
+                    <option v-else-if="!agentSelectedModel" value="" disabled>选择已安装的本机模型或配置云端模型</option>
+                    <option v-else-if="agentModelConfig.configured && agentModelConfig.provider !== 'ollama'" :value="agentModelValue">{{ agentModelBusy ? '切换中…' : agentModelLabel }}</option>
                     <option
-                      v-if="!localWorkspace && agentModelConfig?.cloudKeyStored && !(agentModelConfig.configured && agentModelConfig.provider !== 'ollama')"
+                      v-if="agentModelConfig?.cloudKeyStored && !(agentModelConfig.configured && agentModelConfig.provider !== 'ollama')"
                       :value="`cloud:${agentModelConfig.cloudProvider || agentModelConfig.provider}:${agentModelConfig.cloudModel || agentModelConfig.model}`"
                     >
                       云端 · {{ (agentModelConfig.cloudProvider || agentModelConfig.provider) === 'deepseek' ? 'DeepSeek' : '通义千问' }} · {{ agentModelConfig.cloudModel || agentModelConfig.model }}
@@ -2938,7 +3053,7 @@ function baiduTaskStateLabel(state: string) {
                       本机 · {{ model }}
                     </option>
                   </select>
-                  <button class="primary-button" type="submit" :disabled="!agentCanSend">
+                  <button class="primary-button" type="submit" :disabled="!agentCanSend || modelConsentRef?.isBusy()">
                     <Send :size="15" />发送
                   </button>
                 </form>
@@ -2949,10 +3064,7 @@ function baiduTaskStateLabel(state: string) {
                 <header class="agent-settings-modal-heading"><div><span class="eyebrow">模型与运行方式</span><h2 id="agent-settings-title">Agent 设置</h2></div><button class="icon-button agent-settings-close" type="button" aria-label="关闭 Agent 设置" @click="agentSettingsOpen = false"><X :size="18" /></button></header>
                 <div class="agent-settings-body">
                   <OllamaOnboarding :service="api.model" :provider-config="api.modelProviderConfig" />
-                  <CloudModelSettings v-if="!localWorkspace" :service="api.modelProviderConfig" />
-                  <p v-else class="integration-banner" role="status">
-                    本机模式已停用云端模型配置；现有云端 Key 保留在系统钥匙串中，不会被选择或调用。退出本机模式后可在此管理云端模型。
-                  </p>
+                  <CloudModelSettings :service="api.modelProviderConfig" @updated="refreshAgentModelChoices" />
                   <AgentLocalFileActions
                     v-if="api.fileActions"
                     :service="api.fileActions"
@@ -3585,8 +3697,8 @@ function baiduTaskStateLabel(state: string) {
                       <option v-if="!localWorkspace">OpenAI 兼容 API</option>
                     </select></label
                   >
-                  <p v-else class="cloud-disabled-note">本机模式不使用云端模型；Agent 仅连接本机 Ollama，命名建议使用本机规则。</p>
-                  <div class="setting-row">
+                  <p v-else class="cloud-disabled-note">命名建议使用本机规则；Agent 可选择本机 Ollama，或使用你保存在钥匙串中的云端模型 API。</p>
+                  <div class="setting-row naming-preset-row">
                     <span
                       ><b>当前命名预设</b
                       ><small>{{
@@ -3646,16 +3758,16 @@ function baiduTaskStateLabel(state: string) {
                 <section id="cloud" class="panel settings-section">
                   <div class="panel-heading">
                     <div>
-                      <h3>{{ localWorkspace ? "百度网盘与云同步（已停用）" : "百度网盘与云同步" }}</h3>
-                      <p>{{ localWorkspace ? "本机模式不发起任何网盘或云同步请求。" : "仅接官方允许的 API 与个人账号授权" }}</p>
+                      <h3>{{ localWorkspace ? "百度网盘（本机直连）与云同步" : "百度网盘与云同步" }}</h3>
+                      <p>{{ localWorkspace ? "百度网盘独立授权；影序账号与跨设备同步保持关闭。" : "仅接官方允许的 API 与个人账号授权" }}</p>
                     </div>
                   </div>
+                  <NetdiskPanel v-if="api.netdisk" :api="api.netdisk" />
+                  <p v-else>浏览器演示不连接真实网盘。请在原生应用查看本机资质、授权与上传队列。</p>
                   <template v-if="localWorkspace">
-                    <p class="cloud-disabled-note">本机模式下云账号、跨设备同步和网盘授权均不可用；相关操作不会发出远端请求。</p>
+                    <p class="cloud-disabled-note">你可将选择并校验过的副本直接上传到百度网盘；授权、选择素材和上传分别由你确认。影序账号与跨设备同步不会启用。</p>
                   </template>
                   <template v-else>
-                    <NetdiskPanel v-if="api.netdisk" :api="api.netdisk" />
-                    <p v-else>浏览器演示不连接真实网盘。请在原生应用查看本机资质、授权与上传队列。</p>
                     <div class="setting-row">
                       <span><b>同步速度上限</b><small>0 表示不限制 · {{ settings.maxUploadMbps }} Mbps</small></span>
                       <input class="number-control" type="number" min="0" :value="settings.maxUploadMbps" @change="updateSetting('maxUploadMbps', Number(($event.target as HTMLInputElement).value))" />
@@ -3764,7 +3876,7 @@ function baiduTaskStateLabel(state: string) {
         ><span>{{
           isMock
             ? "MockDesktopApi · 不读取磁盘"
-            : localWorkspace ? "Rust / SQLite · 云账号、同步和网盘功能已停用" : "Rust / SQLite · 云端账号和 Agent 未连接"
+            : localWorkspace ? "Rust / SQLite · 账号同步停用 · 百度网盘和自带Key模型可用" : "Rust / SQLite · 云端账号和 Agent 未连接"
         }}</span
         ><span class="statusbar-right"
           ><button class="statusbar-help" type="button" disabled title="帮助与反馈入口尚未接入">

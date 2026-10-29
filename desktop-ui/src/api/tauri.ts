@@ -15,6 +15,7 @@ import type {
 } from "./contracts";
 import { ACTION_WINDOW_MS, createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
 import { confirmLocalFileAction, prepareLocalFileAction, selectLocalDirectory } from "./local-file-actions";
+import { createNativeCloudBaseAuth } from "./native-cloudbase-auth";
 import { formatBytes, formatTime, mapJob, mapMedia } from "./format";
 import type { RawJob, RawMedia } from "./format";
 export class ApiError extends Error {
@@ -115,15 +116,15 @@ export function createTauriApi(options: Options = {}): AppApi {
   };
   const readLocalAgentStatus = dedupeInFlight(
     () => invoke<ModelStatus>("agent_local_status"),
-    "本机 Agent 状态读取超时；检查系统钥匙串授权后可手动刷新。不会自动重发请求。",
+    "本机 Agent 状态读取超时；可手动刷新，不会自动重发请求。",
   );
   const readLocalAgentModels = dedupeInFlight(
     () => invoke<{ available: boolean; models: string[] }>("agent_local_models"),
-    "本机模型列表读取超时；检查系统钥匙串授权后可手动刷新。不会自动重发请求。",
+    "本机模型列表读取超时；可手动刷新，不会自动重发请求。",
   );
   const readModelProviderConfig = dedupeInFlight(
     () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "status" }),
-    "模型配置读取超时；检查系统钥匙串授权后可手动刷新。不会自动重发请求。",
+    "模型配置读取超时；可手动刷新，不会自动重发请求。",
   );
   const confirm = options.confirm || (() => Promise.resolve(false));
   const confirmModelUse = options.confirmModelUse || confirm;
@@ -135,6 +136,7 @@ export function createTauriApi(options: Options = {}): AppApi {
   const pendingStarts = new Map<string, { plan: Plan; key: string }>();
   const writeKeys = new Map<string, string>();
   let counter = 0;
+  const cloudAuth = createNativeCloudBaseAuth();
   let lastIndex: IndexResult | null = null;
   const eventListen = options.listen || listen;
   const localAgent = createLocalAgentService({
@@ -290,7 +292,7 @@ export function createTauriApi(options: Options = {}): AppApi {
         throw new ApiError("DESTINATION_REQUIRED", "请先选择本地目的地");
       if (
         payload.destinations.some((p) =>
-          ["local", "baidu", "quark"].includes(p),
+          ["local", "baidu"].includes(p),
         )
       )
         throw new ApiError(
@@ -412,15 +414,13 @@ export function createTauriApi(options: Options = {}): AppApi {
       remove: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "remove" }),
     },
     auth: {
-      restore: () => rpc("auth.restore"),
-      login: () =>
-        Promise.reject(
-          new ApiError(
-            "CLOUD_ADAPTER_NOT_CONNECTED",
-            "真实登录尚未连接，不能创建登录会话",
-          ),
-        ),
-      logout: () => rpc("auth.logout"),
+      configuration: () => cloudAuth.configuration(),
+      sendEmailCode: (email, purpose, registration) => cloudAuth.sendEmailCode(email, purpose, registration),
+      registerEmail: (input) => cloudAuth.registerEmail(input),
+      resetPassword: (input) => cloudAuth.resetPassword(input),
+      restore: () => cloudAuth.restore(),
+      login: (method, identifier, proof) => cloudAuth.login(method, identifier, proof),
+      logout: () => cloudAuth.logout(),
     },
     workbench: {
       async snapshot() {
@@ -555,13 +555,6 @@ export function createTauriApi(options: Options = {}): AppApi {
       get: () => rpc("settings.get"),
       update: (patch) => rpc("settings.update", patch),
       reset: () => rpc("settings.reset"),
-      connectProvider: () =>
-        Promise.reject(
-          new ApiError(
-            "AUTH_FLOW_REQUIRED",
-            "请在个人网盘面板查看实时资质并完成官方授权",
-          ),
-        ),
     },
     presets: {
       list: listPresets,

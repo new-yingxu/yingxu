@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod api;
+pub mod baidu;
 pub mod db;
 pub mod delivery;
 pub mod engine;

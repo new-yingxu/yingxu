@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import type { AgentReply, ModelService, ModelStatus } from '../api/contracts'
 import { createModelConsent, executeModelSend, modelFailure, type ModelPlan } from '../api/model-consent'
 import { localAgentStatusView, withLocalAgentStatusTimeout } from '../api/local-agent'
-const props=defineProps<{ service?: ModelService; query: string; hideStatus?: boolean; autoConfirm?: boolean }>()
+const props=defineProps<{ service?: ModelService; query: string; conversationId?: string; hideStatus?: boolean; autoConfirm?: boolean }>()
 const emit=defineEmits<{
   reply: [value: { query: string; reply: AgentReply }]
   unavailable: [message: string]
@@ -24,7 +24,7 @@ const recoveryRequired=ref(false)
 const recoveryAvailable=ref(false), recoveryReview=ref<ModelPlan|null>(null)
 const dialog=ref<HTMLElement|null>(null), cancel=ref<HTMLButtonElement|null>(null), review=ref<HTMLButtonElement|null>(null)
 const recoveryDialog=ref<HTMLElement|null>(null), recoveryCancel=ref<HTMLButtonElement|null>(null)
-const sessionId=crypto.randomUUID()
+const sessionId=props.conversationId || crypto.randomUUID()
 let mounted=true
 async function refresh() {
   if (!controller || busy.value || statusTimedOut.value) return
