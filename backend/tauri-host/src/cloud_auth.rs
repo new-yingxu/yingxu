@@ -9,6 +9,9 @@ const SIGNOUT_PATH: &str = "/auth/v1/user/signout";
 const EMAIL_VERIFICATION_PATH: &str = "/auth/v1/verification";
 const VERIFY_EMAIL_PATH: &str = "/auth/v1/verification/verify";
 const SIGNUP_PATH: &str = "/auth/v1/signup";
+const REAUTHENTICATE_PATH: &str = "/auth/v1/user/reauthenticate";
+const USER_PASSWORD_PATH: &str = "/auth/v1/user/password";
+const USER_BASIC_EDIT_PATH: &str = "/auth/v1/user/basic/edit";
 const KEYRING_SERVICE: &str = "app.yingxu.desktop.cloudbase";
 const KEYRING_ACCOUNT: &str = "user-session-v1";
 const MAX_RESPONSE_BYTES: u64 = 64 * 1024;
@@ -86,6 +89,7 @@ pub enum AuthError {
     InvalidConfiguration,
     InvalidInput,
     InvalidEndpoint,
+    Unauthenticated,
     AuthenticationRejected,
     ServiceUnavailable,
     InvalidResponse,
@@ -98,6 +102,7 @@ impl AuthError {
             Self::NotConfigured => "尚未配置影序 CloudBase 登录域名。",
             Self::InvalidConfiguration | Self::InvalidEndpoint => "登录服务地址配置无效。",
             Self::InvalidInput => "请填写有效的账号和密码。",
+            Self::Unauthenticated => "请先登录影序账号，再修改账户信息。",
             Self::AuthenticationRejected => "登录失败，请检查账号信息或稍后重试。",
             Self::ServiceUnavailable => "登录服务暂不可用，请稍后重试。",
             Self::InvalidResponse => "登录服务返回无效响应。",
@@ -119,6 +124,15 @@ pub trait AuthTransport: Send + Sync {
         body: &[u8],
         bearer_token: Option<&str>,
     ) -> Result<serde_json::Value, AuthError>;
+
+    fn patch_json(
+        &self,
+        _url: &Url,
+        _body: &[u8],
+        _bearer_token: Option<&str>,
+    ) -> Result<serde_json::Value, AuthError> {
+        Err(AuthError::InvalidEndpoint)
+    }
 }
 
 pub trait TokenStore: Send + Sync {
@@ -363,6 +377,71 @@ impl CloudBaseAuthClient {
         self.store_token_response(response)
     }
 
+    /// Send a short-lived code to the signed-in account for sensitive changes.
+    pub fn reauthenticate(&self, verify_opt: &str) -> Result<(), AuthError> {
+        if !matches!(verify_opt, "email_code" | "phone_code") {
+            return Err(AuthError::InvalidInput);
+        }
+        let tokens = self.token_store.load()?.ok_or(AuthError::Unauthenticated)?;
+        let url = self.config.endpoint_url(REAUTHENTICATE_PATH)?;
+        validate_auth_endpoint(&self.config.origin, &url, &self.config.client_id)?;
+        let body = Zeroizing::new(
+            serde_json::to_vec(&serde_json::json!({"verify_opt": verify_opt}))
+                .map_err(|_| AuthError::InvalidInput)?,
+        );
+        self.transport
+            .post_json(&url, &body, Some(&tokens.access_token))?;
+        Ok(())
+    }
+
+    /// Change the signed-in user's CloudBase login username.
+    pub fn update_username(&self, username: &str) -> Result<(), AuthError> {
+        if !valid_username(username) {
+            return Err(AuthError::InvalidInput);
+        }
+        let tokens = self.token_store.load()?.ok_or(AuthError::Unauthenticated)?;
+        let url = self.config.endpoint_url(USER_BASIC_EDIT_PATH)?;
+        validate_auth_endpoint(&self.config.origin, &url, &self.config.client_id)?;
+        let body = Zeroizing::new(
+            serde_json::to_vec(&serde_json::json!({"username": username}))
+                .map_err(|_| AuthError::InvalidInput)?,
+        );
+        self.transport
+            .post_json(&url, &body, Some(&tokens.access_token))?;
+        Ok(())
+    }
+
+    /// Change the signed-in user's password after the required email/SMS challenge.
+    pub fn update_password(
+        &self,
+        old_password: &str,
+        new_password: &str,
+        verification_code: &str,
+    ) -> Result<(), AuthError> {
+        if old_password.is_empty()
+            || !valid_password(new_password)
+            || verification_code.len() != 6
+            || !verification_code.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(AuthError::InvalidInput);
+        }
+        let tokens = self.token_store.load()?.ok_or(AuthError::Unauthenticated)?;
+        let url = self.config.endpoint_url(USER_PASSWORD_PATH)?;
+        validate_auth_endpoint(&self.config.origin, &url, &self.config.client_id)?;
+        let body = Zeroizing::new(
+            serde_json::to_vec(&serde_json::json!({
+                "old_password": old_password,
+                "new_password": new_password,
+                "confirm_password": new_password,
+                "verify_code": verification_code
+            }))
+            .map_err(|_| AuthError::InvalidInput)?,
+        );
+        self.transport
+            .patch_json(&url, &body, Some(&tokens.access_token))?;
+        Ok(())
+    }
+
     fn verify_email_code(
         &self,
         verification_id: &str,
@@ -462,7 +541,14 @@ fn validate_auth_endpoint(origin: &Url, target: &Url, client_id: &str) -> Result
     let query = target.query_pairs().collect::<Vec<_>>();
     let allowed_path = matches!(
         target.path(),
-        AUTH_PATH | SIGNOUT_PATH | EMAIL_VERIFICATION_PATH | VERIFY_EMAIL_PATH | SIGNUP_PATH
+        AUTH_PATH
+            | SIGNOUT_PATH
+            | EMAIL_VERIFICATION_PATH
+            | VERIFY_EMAIL_PATH
+            | SIGNUP_PATH
+            | REAUTHENTICATE_PATH
+            | USER_PASSWORD_PATH
+            | USER_BASIC_EDIT_PATH
     );
     if origin.scheme() != "https"
         || target.scheme() != "https"
@@ -538,6 +624,49 @@ impl AuthTransport for NativeHttpsTransport {
         }
         serde_json::from_slice(&bytes).map_err(|_| AuthError::InvalidResponse)
     }
+
+    fn patch_json(
+        &self,
+        url: &Url,
+        body: &[u8],
+        bearer_token: Option<&str>,
+    ) -> Result<serde_json::Value, AuthError> {
+        validate_auth_endpoint(&self.origin, url, &self.client_id)?;
+        let mut request = self
+            .client
+            .patch(url.clone())
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body.to_vec());
+        if let Some(token) = bearer_token {
+            request = request.bearer_auth(token);
+        }
+        let mut response = request.send().map_err(|_| AuthError::ServiceUnavailable)?;
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|length| length > MAX_RESPONSE_BYTES)
+        {
+            return Err(AuthError::AuthenticationRejected);
+        }
+        let mut limited = (&mut response).take(MAX_RESPONSE_BYTES + 1);
+        let mut bytes = Zeroizing::new(Vec::new());
+        limited
+            .read_to_end(&mut bytes)
+            .map_err(|_| AuthError::ServiceUnavailable)?;
+        if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err(AuthError::InvalidResponse);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| AuthError::InvalidResponse)
+    }
+}
+
+fn valid_password(password: &str) -> bool {
+    let bytes = password.as_bytes();
+    (8..=64).contains(&bytes.len())
+        && bytes.iter().any(u8::is_ascii_lowercase)
+        && bytes.iter().any(u8::is_ascii_uppercase)
+        && bytes.iter().any(u8::is_ascii_digit)
+        && bytes.iter().any(|byte| !byte.is_ascii_alphanumeric())
 }
 
 pub struct SystemTokenStore;

@@ -27,6 +27,8 @@ use yingxu_core::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
+mod cloud_auth;
+
 struct HostState {
     engine: Engine,
     shutdown: Arc<AtomicBool>,
@@ -1130,6 +1132,83 @@ async fn backend_request(
     }
 }
 
+fn auth_core_error(error: cloud_auth::AuthError) -> CoreError {
+    let code = match error {
+        cloud_auth::AuthError::NotConfigured => "CLOUD_AUTH_NOT_CONFIGURED",
+        cloud_auth::AuthError::Unauthenticated => "CLOUD_AUTH_REQUIRED",
+        cloud_auth::AuthError::InvalidInput => "INVALID_ACCOUNT_INPUT",
+        cloud_auth::AuthError::AuthenticationRejected => "ACCOUNT_CHANGE_REJECTED",
+        cloud_auth::AuthError::ServiceUnavailable => "ACCOUNT_SERVICE_UNAVAILABLE",
+        cloud_auth::AuthError::SecureStoreUnavailable => "ACCOUNT_CREDENTIAL_STORE_UNAVAILABLE",
+        cloud_auth::AuthError::InvalidConfiguration
+        | cloud_auth::AuthError::InvalidEndpoint
+        | cloud_auth::AuthError::InvalidResponse => "ACCOUNT_SERVICE_ERROR",
+    };
+    CoreError::new(code, error.public_message())
+}
+
+fn require_main_window(window: &tauri::WebviewWindow) -> Result<(), CoreError> {
+    if window.label() != "main" {
+        return Err(CoreError::new(
+            "PERMISSION_DENIED",
+            "仅主窗口可修改影序账号信息",
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn cloudbase_request_account_change_code(
+    window: tauri::WebviewWindow,
+) -> Result<(), CoreError> {
+    require_main_window(&window)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let client =
+            cloud_auth::CloudBaseAuthClient::from_embedded_config().map_err(auth_core_error)?;
+        client.reauthenticate("email_code").map_err(auth_core_error)
+    })
+    .await
+    .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "账户验证邮件发送失败"))?
+}
+
+#[tauri::command]
+async fn cloudbase_update_account_username(
+    window: tauri::WebviewWindow,
+    username: String,
+) -> Result<(), CoreError> {
+    require_main_window(&window)?;
+    let username = Zeroizing::new(username);
+    tauri::async_runtime::spawn_blocking(move || {
+        let client =
+            cloud_auth::CloudBaseAuthClient::from_embedded_config().map_err(auth_core_error)?;
+        client.update_username(&username).map_err(auth_core_error)
+    })
+    .await
+    .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "账户用户名更新失败"))?
+}
+
+#[tauri::command]
+async fn cloudbase_update_account_password(
+    window: tauri::WebviewWindow,
+    old_password: String,
+    new_password: String,
+    verification_code: String,
+) -> Result<(), CoreError> {
+    require_main_window(&window)?;
+    let old_password = Zeroizing::new(old_password);
+    let new_password = Zeroizing::new(new_password);
+    let verification_code = Zeroizing::new(verification_code);
+    tauri::async_runtime::spawn_blocking(move || {
+        let client =
+            cloud_auth::CloudBaseAuthClient::from_embedded_config().map_err(auth_core_error)?;
+        client
+            .update_password(&old_password, &new_password, &verification_code)
+            .map_err(auth_core_error)
+    })
+    .await
+    .map_err(|_| CoreError::new("BACKGROUND_TASK_FAILED", "账户密码更新失败"))?
+}
+
 #[tauri::command]
 async fn agent_local_status(
     window: tauri::WebviewWindow,
@@ -1920,6 +1999,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             select_directory,
             backend_request,
+            cloudbase_request_account_change_code,
+            cloudbase_update_account_username,
+            cloudbase_update_account_password,
             agent_local_status,
             agent_local_models,
             agent_model_provider_config,

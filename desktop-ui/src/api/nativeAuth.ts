@@ -42,6 +42,28 @@ export function signOut(): Promise<void> {
   return invoke<void>('cloudbase_sign_out')
 }
 
+/** Ask CloudBase to send a short-lived verification code to the signed-in account email. */
+export function requestAccountChangeCode(): Promise<void> {
+  if (!isTauri()) return Promise.reject(new Error('账户安全操作仅在影序桌面端可用。'))
+  return invoke<void>('cloudbase_request_account_change_code')
+}
+
+/** Update the current CloudBase account's login username through the native host. */
+export function updateAccountUsername(username: string): Promise<void> {
+  if (!isTauri()) return Promise.reject(new Error('账户安全操作仅在影序桌面端可用。'))
+  return invoke<void>('cloudbase_update_account_username', { username })
+}
+
+/** Change the current CloudBase account password; secret values stay in the native host call. */
+export function updateAccountPassword(oldPassword: string, newPassword: string, verificationCode: string): Promise<void> {
+  if (!isTauri()) return Promise.reject(new Error('账户安全操作仅在影序桌面端可用。'))
+  return invoke<void>('cloudbase_update_account_password', {
+    oldPassword,
+    newPassword,
+    verificationCode,
+  })
+}
+
 export function currentCloudSession(): Promise<NativeAuthIdentity | null> {
   if (!isTauri()) return Promise.resolve(null)
   return invoke<NativeAuthIdentity | null>('cloud_session_current')

@@ -46,6 +46,7 @@ import { formatBytes } from "./api/format";
 import type { RawJob } from "./api/format";
 import { checkForUpdates, currentAppVersion, openReleaseUrl } from "./api/version-updates";
 import type { UpdateCheckResult } from "./api/version-updates";
+import { requestAccountChangeCode, updateAccountPassword, updateAccountUsername } from "./api/nativeAuth";
 import {
   applyLibraryPage,
   canLoadNextPage,
@@ -181,6 +182,16 @@ const loginNickname = ref("");
 const loginProof = ref("");
 const loginError = ref("");
 const loginBusy = ref(false);
+const accountDialog = ref<"username" | "password" | "">("");
+const accountUsernameDraft = ref("");
+const accountUsername = ref("");
+const accountOldPassword = ref("");
+const accountNewPassword = ref("");
+const accountConfirmPassword = ref("");
+const accountVerificationCode = ref("");
+const accountCodeSent = ref(false);
+const accountBusy = ref(false);
+const accountError = ref("");
 const notice = ref("");
 const showModal = ref("");
 const globalSearchOpen = ref(false);
@@ -752,6 +763,106 @@ async function logout() {
   page.value = "home";
   loginProof.value = "";
   loginIdentifier.value = "";
+}
+function openAccountDialog(kind: "username" | "password") {
+  accountDialog.value = kind;
+  accountError.value = "";
+  accountUsernameDraft.value = "";
+  accountOldPassword.value = "";
+  accountNewPassword.value = "";
+  accountConfirmPassword.value = "";
+  accountVerificationCode.value = "";
+  accountCodeSent.value = false;
+}
+function closeAccountDialog() {
+  accountDialog.value = "";
+  accountError.value = "";
+  accountOldPassword.value = "";
+  accountNewPassword.value = "";
+  accountConfirmPassword.value = "";
+  accountVerificationCode.value = "";
+}
+async function sendAccountChangeCode() {
+  accountError.value = "";
+  if (isMock) {
+    accountError.value = "浏览器预览不会发送真实验证码；请在已登录的桌面端使用此功能。";
+    return;
+  }
+  accountBusy.value = true;
+  try {
+    await requestAccountChangeCode();
+    accountCodeSent.value = true;
+    say(`验证码已发送至 ${displayEmail.value}，5 分钟内有效。`);
+  } catch (error) {
+    accountError.value = errorText(error);
+  } finally {
+    accountBusy.value = false;
+  }
+}
+async function saveAccountUsername() {
+  const username = accountUsernameDraft.value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:+ @-]{1,47}$/.test(username)) {
+    accountError.value = "用户名需为 2 至 48 位，并以字母或数字开头。";
+    return;
+  }
+  if (isMock) {
+    accountError.value = "浏览器预览不连接账户服务，未修改真实用户名。";
+    return;
+  }
+  accountBusy.value = true;
+  accountError.value = "";
+  try {
+    await updateAccountUsername(username);
+    accountUsername.value = username;
+    closeAccountDialog();
+    say("登录用户名已更新；退出登录后请使用新用户名登录。");
+  } catch (error) {
+    accountError.value = errorText(error);
+  } finally {
+    accountBusy.value = false;
+  }
+}
+async function saveAccountPassword() {
+  const password = accountNewPassword.value;
+  if (!accountCodeSent.value) {
+    accountError.value = "请先获取邮箱验证码。";
+    return;
+  }
+  if (accountOldPassword.value.length === 0) {
+    accountError.value = "请输入当前密码。";
+    return;
+  }
+  if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,64}$/.test(password)) {
+    accountError.value = "新密码需为 8 至 64 位，并包含大小写字母、数字和特殊字符。";
+    return;
+  }
+  if (password !== accountConfirmPassword.value) {
+    accountError.value = "两次输入的新密码不一致。";
+    return;
+  }
+  if (!/^\d{6}$/.test(accountVerificationCode.value)) {
+    accountError.value = "请输入 6 位邮箱验证码。";
+    return;
+  }
+  if (isMock) {
+    accountError.value = "浏览器预览不连接账户服务，未修改真实密码。";
+    return;
+  }
+  accountBusy.value = true;
+  accountError.value = "";
+  try {
+    await updateAccountPassword(accountOldPassword.value, password, accountVerificationCode.value);
+    closeAccountDialog();
+    say("登录密码已更新。其他设备可能需要重新登录。" );
+  } catch (error) {
+    accountError.value = errorText(error);
+  } finally {
+    accountBusy.value = false;
+    accountOldPassword.value = "";
+    accountNewPassword.value = "";
+    accountConfirmPassword.value = "";
+    accountVerificationCode.value = "";
+  }
 }
 async function scanSource() {
   scanBusy.value = true;
@@ -3319,6 +3430,29 @@ function taskStateLabel(state: TaskState) {
                         )
                       "
                   /></label>
+                  <div class="account-credential-settings">
+                    <div class="account-credential-heading">
+                      <div>
+                        <b>账户安全</b>
+                        <small>{{
+                          localWorkspace
+                            ? "本机模式没有云端账户；登录影序账号后可管理用户名和密码。"
+                            : isMock
+                              ? "浏览器预览只展示交互，不会修改真实账号。"
+                              : `账户邮箱：${displayEmail}`
+                        }}</small>
+                      </div>
+                      <span v-if="accountUsername" class="state-pill">用户名：{{ accountUsername }}</span>
+                    </div>
+                    <div class="setting-row">
+                      <span><b>登录用户名</b><small>修改后，下次可使用新用户名登录。</small></span>
+                      <button class="secondary-button compact" :disabled="localWorkspace || (!session && !isMock)" @click="openAccountDialog('username')">修改用户名</button>
+                    </div>
+                    <div class="setting-row">
+                      <span><b>登录密码</b><small>修改密码需要当前密码和邮箱验证码。</small></span>
+                      <button class="secondary-button compact" :disabled="localWorkspace || (!session && !isMock)" @click="openAccountDialog('password')">修改密码</button>
+                    </div>
+                  </div>
                 </section>
                 <section id="backup-settings" class="panel settings-section">
                   <div class="panel-heading">
@@ -3618,6 +3752,61 @@ function taskStateLabel(state: TaskState) {
         </div>
       </form>
     </div>
+  </div>
+  <div v-if="accountDialog" class="modal-backdrop" @click.self="closeAccountDialog">
+    <form
+      v-if="accountDialog === 'username'"
+      class="confirm-modal account-editor-form"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="account-username-title"
+      novalidate
+      @submit.prevent="saveAccountUsername"
+    >
+      <button class="modal-close" type="button" aria-label="关闭" @click="closeAccountDialog">×</button>
+      <div class="modal-icon"><LockKeyhole :size="19" /></div>
+      <h2 id="account-username-title">修改登录用户名</h2>
+      <p>新用户名需为 2 至 48 位，并以英文字母或数字开头。修改成功后，下次登录请使用新用户名。</p>
+      <label class="field-label" for="account-username">新用户名</label>
+      <input id="account-username" v-model="accountUsernameDraft" autocomplete="username" maxlength="48" required placeholder="请输入新用户名" />
+      <p v-if="isMock" class="account-editor-note">浏览器预览不连接账户服务，不会修改真实账号。</p>
+      <p v-if="accountError" class="error-note" role="alert">{{ accountError }}</p>
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" @click="closeAccountDialog">取消</button>
+        <button class="primary-button" type="submit" :disabled="accountBusy">{{ accountBusy ? "正在保存…" : "保存用户名" }}</button>
+      </div>
+    </form>
+    <form
+      v-else
+      class="confirm-modal account-editor-form"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="account-password-title"
+      novalidate
+      @submit.prevent="saveAccountPassword"
+    >
+      <button class="modal-close" type="button" aria-label="关闭" @click="closeAccountDialog">×</button>
+      <div class="modal-icon"><LockKeyhole :size="19" /></div>
+      <h2 id="account-password-title">修改登录密码</h2>
+      <p>为保护账号，需要当前密码和发送到绑定邮箱的 6 位验证码。验证码 5 分钟内有效。</p>
+      <label class="field-label" for="account-old-password">当前密码</label>
+      <input id="account-old-password" v-model="accountOldPassword" type="password" autocomplete="current-password" required />
+      <label class="field-label" for="account-new-password">新密码</label>
+      <input id="account-new-password" v-model="accountNewPassword" type="password" autocomplete="new-password" minlength="8" maxlength="64" required placeholder="8–64 位，含大小写字母、数字和特殊字符" />
+      <label class="field-label" for="account-confirm-password">确认新密码</label>
+      <input id="account-confirm-password" v-model="accountConfirmPassword" type="password" autocomplete="new-password" minlength="8" maxlength="64" required />
+      <label class="field-label" for="account-verification-code">邮箱验证码</label>
+      <div class="account-code-row">
+        <input id="account-verification-code" v-model="accountVerificationCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required placeholder="请输入 6 位验证码" />
+        <button class="secondary-button compact" type="button" :disabled="accountBusy || accountCodeSent" @click="sendAccountChangeCode">{{ accountBusy ? "发送中…" : accountCodeSent ? "已发送" : "获取验证码" }}</button>
+      </div>
+      <p v-if="isMock" class="account-editor-note">浏览器预览不发送验证码，也不会修改真实账号。</p>
+      <p v-if="accountError" class="error-note" role="alert">{{ accountError }}</p>
+      <div class="modal-actions">
+        <button class="secondary-button" type="button" @click="closeAccountDialog">取消</button>
+        <button class="primary-button" type="submit" :disabled="accountBusy">{{ accountBusy ? "正在保存…" : "确认修改" }}</button>
+      </div>
+    </form>
   </div>
   <div v-if="pendingConfirmation" class="modal-backdrop" @keydown="modalKeys">
     <section
