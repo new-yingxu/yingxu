@@ -33,6 +33,8 @@ import type {
   AppApi,
   ModelProviderConfig,
   ScanReport, IndexResult,
+  NetdiskProvider,
+  NetdiskTask,
 } from "./api/contracts";
 import { createDesktopApi } from "./api";
 import { errorText } from "./api/tauri";
@@ -311,6 +313,31 @@ const summary = reactive({
   destinations: 0,
   reviewCount: 0,
 });
+const dashboardBaiduProvider = ref<NetdiskProvider | null>(null);
+const dashboardBaiduTasks = ref<NetdiskTask[]>([]);
+const dashboardBaiduLoading = ref(false);
+const dashboardBaiduError = ref("");
+let dashboardBaiduLastRefresh = 0;
+const dashboardBaiduCounts = computed(() => ({
+  queued: dashboardBaiduTasks.value.filter((task) => task.state === "queued").length,
+  uploading: dashboardBaiduTasks.value.filter((task) => task.state === "uploading").length,
+  verified: dashboardBaiduTasks.value.filter((task) => task.state === "completed" && task.verifiedRemote).length,
+}));
+const dashboardBaiduStatus = computed(() => {
+  if (localWorkspace.value) return { label: "本机模式已停用", detail: "本机模式不会发起网盘请求。", tone: "queued" };
+  if (!session.value) return { label: "登录后连接", detail: "登录影序账号后可查看授权和上传任务。", tone: "queued" };
+  if (!api.netdisk) return { label: "当前版本不可用", detail: "当前运行环境未提供原生网盘服务。", tone: "failed" };
+  if (dashboardBaiduLoading.value && !dashboardBaiduProvider.value) return { label: "正在读取", detail: "正在读取百度网盘授权状态。", tone: "queued" };
+  if (dashboardBaiduError.value) return { label: "状态暂不可读", detail: dashboardBaiduError.value, tone: "failed" };
+  const provider = dashboardBaiduProvider.value;
+  if (!provider) return { label: "尚未连接", detail: "当前没有可用的百度网盘授权记录。", tone: "queued" };
+  if (provider.approval !== "approved" || !provider.realUploadAvailable)
+    return { label: "上传暂未开放", detail: "需先满足百度网盘官方应用权限要求。", tone: "queued" };
+  return provider.authorized
+    ? { label: "已连接", detail: "上传前仍需选择并确认已校验的本地副本。", tone: "success" }
+    : { label: "待连接", detail: "连接个人百度网盘后可查看上传队列。", tone: "queued" };
+});
+const latestDashboardBaiduTask = computed(() => dashboardBaiduTasks.value[0] || null);
 const navGroups = [
   {
     title: "工作区",
@@ -606,6 +633,33 @@ async function loadData() {
       presetData.find((p) => p.isDefault)?.id || presetData[0]?.id || "";
   if (isMock) devices.value = await api.account.devices();
   document.documentElement.dataset.theme = settings.theme;
+  void refreshDashboardBaidu(true);
+}
+async function refreshDashboardBaidu(force = false) {
+  if (!api.netdisk || !session.value || localWorkspace.value) {
+    dashboardBaiduProvider.value = null;
+    dashboardBaiduTasks.value = [];
+    dashboardBaiduError.value = "";
+    dashboardBaiduLastRefresh = 0;
+    return;
+  }
+  if (dashboardBaiduLoading.value || (!force && Date.now() - dashboardBaiduLastRefresh < 8_000)) return;
+  dashboardBaiduLoading.value = true;
+  dashboardBaiduLastRefresh = Date.now();
+  try {
+    const [providers, tasks] = await Promise.all([
+      api.netdisk.providers(),
+      api.netdisk.tasks(),
+    ]);
+    dashboardBaiduProvider.value = providers.find((provider) => provider.id === "baidu") || null;
+    // The native API returns tasks in update order; preserve it for the latest-task summary.
+    dashboardBaiduTasks.value = tasks.filter((task) => task.provider === "baidu");
+    dashboardBaiduError.value = "";
+  } catch (error) {
+    dashboardBaiduError.value = errorText(error);
+  } finally {
+    dashboardBaiduLoading.value = false;
+  }
 }
 async function enterLocalWorkspace() {
   if (!canEnterLocalWorkspace) return;
@@ -681,6 +735,7 @@ onMounted(async () => {
           const snapshot = await api.workbench.snapshot();
           tasks.value = snapshot.tasks;
           Object.assign(summary, snapshot);
+          await refreshDashboardBaidu();
         }
       } catch (error) {
         showError(error);
@@ -1410,6 +1465,12 @@ function setPage(next: Page) {
       .then((value) => (presets.value = value))
       .catch(showError);
 }
+function openBaiduSettings() {
+  setPage("settings");
+  void nextTick(() => {
+    document.getElementById("cloud")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+}
 function toggleGlobalSearch() {
   globalSearchOpen.value = !globalSearchOpen.value;
   globalSearchQuery.value = "";
@@ -1435,6 +1496,17 @@ function taskStateLabel(state: TaskState) {
       failed: "失败",
     } as Record<TaskState, string>
   )[state];
+}
+function baiduTaskStateLabel(state: string) {
+  return ({
+    queued: "等待上传",
+    uploading: "上传中",
+    failed: "上传失败",
+    completed: "已上传并核验",
+    cancelled: "已取消",
+    committing: "正在核对",
+    commit_uncertain: "结果待核对",
+  } as Record<string, string>)[state] || "状态未知";
 }
 </script>
 
@@ -1782,22 +1854,28 @@ function taskStateLabel(state: TaskState) {
                 </div>
               </div>
               <div class="panel quick-panel native-home-quick">
-                <div class="panel-heading">
-                  <div><h3>快捷入口</h3><p>常用影像工作流</p></div>
-                  <WandSparkles :size="17" />
+                <div class="panel-heading native-baidu-heading">
+                  <div><h3>百度网盘</h3><p>授权状态与上传任务</p></div>
+                  <span :class="['state-pill', dashboardBaiduStatus.tone]">{{ dashboardBaiduStatus.label }}</span>
                 </div>
-                <button class="quick-action" @click="setPage('transfer')">
-                  <Folder :size="17" /><span><b>转移老内容</b><small>预览、校验后再确认来源处理</small></span><ArrowRight :size="14" />
-                </button>
-                <button class="quick-action" @click="setPage('health')">
-                  <ShieldCheck :size="17" /><span><b>恢复与健康审计</b><small>检查备份副本完整性</small></span><ArrowRight :size="14" />
-                </button>
-                <button class="quick-action" @click="setPage('agent')">
-                  <Sparkles :size="17" /><span><b>Agent 助手</b><small>检索本地素材和任务</small></span><ArrowRight :size="14" />
-                </button>
-                <button class="quick-action" @click="setPage('presets')">
-                  <WandSparkles :size="17" /><span><b>导入预设</b><small>复用命名和导入规则</small></span><ArrowRight :size="14" />
-                </button>
+                <p class="native-baidu-detail">{{ dashboardBaiduStatus.detail }}</p>
+                <div class="native-baidu-stats" aria-label="百度网盘上传统计">
+                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseCloud ? dashboardBaiduCounts.queued : "—" }}</b><small>等待上传</small></div>
+                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseCloud ? dashboardBaiduCounts.uploading : "—" }}</b><small>上传中</small></div>
+                  <div><b>{{ dashboardBaiduProvider?.authorized && canUseCloud ? dashboardBaiduCounts.verified : "—" }}</b><small>已核验</small></div>
+                </div>
+                <div class="native-baidu-latest">
+                  <b>最近上传</b>
+                  <span v-if="latestDashboardBaiduTask">
+                    <span>{{ latestDashboardBaiduTask.name }}</span>
+                    <small>{{ baiduTaskStateLabel(latestDashboardBaiduTask.state) }} · {{ latestDashboardBaiduTask.chunksTotal ? Math.round(latestDashboardBaiduTask.chunksDone / latestDashboardBaiduTask.chunksTotal * 100) : 0 }}%</small>
+                  </span>
+                  <small v-else>{{ dashboardBaiduProvider?.authorized && canUseCloud ? "暂无上传记录" : "连接后显示上传记录" }}</small>
+                </div>
+                <div class="native-baidu-actions">
+                  <button class="secondary-button compact" @click="openBaiduSettings">管理网盘</button>
+                  <button class="primary-button compact" :disabled="!api.netdisk || !canUseCloud || !dashboardBaiduProvider?.authorized || !dashboardBaiduProvider.realUploadAvailable" @click="setPage('library')">选择素材上传</button>
+                </div>
               </div>
             </section>
             <div class="notice-card native-home-safety">
