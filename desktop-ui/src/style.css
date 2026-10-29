@@ -222,7 +222,7 @@ body{min-width:0}
 .native-home-empty>span:nth-child(2){display:grid;flex:1;gap:4px}
 .native-home-empty small{color:var(--muted);font-size:10px}
 .native-home-quick .quick-action{width:100%}
-.native-home-lower{gap:8px}
+.native-home-lower{gap:14px}
 .native-baidu-heading{margin-bottom:8px!important}
 .native-baidu-heading .state-pill{flex:none}
 .native-baidu-detail{min-height:34px;margin:0 0 10px;color:var(--muted);font-size:10px;line-height:1.55}
@@ -252,6 +252,13 @@ body{min-width:0}
 @media(max-width:560px){.native-home-summary{padding:16px}.native-overview-heading{align-items:flex-start;flex-direction:column}.native-metrics{justify-content:space-between;padding-inline:0}.native-metrics span{min-width:0;flex:1}.native-task{gap:8px}.native-task-status .state-pill{max-width:94px;overflow:hidden;text-overflow:ellipsis}.update-section>.panel-heading{align-items:flex-start}.update-current-row{align-items:flex-start}}
 .library-empty-state{grid-column:1/-1;width:100%;min-height:360px}
 .chat-panel{padding-bottom:8px}
+.naming-preset-row{border-top:0!important}
+.agent-conversation-list{display:grid;flex:1;min-height:0;overflow:auto;align-content:start}
+.conversation-link{width:100%;min-width:0;border-radius:9px;cursor:pointer}
+.conversation-link>span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conversation-link.active{background:var(--card-soft);color:var(--green);font-weight:650}
+.conversation-link:disabled{cursor:default;opacity:.65}
+.agent-conversation-empty{color:var(--muted);font-size:11px;line-height:1.5}
 .chat-panel>.chat-scroll.chat-scroll-empty{display:flex;flex:1 1 auto;flex-direction:column;justify-content:center}
 .chat-scroll-empty>.agent-welcome{width:100%;margin:auto 0}
 .composer .agent-composer-model{box-sizing:border-box;flex:0 1 190px;min-width:118px;max-width:220px;height:38px;padding:0 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit;font-size:11px;text-overflow:ellipsis}.composer .agent-composer-model:disabled{opacity:.72}@media(max-width:620px){.composer{flex-wrap:wrap}.composer input{flex-basis:100%}.composer .agent-composer-model{flex:1;max-width:none}}
