@@ -2330,7 +2330,10 @@ mod agent_action_tests {
             &script,
             &root.join("agent.sqlite"),
             "test-key",
-            Duration::from_secs(2),
+            // This case checks invalid readiness content, not a two-second
+            // performance bound. Match the production startup window so
+            // parallel test load cannot turn a slow shell spawn into a timeout.
+            Duration::from_secs(15),
         )
         .err()
         .unwrap();
