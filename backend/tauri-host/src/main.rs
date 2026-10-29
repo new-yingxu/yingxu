@@ -958,6 +958,44 @@ async fn open_system_trash(app: tauri::AppHandle) -> Result<(), CoreError> {
     .map_err(|error| CoreError::new("BACKGROUND_TASK_FAILED", error))?
 }
 
+#[tauri::command]
+fn open_release_page(window: tauri::WebviewWindow, url: String) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("只有主窗口可以打开版本发布页。".into());
+    }
+    let Some(path) = url.strip_prefix("https://github.com/new-yingxu/yingxu/releases") else {
+        return Err("发布地址不属于影序官方 GitHub Releases。".into());
+    };
+    if !(path.is_empty() || path.starts_with("/tag/") || path.starts_with("/download/"))
+        || path.starts_with("//")
+        || path
+            .chars()
+            .any(|character| matches!(character, '?' | '#' | '@' | '\\'))
+        || !path.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '/' | '-' | '_' | '.' | '%')
+        })
+    {
+        return Err("发布地址格式无效。".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = Command::new("xdg-open");
+
+    command
+        .arg(url)
+        .spawn()
+        .map_err(|_| "无法打开系统浏览器，请稍后重试。".to_owned())?;
+    Ok(())
+}
+
 fn check_paths(state: &HostState, request: &Request) -> Result<(), CoreError> {
     if request.method == "worker.runNext" {
         return Err(CoreError::new("PERMISSION_DENIED", "worker 由桌面宿主管理"));
@@ -1892,6 +1930,7 @@ fn main() {
             agent_prepare_file_action,
             agent_confirm_file_action,
             open_system_trash,
+            open_release_page,
             tray_job_snapshot,
             tray_open_main,
             tray_quit

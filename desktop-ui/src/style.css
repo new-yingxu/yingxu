@@ -196,6 +196,46 @@ body{min-width:0}
 .agent-settings-body{height:auto;min-height:0;overflow:visible;padding:18px 22px;display:grid;gap:14px;align-content:start}
 .agent-settings-body .provider-settings{margin:0}
 @media(max-width:760px){.agent-aside,.chat-panel{min-height:0}.chat-panel>.chat-scroll{min-height:200px;max-height:none;overflow:visible}.native-home-cluster{width:100%}.native-metrics{gap:18px}.native-metrics span{min-width:88px}.native-home-actions>*{flex:1 1 180px}.agent-settings-modal{width:100%;max-height:calc(100dvh - 40px)}.agent-settings-modal-heading{padding:16px}.agent-settings-body{padding:14px}}
+.native-home-summary{display:block;padding:24px}
+.native-home-cluster{width:100%;max-width:none}
+.native-overview-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:22px}
+.native-overview-heading h3{margin:0 0 5px;font-size:15px}
+.native-overview-heading p{margin:0;color:var(--muted);font-size:11px}
+.native-overview-heading .state-pill{display:inline-flex;align-items:center;gap:7px;flex:none}
+.native-metrics{justify-content:space-around;gap:16px;margin:0;padding:20px 12px;border-block:1px solid var(--line)}
+.native-metrics span{min-width:120px}
+.native-metrics small{font-size:11px}
+.native-home-actions{justify-content:center;margin-top:20px}
+.native-home-lower{grid-template-columns:minmax(0,1.5fr) minmax(270px,1fr);align-items:stretch}
+.native-task-list{display:grid}
+.native-task{display:flex;align-items:center;gap:12px;min-width:0;padding:13px 4px}
+.native-task:hover{background:var(--page)}
+.native-task-main{display:grid;flex:1;gap:5px;min-width:0}
+.native-task-main>b,.native-task-main>small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.native-task-main>b{font-size:12px}
+.native-task-main>small{color:var(--muted);font-size:10px}
+.native-task-status{display:grid;justify-items:end;gap:5px;flex:none}
+.native-task-status>small{font-size:10px;color:var(--muted)}
+.native-task-track{height:4px;overflow:hidden;border-radius:999px;background:var(--line)}
+.native-task-track>i{display:block;height:100%;border-radius:inherit;background:var(--green);transition:width .2s ease}
+.native-home-empty{display:flex;align-items:center;gap:12px;padding:18px 4px}
+.native-home-empty>span:nth-child(2){display:grid;flex:1;gap:4px}
+.native-home-empty small{color:var(--muted);font-size:10px}
+.native-home-quick .quick-action{width:100%}
+.native-home-safety{display:flex;align-items:flex-start;gap:10px;margin-top:14px}
+.native-home-safety>div{display:grid;gap:4px}
+.native-home-safety span{font-size:11px;line-height:1.55;color:var(--muted)}
+.update-section{scroll-margin-top:20px}
+.update-current-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 0;border-bottom:1px solid var(--line)}
+.update-current-row>span{display:grid;gap:4px}
+.update-current-row small,.update-timestamp{color:var(--muted);font-size:11px}
+.update-current-row code{padding:5px 8px;border-radius:7px;background:var(--page);font-size:12px}
+.update-result{display:grid;justify-items:start;gap:9px;padding:16px 0 4px}
+.update-result>span,.update-hint{max-width:680px;color:var(--muted);font-size:12px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
+.update-hint{margin:14px 0 0}
+.update-timestamp{display:block;margin-top:14px}
+@media(max-width:900px){.native-home-lower{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:560px){.native-home-summary{padding:16px}.native-overview-heading{align-items:flex-start;flex-direction:column}.native-metrics{justify-content:space-between;padding-inline:0}.native-metrics span{min-width:0;flex:1}.native-task{gap:8px}.native-task-status .state-pill{max-width:94px;overflow:hidden;text-overflow:ellipsis}.update-section>.panel-heading{align-items:flex-start}.update-current-row{align-items:flex-start}}
 .library-empty-state{grid-column:1/-1;width:100%;min-height:360px}
 .chat-panel{padding-bottom:8px}
 .chat-panel>.chat-scroll.chat-scroll-empty{display:flex;flex:1 1 auto;flex-direction:column;justify-content:center}

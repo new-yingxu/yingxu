@@ -44,6 +44,8 @@ import {
 } from "./api/backup-state";
 import { formatBytes } from "./api/format";
 import type { RawJob } from "./api/format";
+import { checkForUpdates, currentAppVersion, openReleaseUrl } from "./api/version-updates";
+import type { UpdateCheckResult } from "./api/version-updates";
 import {
   applyLibraryPage,
   canLoadNextPage,
@@ -129,6 +131,11 @@ const displayName = computed(
 const displayEmail = computed(() => session.value?.email || "云端未登录");
 const localCapabilities = ref<LocalCapabilities | null>(null);
 const hostStatus = ref("正在检查本地后端");
+const appVersion = ref("读取中…");
+const updateCheckBusy = ref(false);
+const updateCheckResult = ref<UpdateCheckResult | null>(null);
+const updateCheckError = ref("");
+const updateCheckedAt = ref("");
 const operationBusy = ref(false);
 const analysis = ref<MediaAnalysis | null>(null);
 const analysisTitle = ref("");
@@ -538,6 +545,37 @@ async function runAction(action: () => Promise<void>) {
     operationBusy.value = false;
   }
 }
+async function checkAppUpdates() {
+  if (updateCheckBusy.value) return;
+  updateCheckBusy.value = true;
+  updateCheckError.value = "";
+  try {
+    const result = await checkForUpdates();
+    appVersion.value = result.currentVersion;
+    updateCheckResult.value = result;
+    updateCheckedAt.value = new Date().toLocaleString();
+  } catch (error) {
+    updateCheckError.value = error instanceof Error ? error.message : "版本查询暂时不可用，请稍后重试。";
+  } finally {
+    updateCheckBusy.value = false;
+  }
+}
+async function openAppUpdate() {
+  const result = updateCheckResult.value;
+  if (result?.kind !== "available") return;
+  try {
+    await openReleaseUrl(result.downloadUrl || result.releaseUrl);
+  } catch (error) {
+    showError(error);
+  }
+}
+async function openReleaseList() {
+  try {
+    await openReleaseUrl("https://github.com/new-yingxu/yingxu/releases");
+  } catch (error) {
+    showError(error);
+  }
+}
 async function loadData() {
   const [snapshot, settingData, presetData, page] = await Promise.all([
     api.workbench.snapshot(),
@@ -584,6 +622,7 @@ function onUnhandled(event: PromiseRejectionEvent) {
 onMounted(async () => {
   window.addEventListener("yingxu-error", onAppError);
   window.addEventListener("unhandledrejection", onUnhandled);
+  void currentAppVersion().then((version) => { appVersion.value = version; }).catch(() => {});
   try {
     session.value = await api.auth.restore();
     if (session.value) await loadData();
@@ -1578,30 +1617,82 @@ function taskStateLabel(state: TaskState) {
             />
             <section class="panel native-home-summary">
               <div class="native-home-cluster">
+                <div class="native-overview-heading">
+                  <div>
+                    <h3>本地资料概况</h3>
+                    <p>索引和任务数据保存在这台电脑</p>
+                  </div>
+                  <span :class="['state-pill', hostStatus.includes('已连接') ? 'success' : 'queued']"><i :class="['status-dot', hostStatus.includes('已连接') ? 'online' : 'running']"></i> {{ hostStatus.includes('已连接') ? '本地服务已连接' : hostStatus }}</span>
+                </div>
                 <div class="native-metrics">
-                  <span><b>{{ summary.fileCount }}</b> 已索引文件</span>
-                  <span><b>{{ summary.totalSize }}</b> 索引容量</span>
-                  <span><b>{{ summary.reviewCount }}</b> 待复核</span>
+                  <span><b>{{ summary.fileCount.toLocaleString() }}</b><small>已索引文件</small></span>
+                  <span><b>{{ summary.totalSize || '—' }}</b><small>资料库容量</small></span>
+                  <span><b>{{ summary.reviewCount.toLocaleString() }}</b><small>待复核素材</small></span>
                 </div>
                 <div class="native-home-actions">
                   <button class="primary-button" @click="setPage('backup')">开始本地备份</button>
                   <button class="secondary-button" @click="setPage('library')">打开资料库</button>
+                  <button class="secondary-button" @click="setPage('history')">查看归档记录</button>
                 </div>
               </div>
             </section>
-            <section class="panel">
-              <h3>最近本地任务</h3>
+            <section class="content-grid native-home-lower">
+              <div class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <h3>最近本地任务</h3>
+                    <p>查看任务进度、结果和逐个目的地状态</p>
+                  </div>
+                  <button class="text-button" @click="setPage('history')">全部记录 <ArrowRight :size="14" /></button>
+                </div>
+                <div v-if="tasks.length" class="native-task-list">
               <button
-                v-for="task in tasks"
+                v-for="task in tasks.slice(0, 4)"
                 :key="task.id"
                 class="native-task"
                 @click="openTask(task)"
               >
-                {{ task.name }} · {{ taskStateLabel(task.state) }} ·
-                {{ task.progress }}%
+                    <span class="task-icon"><Archive :size="16" /></span>
+                    <span class="native-task-main">
+                      <b>{{ task.name }}</b>
+                      <small>{{ task.createdAt }} · {{ task.files }} 个文件 · {{ task.size }}</small>
+                      <span class="native-task-track"><i :style="{ width: `${Math.max(0, Math.min(100, task.progress))}%` }"></i></span>
+                    </span>
+                    <span class="native-task-status">
+                      <span :class="['state-pill', task.state]">{{ taskStateLabel(task.state) }}</span>
+                      <small>{{ task.progress }}%</small>
+                    </span>
               </button>
-              <p v-if="!tasks.length">尚无本地任务。</p>
-            </section></template
+                </div>
+                <div v-else class="native-home-empty">
+                  <span class="task-icon"><Archive :size="16" /></span>
+                  <span><b>尚无本地任务</b><small>选择“开始本地备份”创建第一项任务</small></span>
+                  <button class="text-button" @click="setPage('backup')">开始备份 <ArrowRight :size="13" /></button>
+                </div>
+              </div>
+              <div class="panel quick-panel native-home-quick">
+                <div class="panel-heading">
+                  <div><h3>快捷入口</h3><p>常用影像工作流</p></div>
+                  <WandSparkles :size="17" />
+                </div>
+                <button class="quick-action" @click="setPage('transfer')">
+                  <Folder :size="17" /><span><b>转移老内容</b><small>预览、校验后再确认来源处理</small></span><ArrowRight :size="14" />
+                </button>
+                <button class="quick-action" @click="setPage('health')">
+                  <ShieldCheck :size="17" /><span><b>恢复与健康审计</b><small>检查备份副本完整性</small></span><ArrowRight :size="14" />
+                </button>
+                <button class="quick-action" @click="setPage('agent')">
+                  <Sparkles :size="17" /><span><b>Agent 助手</b><small>检索本地素材和任务</small></span><ArrowRight :size="14" />
+                </button>
+                <button class="quick-action" @click="setPage('presets')">
+                  <WandSparkles :size="17" /><span><b>导入预设</b><small>复用命名和导入规则</small></span><ArrowRight :size="14" />
+                </button>
+              </div>
+            </section>
+            <div class="notice-card native-home-safety">
+              <ShieldCheck :size="17" />
+              <div><b>本地安全状态</b><span>原始素材保留在来源设备；备份副本经校验后记录到本机数据库。</span></div>
+            </div></template
           ><template v-else-if="page === 'home'">
             <header class="welcome-row">
               <div>
@@ -3162,6 +3253,7 @@ function taskStateLabel(state: TaskState) {
                 ><a href="#naming">命名与 AI</a><a href="#quality">质量分析</a
                 ><a href="#cloud">云盘与同步</a
                 ><a href="#advanced">通知与高级</a
+                ><a href="#updates">版本更新</a
                 ><a href="#privacy">隐私安全</a>
               </nav>
               <div class="settings-content">
@@ -3400,6 +3492,38 @@ function taskStateLabel(state: TaskState) {
                   >
                     保存高级设置
                   </button>
+                </section>
+                <section id="updates" class="panel settings-section update-section">
+                  <div class="panel-heading">
+                    <div>
+                      <h3>版本更新</h3>
+                      <p>从影序 GitHub Releases 检查桌面版更新</p>
+                    </div>
+                    <button class="secondary-button" :disabled="updateCheckBusy" @click="checkAppUpdates">
+                      {{ updateCheckBusy ? '正在检查…' : '检查更新' }}
+                    </button>
+                  </div>
+                  <div class="update-current-row">
+                    <span><b>当前版本</b><small>桌面端</small></span>
+                    <code>{{ appVersion }}</code>
+                  </div>
+                  <p v-if="updateCheckError" class="error-note" role="alert">{{ updateCheckError }}</p>
+                  <div v-else-if="updateCheckResult" class="update-result" role="status" aria-live="polite">
+                    <template v-if="updateCheckResult.kind === 'no-release'">
+                      <b>暂无可用桌面版本</b><span>目前没有包含此平台安装包的公开 Release。你可以查看发布页了解后续版本。</span>
+                      <button class="text-button" @click="openReleaseList">查看发布页 <ArrowRight :size="13" /></button>
+                    </template>
+                    <template v-else-if="updateCheckResult.kind === 'up-to-date'">
+                      <b>当前已是最新版本</b><span>已与公开版本 {{ updateCheckResult.latestVersion }} 比较。</span>
+                    </template>
+                    <template v-else>
+                      <b>发现新版本 {{ updateCheckResult.latestVersion }}</b>
+                      <span>{{ updateCheckResult.notes || '新版本已发布，可前往 GitHub Releases 查看说明与下载文件。' }}</span>
+                      <button class="primary-button" @click="openAppUpdate">{{ updateCheckResult.downloadUrl ? '下载桌面更新' : '查看版本与下载' }} <ArrowRight :size="14" /></button>
+                    </template>
+                  </div>
+                  <p v-else class="update-hint">检查时只读取公开版本信息，不会自动下载或替换应用。</p>
+                  <small v-if="updateCheckedAt" class="update-timestamp">上次检查：{{ updateCheckedAt }}</small>
                 </section>
                 <section id="privacy" class="panel settings-section">
                   <div class="panel-heading">
