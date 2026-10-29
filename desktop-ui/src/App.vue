@@ -2506,13 +2506,6 @@ function taskStateLabel(state: TaskState) {
                   <div class="agent-welcome">
                     <span class="agent-orb"><Sparkles :size="20" /></span
                     ><b>你好，{{ displayName }}</b>
-                    <div class="suggestion-tags">
-                      <button @click="agentInput = '查找青岛海边照片'">
-                        查找青岛海边照片</button
-                      ><button @click="agentInput = '查看最近失败的任务'">
-                        查看最近失败的任务
-                      </button>
-                    </div>
                   </div>
                   <div
                     v-for="(message, index) in agentMessages"
