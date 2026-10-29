@@ -2443,7 +2443,7 @@ function taskStateLabel(state: TaskState) {
                 </div>
               </aside>
               <div class="panel chat-panel">
-                <div class="chat-scroll">
+                <div :class="['chat-scroll', { 'chat-scroll-empty': agentMessages.length === 0 }]">
                   <div class="agent-welcome">
                     <span class="agent-orb"><Sparkles :size="20" /></span
                     ><b>你好，{{ displayName }}</b>
