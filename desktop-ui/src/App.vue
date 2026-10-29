@@ -178,7 +178,15 @@ const notice = ref("");
 const showModal = ref("");
 const globalSearchOpen = ref(false);
 const globalSearchQuery = ref("");
-const query = ref("");
+const libraryQuery = ref("");
+const historyQuery = ref("");
+const presetEditorOpen = ref(false);
+const presetEditingId = ref<string | null>(null);
+const presetDraftName = ref("");
+const presetDraftPattern = ref("日期 / 事件 / 设备");
+const presetToDelete = ref<NamePreset | null>(null);
+const taskToRename = ref<ArchiveTask | null>(null);
+const taskRenameDraft = ref("");
 const filterKind = ref<"all" | "photo" | "video" | "other">("all");
 const filterQuality = ref("all");
 const filterState = ref<TaskState | "all">("all");
@@ -247,6 +255,11 @@ const agentModelLabel = computed(() => {
     return `云端 · ${config.provider === "deepseek" ? "DeepSeek" : "通义千问"} · ${config.model}`;
   }
   return `本机 · ${config.localModel || config.model}`;
+});
+const agentCanSend = computed(() => {
+  if (!localWorkspace.value) return true;
+  const config = agentModelConfig.value;
+  return !!config?.configured && config.provider === "ollama";
 });
 const latestAgentMatches = computed(() => {
   for (let index = agentMessages.value.length - 1; index >= 0; index -= 1) {
@@ -497,6 +510,16 @@ function say(text: string) {
   }, 6500);
 }
 function showError(error: unknown) {
+  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+  if (code === "USER_CANCELLED") {
+    const message = error instanceof Error ? error.message : "";
+    say(message.includes("目录选择") ? "已取消目录选择，尚未开始扫描。" : "已取消操作，未执行更改。");
+    return;
+  }
+  if (code === "REPORT_NOT_READY") {
+    say("当前任务尚未生成报告，请在任务完成后再查看。");
+    return;
+  }
   say(errorText(error));
 }
 function finishConfirmation(accepted: boolean) {
@@ -765,7 +788,7 @@ async function openTask(task: ArchiveTask) {
   page.value = "task";
 }
 async function refreshHistory() {
-  tasks.value = await api.history.list(query.value, filterState.value);
+  tasks.value = await api.history.list(historyQuery.value, filterState.value);
 }
 async function loadThumbnails(list: MediaFile[], epoch: number) {
   if (!api.local) return;
@@ -790,7 +813,7 @@ async function loadLibraryPage(offset: number, append: boolean) {
   libraryPage.value = startLibraryLoad(base);
   try {
     const page = await api.library.searchPage(
-      query.value,
+      libraryQuery.value,
       filterKind.value,
       filterQuality.value,
       libraryPage.value.limit,
@@ -911,6 +934,10 @@ async function askAgent() {
   const text = agentInput.value.trim();
   if (!text) return;
   if (api.model) {
+    if (localWorkspace.value && !agentCanSend.value) {
+      say("本机模式仅使用 Ollama。请先在 Agent 设置中选择已安装的本机模型。");
+      return;
+    }
     if (!modelConsentRef.value) {
       showError(new Error("本机模型确认界面尚未就绪，请稍后重试"));
       return;
@@ -946,7 +973,9 @@ async function refreshAgentModelChoices() {
     ]);
     agentModelConfig.value = config;
     agentLocalModels.value = catalog.models;
-    agentSelectedModel.value = agentModelValue.value;
+    agentSelectedModel.value = localWorkspace.value && config.provider !== "ollama"
+      ? ""
+      : agentModelValue.value;
   } catch {
     say("读取模型配置失败，请稍后重试。");
   } finally {
@@ -957,6 +986,11 @@ async function refreshAgentModelChoices() {
 async function selectAgentModel() {
   const providerConfig = api.modelProviderConfig;
   if (!providerConfig || agentModelBusy.value || !agentSelectedModel.value) return;
+  if (localWorkspace.value && agentSelectedModel.value.startsWith("cloud:")) {
+    agentSelectedModel.value = "";
+    say("本机模式已停用云端模型，请选择本机 Ollama。");
+    return;
+  }
   agentModelBusy.value = true;
   try {
     if (agentSelectedModel.value.startsWith("cloud:")) {
@@ -1054,22 +1088,62 @@ async function updateSetting<K extends keyof AppSettings>(
   }
 }
 async function createPreset() {
+  presetEditingId.value = null;
+  presetDraftName.value = newPresetName.value.trim();
+  presetDraftPattern.value = "日期 / 事件 / 设备";
+  presetEditorOpen.value = true;
+}
+function editPreset(preset: NamePreset) {
+  presetEditingId.value = preset.id;
+  presetDraftName.value = preset.name.trim() === "新建预设" ? "" : preset.name;
+  presetDraftPattern.value = preset.pattern;
+  presetEditorOpen.value = true;
+}
+async function savePreset() {
   await runAction(async () => {
-    const name = newPresetName.value.trim() || "新建预设";
+    const name = presetDraftName.value.trim();
+    const pattern = presetDraftPattern.value.trim();
+    if (!name || !pattern) {
+      say("请填写预设名称和命名规则。");
+      return;
+    }
+    if (presets.value.some((preset) => preset.id !== presetEditingId.value && preset.name.trim() === name)) {
+      say("已有同名预设，请换一个名称以便区分。");
+      return;
+    }
     const item = await api.presets.save({
-      id: crypto.randomUUID(),
+      id: presetEditingId.value || crypto.randomUUID(),
       name,
-      pattern: "日期 / 事件 / 设备",
-      isDefault: false,
+      pattern,
+      isDefault: presets.value.find((preset) => preset.id === presetEditingId.value)?.isDefault || false,
     });
-    presets.value = [...presets.value, item];
+    presets.value = presetEditingId.value
+      ? presets.value.map((preset) => preset.id === item.id ? item : preset)
+      : [...presets.value, item];
+    presetEditorOpen.value = false;
     newPresetName.value = "";
+    say(presetEditingId.value ? "预设已更新。" : "预设已保存。");
   });
+}
+function presetDisplayName(preset: NamePreset, index: number) {
+  const name = preset.name.trim();
+  if (name && name !== "新建预设") return name;
+  const suffix = preset.id.trim().slice(-6) || String(index + 1);
+  return `未命名预设 · ${suffix}`;
 }
 async function removePreset(item: NamePreset) {
   if (item.isDefault) return;
-  await api.presets.remove(item.id);
-  presets.value = presets.value.filter((p) => p.id !== item.id);
+  presetToDelete.value = item;
+}
+async function confirmRemovePreset() {
+  const item = presetToDelete.value;
+  if (!item) return;
+  await runAction(async () => {
+    await api.presets.remove(item.id);
+    presets.value = presets.value.filter((preset) => preset.id !== item.id);
+    presetToDelete.value = null;
+    say("预设已删除。");
+  });
 }
 async function runAudit() {
   await runAction(async () => {
@@ -1127,15 +1201,26 @@ async function clearHistory() {
     await api.history.clear();
     tasks.value = [];
     showModal.value = "";
-    say("本地记录已清空，媒体文件保留。");
+    say("归档历史已清空，媒体文件保留。");
   });
 }
 async function renameTask(task: ArchiveTask) {
-  const name = window.prompt("输入新的记录名称", task.name);
-  if (name?.trim()) {
-    await api.history.rename(task.id, name.trim());
-    task.name = name.trim();
+  taskToRename.value = task;
+  taskRenameDraft.value = task.name;
+}
+async function saveTaskRename() {
+  const task = taskToRename.value;
+  const name = taskRenameDraft.value.trim();
+  if (!task || !name) {
+    say("记录名称不能为空。");
+    return;
   }
+  await runAction(async () => {
+    await api.history.rename(task.id, name);
+    task.name = name;
+    taskToRename.value = null;
+    say("归档记录名称已更新。");
+  });
 }
 async function connectProvider(provider: "baidu" | "quark") {
   try {
@@ -2084,7 +2169,7 @@ function taskStateLabel(state: TaskState) {
               <div class="filter-toolbar">
                 <div class="search-field">
                   <Search :size="16" /><input
-                    v-model="query"
+                    v-model="libraryQuery"
                     placeholder="搜索文件名、设备、地点或路径"
                     @keydown.enter="searchFiles"
                   /><button class="text-button" @click="searchFiles">
@@ -2213,7 +2298,7 @@ function taskStateLabel(state: TaskState) {
               <div class="filter-toolbar">
                 <div class="search-field">
                   <Search :size="16" /><input
-                    v-model="query"
+                    v-model="historyQuery"
                     placeholder="搜索任务名称或任务 ID"
                     @keydown.enter="refreshHistory"
                   /><button class="text-button" @click="refreshHistory">
@@ -2234,9 +2319,7 @@ function taskStateLabel(state: TaskState) {
                   <option value="failed">失败</option></select
                 ><button
                   class="secondary-button"
-                  @click="
-                    isMock ? (showModal = 'clear-history') : clearHistory()
-                  "
+                  @click="showModal = 'clear-history'"
                 >
                   清空历史
                 </button>
@@ -2567,13 +2650,15 @@ function taskStateLabel(state: TaskState) {
                     v-model="agentSelectedModel"
                     class="agent-composer-model"
                     aria-label="切换 Agent 模型"
-                    :disabled="agentModelBusy || !agentModelConfig"
+                    :disabled="agentModelBusy || !agentModelConfig || (localWorkspace && agentLocalModels.length === 0)"
                     @change="selectAgentModel"
                   >
                     <option v-if="!agentModelConfig" value="">{{ agentModelBusy ? '读取模型…' : '选择模型' }}</option>
-                    <option :value="agentModelValue">{{ agentModelBusy ? '切换中…' : agentModelLabel }}</option>
+                    <option v-else-if="localWorkspace && agentModelConfig.provider !== 'ollama'" value="" disabled>本机模式已停用云端模型 · 请选择本机 Ollama</option>
+                    <option v-else-if="localWorkspace && !agentModelConfig.configured" value="" disabled>本机 Ollama 尚未配置</option>
+                    <option v-else :value="agentModelValue">{{ agentModelBusy ? '切换中…' : agentModelLabel }}</option>
                     <option
-                      v-if="agentModelConfig?.cloudKeyStored && !(agentModelConfig.configured && agentModelConfig.provider !== 'ollama')"
+                      v-if="!localWorkspace && agentModelConfig?.cloudKeyStored && !(agentModelConfig.configured && agentModelConfig.provider !== 'ollama')"
                       :value="`cloud:${agentModelConfig.cloudProvider || agentModelConfig.provider}:${agentModelConfig.cloudModel || agentModelConfig.model}`"
                     >
                       云端 · {{ (agentModelConfig.cloudProvider || agentModelConfig.provider) === 'deepseek' ? 'DeepSeek' : '通义千问' }} · {{ agentModelConfig.cloudModel || agentModelConfig.model }}
@@ -2582,7 +2667,7 @@ function taskStateLabel(state: TaskState) {
                       本机 · {{ model }}
                     </option>
                   </select>
-                  <button class="primary-button" type="submit">
+                  <button class="primary-button" type="submit" :disabled="!agentCanSend">
                     <Send :size="15" />发送
                   </button>
                 </form>
@@ -2805,7 +2890,7 @@ function taskStateLabel(state: TaskState) {
             >
             <section class="preset-grid">
               <article
-                v-for="preset in presets"
+                v-for="(preset, index) in presets"
                 :key="preset.id"
                 class="panel preset-card"
               >
@@ -2813,7 +2898,7 @@ function taskStateLabel(state: TaskState) {
                 ><span v-if="preset.isDefault" class="state-pill success"
                   >默认预设</span
                 >
-                <h3>{{ preset.name }}</h3>
+                <h3>{{ presetDisplayName(preset, index) }}</h3>
                 <p>{{ preset.pattern }}</p>
                 <div class="preset-meta">
                   <span>{{
@@ -2829,6 +2914,9 @@ function taskStateLabel(state: TaskState) {
                       "
                     >
                       应用到备份</button
+                    ><button class="text-button" @click="editPreset(preset)">
+                      编辑 / 重命名
+                    </button
                     ><button
                       v-if="!preset.isDefault"
                       class="text-button danger-text"
@@ -2840,12 +2928,10 @@ function taskStateLabel(state: TaskState) {
                 </div>
               </article>
               <article class="panel preset-create">
-                <label class="field-label">快速添加预设名称</label
-                ><input
-                  v-model="newPresetName"
-                  placeholder="例如：旅行项目归档"
-                /><button class="secondary-button" @click="createPreset">
-                  <Plus :size="14" />添加
+                <b>新建导入预设</b>
+                <p>先填写名称与命名规则，再保存到本机预设列表。</p>
+                <button class="secondary-button" @click="createPreset">
+                  <Plus :size="14" />配置预设
                 </button>
               </article>
             </section>
@@ -3108,11 +3194,13 @@ function taskStateLabel(state: TaskState) {
                       ><small>{{
                         isMock
                           ? "开机启动演示偏好"
-                          : "只保存偏好，开机启动宿主能力尚未接入"
+                          : "当前未生效 · 仅保存偏好；本版本尚不支持开机启动"
                       }}</small></span
                     ><input
                       type="checkbox"
                       :checked="settings.startOnLogin"
+                      :disabled="!isMock"
+                      :title="isMock ? '演示偏好' : '开机启动能力尚未接入，当前偏好不生效'"
                       @change="
                         updateSetting(
                           'startOnLogin',
@@ -3122,10 +3210,16 @@ function taskStateLabel(state: TaskState) {
                   ><label class="setting-row"
                     ><span
                       ><b>关闭窗口后后台运行</b
-                      ><small>托盘/菜单栏生命周期由 Tauri 宿主接入</small></span
+                      ><small>{{
+                        isMock
+                          ? "后台运行演示偏好"
+                          : "当前未启用 · 托盘/菜单栏能力尚未接入"
+                      }}</small></span
                     ><input
                       type="checkbox"
-                      :checked="settings.backgroundOnClose"
+                      :checked="isMock ? settings.backgroundOnClose : false"
+                      :disabled="!isMock"
+                      :title="isMock ? '演示偏好' : '后台运行能力尚未接入，当前未启用'"
                       @change="
                         updateSetting(
                           'backgroundOnClose',
@@ -3300,7 +3394,7 @@ function taskStateLabel(state: TaskState) {
                       class="text-control"
                       placeholder="https://example.com/hook" /></label
                   ><p v-if="localWorkspace" class="cloud-disabled-note">本机模式不会配置或发送 Webhook 请求。</p>
-                  ><button
+                  <button
                     class="secondary-button"
                     @click="say('高级参数已保存至演示状态。')"
                   >
@@ -3352,12 +3446,51 @@ function taskStateLabel(state: TaskState) {
         <button class="modal-close" @click="showModal = ''">×</button
         ><span class="modal-icon"><Archive :size="22" /></span>
         <h2>清空归档记录？</h2>
-        <p>这只会清空演示历史记录，不会删除已备份媒体文件。</p>
+        <p>此操作会清空本机归档记录和报告，不会删除已备份媒体文件。</p>
         <div class="modal-actions">
           <button class="secondary-button" @click="showModal = ''">取消</button
           ><button class="danger-button" @click="clearHistory">确认清空</button>
         </div>
       </section>
+    </div>
+    <div v-if="presetEditorOpen" class="modal-backdrop" @click.self="presetEditorOpen = false">
+      <form class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="preset-editor-title" @submit.prevent="savePreset">
+        <button class="modal-close" type="button" aria-label="关闭" @click="presetEditorOpen = false">×</button>
+        <h2 id="preset-editor-title">{{ presetEditingId ? "编辑导入预设" : "新建导入预设" }}</h2>
+        <label class="field-label" for="preset-name">预设名称</label>
+        <input id="preset-name" v-model="presetDraftName" maxlength="80" required placeholder="例如：旅行项目归档" />
+        <label class="field-label" for="preset-pattern">命名规则</label>
+        <input id="preset-pattern" v-model="presetDraftPattern" maxlength="160" required placeholder="日期 / 事件 / 设备" />
+        <p>保存后可在备份流程中应用；每次任务仍会显示摘要并等待确认。</p>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" @click="presetEditorOpen = false">取消</button>
+          <button class="primary-button" type="submit">保存预设</button>
+        </div>
+      </form>
+    </div>
+    <div v-if="presetToDelete" class="modal-backdrop" @click.self="presetToDelete = null">
+      <section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-preset-title">
+        <button class="modal-close" aria-label="关闭" @click="presetToDelete = null">×</button>
+        <h2 id="delete-preset-title">删除导入预设？</h2>
+        <p>将删除“{{ presetDisplayName(presetToDelete, 0) }}”。不会影响已创建的任务或媒体文件。</p>
+        <div class="modal-actions">
+          <button class="secondary-button" @click="presetToDelete = null">取消</button>
+          <button class="danger-button" @click="confirmRemovePreset">确认删除</button>
+        </div>
+      </section>
+    </div>
+    <div v-if="taskToRename" class="modal-backdrop" @click.self="taskToRename = null">
+      <form class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="rename-task-title" @submit.prevent="saveTaskRename">
+        <button class="modal-close" type="button" aria-label="关闭" @click="taskToRename = null">×</button>
+        <h2 id="rename-task-title">重命名归档记录</h2>
+        <p>只修改记录名称，不会改动备份文件。</p>
+        <label class="field-label" for="task-rename">记录名称</label>
+        <input id="task-rename" v-model="taskRenameDraft" maxlength="120" required />
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" @click="taskToRename = null">取消</button>
+          <button class="primary-button" type="submit">保存名称</button>
+        </div>
+      </form>
     </div>
   </div>
   <div v-if="pendingConfirmation" class="modal-backdrop" @keydown="modalKeys">
