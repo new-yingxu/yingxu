@@ -21,7 +21,11 @@ async function refresh() {
       provider.value = state.value.provider
       model.value = state.value.model
     }
-  } catch { failure.value = '读取系统钥匙串中的模型设置失败。' }
+  } catch (error) {
+    failure.value = error instanceof Error && error.message.startsWith('DESKTOP_STATUS_TIMEOUT:')
+      ? error.message.slice('DESKTOP_STATUS_TIMEOUT: '.length)
+      : '读取系统钥匙串中的模型设置失败。'
+  }
   finally { busy.value = false }
 }
 function chooseProvider(value: 'dashscope'|'deepseek') {

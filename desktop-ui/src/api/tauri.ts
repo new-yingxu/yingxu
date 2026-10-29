@@ -42,6 +42,7 @@ interface Options {
   listen?: typeof listen;
   confirm?: (value: Confirmation) => Promise<boolean>;
   confirmModelUse?: (value: Confirmation) => Promise<boolean>;
+  statusTimeoutMs?: number;
 }
 interface RawPreset {
   id: string;
@@ -87,6 +88,43 @@ function mapPreset(p: RawPreset): NamePreset {
 }
 export function createTauriApi(options: Options = {}): AppApi {
   const invoke = options.invoke || nativeInvoke;
+  const statusTimeoutMs = options.statusTimeoutMs ?? 12_000;
+  const dedupeInFlight = <T>(request: () => Promise<T>, label: string) => {
+    let inFlight: Promise<T> | null = null;
+    return () => {
+      if (!inFlight) {
+        const pending = request();
+        inFlight = pending;
+        void pending.then(
+          () => { if (inFlight === pending) inFlight = null; },
+          () => { if (inFlight === pending) inFlight = null; },
+        );
+      }
+      const pending = inFlight;
+      return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`DESKTOP_STATUS_TIMEOUT: ${label}`)),
+          statusTimeoutMs,
+        );
+        pending.then(
+          (value) => { clearTimeout(timer); resolve(value); },
+          (error) => { clearTimeout(timer); reject(error); },
+        );
+      });
+    };
+  };
+  const readLocalAgentStatus = dedupeInFlight(
+    () => invoke<ModelStatus>("agent_local_status"),
+    "本机 Agent 状态读取超时；检查系统钥匙串授权后可手动刷新。不会自动重发请求。",
+  );
+  const readLocalAgentModels = dedupeInFlight(
+    () => invoke<{ available: boolean; models: string[] }>("agent_local_models"),
+    "本机模型列表读取超时；检查系统钥匙串授权后可手动刷新。不会自动重发请求。",
+  );
+  const readModelProviderConfig = dedupeInFlight(
+    () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "status" }),
+    "模型配置读取超时；检查系统钥匙串授权后可手动刷新。不会自动重发请求。",
+  );
   const confirm = options.confirm || (() => Promise.resolve(false));
   const confirmModelUse = options.confirmModelUse || confirm;
   const presetCache = new Map<string, RawPreset>();
@@ -101,8 +139,8 @@ export function createTauriApi(options: Options = {}): AppApi {
   const eventListen = options.listen || listen;
   const localAgent = createLocalAgentService({
     transport: {
-      status: () => invoke<ModelStatus>("agent_local_status"),
-      listLocalModels: () => invoke<{ available: boolean; models: string[] }>("agent_local_models"),
+      status: readLocalAgentStatus,
+      listLocalModels: readLocalAgentModels,
       startTurn: (request: LocalTurnRequest) =>
         invoke<LocalTurnResponse>("agent_local_turn", { request }),
       submitResults: (sessionId: string, turnId: string, request: { continuationToken: string; results: LocalToolResult[]; useModel: true }) =>
@@ -367,7 +405,7 @@ export function createTauriApi(options: Options = {}): AppApi {
     },
     model: localAgent.model,
     modelProviderConfig: {
-      status: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "status" }),
+      status: readModelProviderConfig,
       selectLocalModel: (model) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "select_local_model", model }),
       activateCloudModel: () => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "activate_cloud_model" }),
       save: (provider, model, apiKey) => invoke<ModelProviderConfig>("agent_model_provider_config", { action: "save", provider, model, apiKey }),

@@ -108,6 +108,20 @@ const api = createTauriApi({
 });
 const results = [];
 try {
+  let keychainReads = 0;
+  const blockedSettingsApi = createTauriApi({
+    statusTimeoutMs: 5,
+    invoke: async (command) => {
+      assert.equal(command, "agent_model_provider_config");
+      keychainReads += 1;
+      return new Promise(() => {});
+    },
+  });
+  await assert.rejects(blockedSettingsApi.modelProviderConfig.status(), /DESKTOP_STATUS_TIMEOUT/);
+  await assert.rejects(blockedSettingsApi.modelProviderConfig.status(), /DESKTOP_STATUS_TIMEOUT/);
+  assert.equal(keychainReads, 1);
+  results.push("timed-out keychain status never triggers repeated native prompts");
+
   assert.equal((await api.local.health()).protocolVersion, 1);
   results.push("health protocol");
   const caps = await api.local.capabilities();
