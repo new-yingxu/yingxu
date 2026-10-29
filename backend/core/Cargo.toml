@@ -1,6 +1,6 @@
 [package]
 name = "yingxu-core"
-version = "0.2.0-draft.1"
+version = "0.2.0-draft.2"
 edition = "2024"
 
 [dependencies]

@@ -377,8 +377,9 @@ export function createTauriApi(options: Options = {}): AppApi {
     },
     auth: {
       configuration: () => cloudAuth.configuration(),
-      sendEmailCode: (email, purpose) => cloudAuth.sendEmailCode(email, purpose),
+      sendEmailCode: (email, purpose, registration) => cloudAuth.sendEmailCode(email, purpose, registration),
       registerEmail: (input) => cloudAuth.registerEmail(input),
+      resetPassword: (input) => cloudAuth.resetPassword(input),
       restore: () => cloudAuth.restore(),
       login: (method, identifier, proof) => cloudAuth.login(method, identifier, proof),
       logout: () => cloudAuth.logout(),

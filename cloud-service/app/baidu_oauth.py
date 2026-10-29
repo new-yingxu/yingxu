@@ -45,7 +45,7 @@ class NoRedirect(HTTPRedirectHandler):
 def exchange(settings, grant_type, credential):
     config = configuration(settings)
     params = {'client_id': config['clientId'], 'client_secret': settings.baidu_client_secret,
-              'grant_type': grant_type}
+              'grant_type': grant_type, 'openapi': 'xpansdk'}
     if grant_type == 'authorization_code':
         params.update(code=credential, redirect_uri=CALLBACK)
     elif grant_type == 'refresh_token':
@@ -64,7 +64,26 @@ def exchange(settings, grant_type, credential):
             if response.status != 200 or len(raw) > MAX_RESPONSE:
                 raise ValueError()
             value = json.loads(raw)
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError):
+    except HTTPError as error:
+        # Baidu returns OAuth rejection details on the error response body.
+        # Keep only a tiny allowlisted classification; never expose its body,
+        # description, URL, code, or credentials to the client/logs.
+        try:
+            raw_error = error.read(MAX_RESPONSE + 1)
+            detail = json.loads(raw_error) if len(raw_error) <= MAX_RESPONSE else {}
+        except (OSError, ValueError, TypeError):
+            detail = {}
+        provider_error = detail.get('error') if isinstance(detail, dict) else None
+        safe_codes = {
+            'invalid_client': 'BAIDU_CLIENT_REJECTED',
+            'invalid_grant': 'BAIDU_AUTHORIZATION_REJECTED',
+            'invalid_request': 'BAIDU_REQUEST_REJECTED',
+            'unauthorized_client': 'BAIDU_CLIENT_REJECTED',
+            'invalid_scope': 'BAIDU_SCOPE_REJECTED',
+        }
+        code = safe_codes.get(provider_error, 'BAIDU_TOKEN_OUTCOME_UNCERTAIN')
+        raise BaiduOAuthError(code) from None
+    except (URLError, TimeoutError, OSError, ValueError):
         raise BaiduOAuthError('BAIDU_TOKEN_OUTCOME_UNCERTAIN') from None
     if not isinstance(value, dict):
         raise BaiduOAuthError('BAIDU_INVALID_RESPONSE')

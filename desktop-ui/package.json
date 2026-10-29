@@ -1,7 +1,7 @@
 {
   "name": "yingxu-desktop-ui",
   "private": true,
-  "version": "0.2.0-draft.1",
+  "version": "0.2.0-draft.2",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",

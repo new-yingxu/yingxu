@@ -34,12 +34,11 @@ export function createNativeCloudBaseAuth(config = configFromEnvironment, origin
     return sdkAuthPromise;
   };
   const auth: CloudBaseAuthClient = {
-    getVerification: async (input) => (await getAuth()).getVerification(input),
-    verify: async (input) => (await getAuth()).verify(input),
-    signInWithEmail: async (input) => (await getAuth()).signInWithEmail(input),
-    signIn: async (input) => (await getAuth()).signIn(input),
+    signInWithOtp: async (input) => (await getAuth()).signInWithOtp(input),
+    signInWithPassword: async (input) => (await getAuth()).signInWithPassword(input),
     signUp: async (input) => (await getAuth()).signUp(input),
-    getLoginState: async () => (await getAuth()).getLoginState(),
+    resetPasswordForEmail: async (email) => (await getAuth()).resetPasswordForEmail(email),
+    getSession: async () => (await getAuth()).getSession(),
     getCurrentUser: async () => (await getAuth()).getCurrentUser(),
     getAccessToken: async () => (await getAuth()).getAccessToken(),
     signOut: async () => (await getAuth()).signOut(),

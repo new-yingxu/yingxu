@@ -189,8 +189,11 @@ const loginMode = ref<
 const loginIdentifier = ref("");
 const loginNickname = ref("");
 const loginProof = ref("");
+const loginPassword = ref("");
+const loginPasswordConfirm = ref("");
 const loginError = ref("");
 const loginBusy = ref(false);
+const emailCodeBusy = ref(false);
 const accountDialog = ref<"username" | "password" | "">("");
 const accountUsernameDraft = ref("");
 const accountUsername = ref("");
@@ -765,7 +768,7 @@ async function signIn() {
     page.value = "home";
   } catch (error) {
     const message = errorText(error);
-    if (/\b(USER_NOT_FOUND|user_not_found|not_found)\b/.test(message)) {
+    if (/\b(USER_NOT_FOUND|ACCOUNT_NOT_FOUND|user_not_found|not_found)\b|尚未注册/.test(message)) {
       loginMode.value = "register";
       loginProof.value = "";
       loginError.value = "此邮箱尚未注册，已为你切换到注册页面。";
@@ -786,14 +789,60 @@ function showPasswordReset() {
   loginProof.value = "";
   loginError.value = "";
 }
+async function sendLoginCode() {
+  loginError.value = "";
+  if (!loginIdentifier.value.trim()) { loginError.value = "请先填写邮箱地址。"; return; }
+  if (loginMode.value === "register" && loginPassword.value.length < 8) { loginError.value = "请先设置至少 8 位密码，再获取注册验证码。"; return; }
+  if (loginMode.value === "register" && loginPassword.value !== loginPasswordConfirm.value) { loginError.value = "两次输入的密码不一致。"; return; }
+  emailCodeBusy.value = true;
+  try {
+    const purpose = loginMode.value === "register" ? "register" : loginMode.value === "forgot-password" ? "forgot-password" : "login";
+    await api.auth.sendEmailCode(loginIdentifier.value, purpose, purpose === "register" ? { password: loginPassword.value, nickname: loginNickname.value } : undefined);
+    loginError.value = purpose === "forgot-password" ? "重置验证码已发送，请检查邮箱和垃圾邮件。" : "验证码已发送，请检查邮箱和垃圾邮件。";
+  } catch (error) {
+    const message = errorText(error);
+    if (loginMode.value === "email-password" && /ACCOUNT_NOT_FOUND|not_found|尚未注册|不存在/i.test(message)) {
+      loginMode.value = "register";
+      loginProof.value = "";
+      loginError.value = "此邮箱尚未注册，请填写昵称和密码后创建账号。";
+    } else loginError.value = message;
+  }
+  finally { emailCodeBusy.value = false; }
+}
+async function registerAccount() {
+  loginError.value = "";
+  if (loginPassword.value.length < 8) { loginError.value = "密码至少需要 8 位。"; return; }
+  if (loginPassword.value !== loginPasswordConfirm.value) { loginError.value = "两次输入的密码不一致。"; return; }
+  if (!loginProof.value.trim()) { loginError.value = "请填写邮箱验证码。"; return; }
+  loginBusy.value = true;
+  try {
+    session.value = await api.auth.registerEmail({ email: loginIdentifier.value, verificationCode: loginProof.value, nickname: loginNickname.value, password: loginPassword.value });
+    await loadData();
+    page.value = "home";
+  } catch (error) { loginError.value = errorText(error); }
+  finally { loginBusy.value = false; }
+}
 function submitAuthView() {
   if (loginMode.value === "email-password" || loginMode.value === "email-code") {
     void signIn();
     return;
   }
-  loginError.value = loginMode.value === "forgot-password"
-    ? "密码重置服务尚未接入；当前不会发送邮件或修改账号。"
-    : "邮箱注册服务尚未接入；当前不会创建账号。";
+  if (loginMode.value === "register") { void registerAccount(); return; }
+  if (loginMode.value === "forgot-password") { void resetAccountPassword(); return; }
+  loginError.value = "邮箱注册服务尚未接入；当前不会创建账号。";
+}
+async function resetAccountPassword() {
+  loginError.value = "";
+  if (!loginIdentifier.value.trim()) { loginError.value = "请填写邮箱地址。"; return; }
+  if (!loginProof.value.trim()) { loginError.value = "请填写邮箱验证码。"; return; }
+  if (loginPassword.value.length < 8) { loginError.value = "新密码至少需要 8 位。"; return; }
+  loginBusy.value = true;
+  try {
+    session.value = await api.auth.resetPassword({ email: loginIdentifier.value, verificationCode: loginProof.value, password: loginPassword.value });
+    await loadData();
+    page.value = "home";
+  } catch (error) { loginError.value = errorText(error); }
+  finally { loginBusy.value = false; }
 }
 async function logout() {
   if (localWorkspace.value) {
@@ -1526,12 +1575,12 @@ function baiduTaskStateLabel(state: string) {
       </div>
       <div class="login-fields">
         <template v-if="loginMode === 'email-password' || loginMode === 'email-code'">
-          <label>邮箱或用户名</label>
-          <input v-model="loginIdentifier" autocomplete="username" placeholder="请输入邮箱地址或用户名" />
+          <label>邮箱</label>
+          <input v-model="loginIdentifier" type="email" autocomplete="email" placeholder="请输入邮箱地址" />
           <label>{{ loginMode === 'email-password' ? '密码' : '邮箱验证码' }}</label>
           <div class="proof-field">
             <input v-model="loginProof" :type="loginMode === 'email-password' ? 'password' : 'text'" :autocomplete="loginMode === 'email-password' ? 'current-password' : 'one-time-code'" :placeholder="loginMode === 'email-password' ? '请输入密码' : '请输入邮箱验证码'" />
-            <button v-if="loginMode === 'email-code'" class="text-button" @click="loginError = '邮箱验证码服务尚未接入；当前不会发送邮件。'">获取验证码</button>
+            <button v-if="loginMode === 'email-code'" class="text-button" :disabled="emailCodeBusy" @click="sendLoginCode">{{ emailCodeBusy ? '发送中…' : '获取验证码' }}</button>
           </div>
           <div class="form-foot">
             <button class="text-button" @click="showPasswordReset">忘记密码？</button>
@@ -1553,23 +1602,25 @@ function baiduTaskStateLabel(state: string) {
           <label>邮箱验证码</label>
           <div class="proof-field">
             <input v-model="loginProof" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入邮箱验证码" />
-            <button class="text-button" @click="loginError = '邮箱验证服务尚未接入；当前不会发送邮件。'">获取验证码</button>
+            <button class="text-button" :disabled="emailCodeBusy" @click="sendLoginCode">{{ emailCodeBusy ? '发送中…' : '获取验证码' }}</button>
           </div>
           <label>{{ loginMode === 'register' ? '设置密码' : '新密码' }}</label>
-          <input type="password" autocomplete="new-password" placeholder="至少 8 位" />
-          <label>确认密码</label>
-          <input type="password" autocomplete="new-password" placeholder="请再次输入密码" />
+          <input v-model="loginPassword" type="password" autocomplete="new-password" placeholder="至少 8 位" />
+          <template v-if="loginMode === 'register'">
+            <label>确认密码</label>
+            <input v-model="loginPasswordConfirm" type="password" autocomplete="new-password" placeholder="请再次输入密码" />
+          </template>
         </template>
       </div>
       <p v-if="loginError" class="error-note">{{ loginError }}</p>
       <p v-if="props.testTransport" class="integration-banner">
         {{ props.testTransport }}
       </p>
-      <p v-if="!isMock" class="auth-not-connected">真实认证接口尚未连接；不会伪造登录、发送验证码或创建账号。</p>
+      <p v-if="!isMock && !api.auth.configuration().ready" class="auth-not-connected">{{ api.auth.configuration().reason }}</p>
       <button
         class="primary-button login-submit"
         @click="submitAuthView"
-        :disabled="loginBusy || (!isMock && (loginMode === 'register' || loginMode === 'forgot-password'))"
+        :disabled="loginBusy || emailCodeBusy || (!isMock && !api.auth.configuration().ready)"
       >
         {{
           loginBusy ? "正在登录…" :
