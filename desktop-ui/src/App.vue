@@ -222,7 +222,6 @@ const backupSource = ref("sd-1");
 const backupTargets = ref<string[]>(isMock ? ["local"] : []);
 const backupPreset = ref("preset-camera");
 const backupTask = ref<ArchiveTask | null>(null);
-const newPresetName = ref("");
 const agentInput = ref("");
 const agentModelConfig = ref<ModelProviderConfig | null>(null);
 const agentLocalModels = ref<string[]>([]);
@@ -1089,7 +1088,7 @@ async function updateSetting<K extends keyof AppSettings>(
 }
 async function createPreset() {
   presetEditingId.value = null;
-  presetDraftName.value = newPresetName.value.trim();
+  presetDraftName.value = "";
   presetDraftPattern.value = "日期 / 事件 / 设备";
   presetEditorOpen.value = true;
 }
@@ -1121,14 +1120,15 @@ async function savePreset() {
       ? presets.value.map((preset) => preset.id === item.id ? item : preset)
       : [...presets.value, item];
     presetEditorOpen.value = false;
-    newPresetName.value = "";
     say(presetEditingId.value ? "预设已更新。" : "预设已保存。");
   });
 }
 function presetDisplayName(preset: NamePreset, index: number) {
   const name = preset.name.trim();
-  if (name && name !== "新建预设") return name;
   const suffix = preset.id.trim().slice(-6) || String(index + 1);
+  const duplicate = name && presets.value.filter((item) => item.name.trim() === name).length > 1;
+  if (name && name !== "新建预设" && !duplicate) return name;
+  if (duplicate) return `${name} · ${suffix}`;
   return `未命名预设 · ${suffix}`;
 }
 async function removePreset(item: NamePreset) {
@@ -3198,7 +3198,7 @@ function taskStateLabel(state: TaskState) {
                       }}</small></span
                     ><input
                       type="checkbox"
-                      :checked="settings.startOnLogin"
+                      :checked="isMock ? settings.startOnLogin : false"
                       :disabled="!isMock"
                       :title="isMock ? '演示偏好' : '开机启动能力尚未接入，当前偏好不生效'"
                       @change="
@@ -3437,7 +3437,9 @@ function taskStateLabel(state: TaskState) {
             : localWorkspace ? "Rust / SQLite · 云账号、同步和网盘功能已停用" : "Rust / SQLite · 云端账号和 Agent 未连接"
         }}</span
         ><span class="statusbar-right"
-          ><CircleHelp :size="13" />帮助与反馈 <i></i>{{ localWorkspace ? "本机模式" : "V2 草稿预览" }}</span
+          ><button class="statusbar-help" type="button" disabled title="帮助与反馈入口尚未接入">
+            <CircleHelp :size="13" />帮助与反馈（暂未接入）
+          </button><i></i>{{ localWorkspace ? "本机模式" : "V2 草稿预览" }}</span
         >
       </footer>
     </section>

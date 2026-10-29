@@ -484,22 +484,9 @@ export function createTauriApi(options: Options = {}): AppApi {
       detail: async (jobId) =>
         mapJob(await rpc<RawJob>("jobs.detail", { jobId })),
       async rename(jobId, name) {
-        await consent({
-          title: "修改归档记录名称",
-          description: "只改任务记录名称，不改媒体文件。",
-          rows: [
-            { label: "任务", value: jobId },
-            { label: "新名称", value: name },
-          ],
-        });
         await rpc("history.rename", { jobId, name, confirmed: true });
       },
       async clear() {
-        await consent({
-          title: "清空归档记录",
-          description: "不会删除媒体文件；活动任务存在时后端会拒绝。",
-          rows: [{ label: "影响", value: "清空本机历史及报告记录" }],
-        });
         await rpc("history.clear", { confirmation: "清空归档记录" });
       },
       retry: async (jobId, targetId) =>
