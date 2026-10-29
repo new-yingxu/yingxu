@@ -49,5 +49,5 @@ assert.match(app, /<CloudModelSettings :service="api\.modelProviderConfig"/);
 assert.match(app, /const canUseBaidu = computed\(\(\) => !!api\.netdisk && \(localWorkspace\.value \|\| !!session\.value\)\)/);
 assert.match(app, /:api="api\.netdisk"/);
 assert.match(app, /可单独授权百度网盘并确认上传已校验副本/);
-assert.match(styles, /\.native-home-lower\{gap:14px\}/);
+assert.match(styles, /\.native-home-lower\{column-gap:14px;row-gap:14px\}/);
 assert.match(styles, /\.naming-preset-row\{border-top:0!important\}/);
