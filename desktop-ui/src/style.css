@@ -189,11 +189,11 @@ body{min-width:0}
 .chat-panel>.chat-scroll{flex:0 0 auto;min-height:240px;max-height:none;overflow:visible;overscroll-behavior:auto}
 .agent-settings-trigger{flex:none}
 .agent-settings-backdrop{z-index:20}
-.agent-settings-modal{width:min(920px,100%);max-height:min(90dvh,900px);height:auto;display:block;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:0;min-height:0}
+.agent-settings-modal{width:min(920px,100%);height:min(90dvh,900px);max-height:calc(100dvh - 40px);min-height:0;display:flex;flex-direction:column;overflow:hidden;overscroll-behavior:contain;padding:0}
 .agent-settings-modal-heading{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:20px 24px;border-bottom:1px solid var(--line);background:var(--card)}
 .agent-settings-modal-heading h2{margin:3px 0 0;font-size:20px}
 .agent-settings-close{display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--muted)}
-.agent-settings-body{height:auto;min-height:0;overflow:visible;padding:18px 22px;display:grid;gap:14px;align-content:start}
+.agent-settings-body{height:auto;min-height:0;flex:1 1 auto;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:18px 22px;display:grid;gap:14px;align-content:start}
 .agent-settings-body .provider-settings{margin:0}
 @media(max-width:760px){.agent-aside,.chat-panel{min-height:0}.chat-panel>.chat-scroll{min-height:200px;max-height:none;overflow:visible}.native-home-cluster{width:100%}.native-metrics{gap:18px}.native-metrics span{min-width:88px}.native-home-actions>*{flex:1 1 180px}.agent-settings-modal{width:100%;max-height:calc(100dvh - 40px)}.agent-settings-modal-heading{padding:16px}.agent-settings-body{padding:14px}}
 .native-home-summary{display:block;padding:24px}
