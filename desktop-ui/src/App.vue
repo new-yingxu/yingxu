@@ -1491,21 +1491,18 @@ function taskStateLabel(state: TaskState) {
               title="工作台"
               :description="props.testTransport || hostStatus"
             />
-            <section class="panel">
-              <div class="native-metrics">
-                <span
-                  ><b>{{ summary.fileCount }}</b> 已索引文件</span
-                ><span
-                  ><b>{{ summary.totalSize }}</b> 索引容量</span
-                ><span
-                  ><b>{{ summary.reviewCount }}</b> 待复核</span
-                >
+            <section class="panel native-home-summary">
+              <div class="native-home-cluster">
+                <div class="native-metrics">
+                  <span><b>{{ summary.fileCount }}</b> 已索引文件</span>
+                  <span><b>{{ summary.totalSize }}</b> 索引容量</span>
+                  <span><b>{{ summary.reviewCount }}</b> 待复核</span>
+                </div>
+                <div class="native-home-actions">
+                  <button class="primary-button" @click="setPage('backup')">开始本地备份</button>
+                  <button class="secondary-button" @click="setPage('library')">打开资料库</button>
+                </div>
               </div>
-              <div class="native-home-actions"><button class="primary-button" @click="setPage('backup')">
-                开始本地备份</button
-              ><button class="secondary-button" @click="setPage('library')">
-                打开资料库
-              </button></div>
             </section>
             <section class="panel">
               <h3>最近本地任务</h3>
