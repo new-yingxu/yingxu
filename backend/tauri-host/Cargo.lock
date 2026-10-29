@@ -5574,7 +5574,7 @@ dependencies = [
 
 [[package]]
 name = "yingxu-core"
-version = "0.2.0-draft.2"
+version = "0.2.0-draft.3"
 dependencies = [
  "chrono",
  "fs2",
@@ -5595,7 +5595,7 @@ dependencies = [
 
 [[package]]
 name = "yingxu-desktop-host"
-version = "0.2.0-draft.2"
+version = "0.2.0-draft.3"
 dependencies = [
  "keyring",
  "rand 0.8.8",
