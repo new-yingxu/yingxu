@@ -2595,9 +2595,6 @@ function taskStateLabel(state: TaskState) {
                     <Send :size="15" />发送
                   </button>
                 </form>
-                <p class="table-foot centered agent-footnote">
-                  {{ isMock ? "演示 Agent 使用合成素材。" : "本机 LangGraph Agent 仅调用白名单工具；打开素材须经本机确认，模型请求不会自动切换到云端。" }}
-                </p>
               </div>
             </section>
             <div v-if="agentSettingsOpen" class="modal-backdrop agent-settings-backdrop" @click.self="agentSettingsOpen = false" @keydown.esc="agentSettingsOpen = false">
