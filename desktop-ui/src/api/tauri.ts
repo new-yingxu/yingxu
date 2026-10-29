@@ -254,7 +254,7 @@ export function createTauriApi(options: Options = {}): AppApi {
         throw new ApiError("DESTINATION_REQUIRED", "请先选择本地目的地");
       if (
         payload.destinations.some((p) =>
-          ["local", "baidu", "quark"].includes(p),
+          ["local", "baidu"].includes(p),
         )
       )
         throw new ApiError(
@@ -517,13 +517,6 @@ export function createTauriApi(options: Options = {}): AppApi {
       get: () => rpc("settings.get"),
       update: (patch) => rpc("settings.update", patch),
       reset: () => rpc("settings.reset"),
-      connectProvider: () =>
-        Promise.reject(
-          new ApiError(
-            "AUTH_FLOW_REQUIRED",
-            "请在个人网盘面板查看实时资质并完成官方授权",
-          ),
-        ),
     },
     presets: {
       list: listPresets,

@@ -250,7 +250,6 @@ export interface DesktopApi {
     get(): Promise<AppSettings>;
     update(settings: Partial<AppSettings>): Promise<AppSettings>;
     reset(): Promise<AppSettings>;
-    connectProvider(provider: "baidu" | "quark"): Promise<string>;
   };
   presets: {
     list(): Promise<NamePreset[]>;

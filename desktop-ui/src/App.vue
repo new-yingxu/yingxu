@@ -267,7 +267,10 @@ if (!savedAgentConversations.length) savedAgentConversations.push({ id: crypto.r
 const agentConversations = ref<AgentConversation[]>(savedAgentConversations);
 const activeAgentConversationId = ref(agentConversations.value[0]?.id ?? "");
 const agentNewConversationReview = ref(false);
-const agentHasArchivedUnresolvedTurn = ref(false);
+const agentHasArchivedUnresolvedTurn = computed(() => agentConversations.value.some(
+  (conversation) => conversation.unresolved && conversation.id !== activeAgentConversationId.value,
+));
+const agentChatScrollRef = ref<HTMLElement | null>(null);
 const modelConsentRef = ref<{
   submit(query: string): Promise<void>;
   requiresRecovery(): boolean;
@@ -1196,11 +1199,13 @@ async function askAgent() {
     }
     agentMessages.value.push({ role: "user", text });
     agentInput.value = "";
+    scrollAgentToLatest();
     await modelConsentRef.value.submit(text);
     return;
   }
   agentMessages.value.push({ role: "user", text });
   agentInput.value = "";
+  scrollAgentToLatest();
   try {
     const reply = await api.agent.ask(text);
     agentMessages.value.push({
@@ -1211,6 +1216,7 @@ async function askAgent() {
         ? reply.proposedAction.actionId
         : isMock && reply.proposedAction ? `act-${Date.now()}` : undefined,
     });
+    scrollAgentToLatest();
   } catch (error) {
     showError(error);
   }
@@ -1288,6 +1294,13 @@ function appendModelReply(value: { query: string; reply: AgentReply }) {
       : undefined,
   });
   if (agentInput.value === value.query) agentInput.value = "";
+  scrollAgentToLatest();
+}
+function scrollAgentToLatest() {
+  void nextTick(() => {
+    const scroller = agentChatScrollRef.value;
+    if (scroller) scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+  });
 }
 function createAgentConversation() {
   const conversation: AgentConversation = {
@@ -1315,14 +1328,13 @@ function confirmNewAgentConversation() {
   if (!agentNewConversationReview.value) return;
   const current = activeAgentConversation.value;
   if (current) current.unresolved = true;
-  agentHasArchivedUnresolvedTurn.value = true;
   createAgentConversation();
 }
 function openAgentConversation(id: string) {
   if (id === activeAgentConversationId.value || modelConsentRef.value?.isBusy()) return;
   if (modelConsentRef.value?.requiresRecovery()) {
-    say("当前轮次仍待恢复确认；请先新建独立对话并确认保留旧轮次。");
-    return;
+    const current = activeAgentConversation.value;
+    if (current) current.unresolved = true;
   }
   const conversation = agentConversations.value.find((item) => item.id === id);
   if (!conversation) return;
@@ -1331,6 +1343,28 @@ function openAgentConversation(id: string) {
   agentMessages.value = conversation.messages.map(restoreAgentMessage);
   agentInput.value = "";
   agentConversationKey.value += 1;
+  scrollAgentToLatest();
+}
+function deleteAgentConversation(id: string) {
+  if (id === activeAgentConversationId.value && modelConsentRef.value?.isBusy()) return;
+  const conversation = agentConversations.value.find((item) => item.id === id);
+  if (!conversation) return;
+  const wasActive = id === activeAgentConversationId.value;
+  agentConversations.value = agentConversations.value.filter((item) => item.id !== id);
+  if (!wasActive) return;
+  agentMessages.value = [];
+  agentInput.value = "";
+  agentConversationKey.value += 1;
+  agentNewConversationReview.value = false;
+  if (agentConversations.value.length) {
+    const nextConversation = agentConversations.value[0];
+    activeAgentConversationId.value = nextConversation.id;
+    agentMessages.value = nextConversation.messages.map(restoreAgentMessage);
+    scrollAgentToLatest();
+  } else {
+    activeAgentConversationId.value = "";
+    createAgentConversation();
+  }
 }
 async function confirmAgent(message: AgentMessage, accepted: boolean) {
   if (!message.actionId || agentActionBusy.value) return;
@@ -1506,16 +1540,6 @@ async function saveTaskRename() {
     taskToRename.value = null;
     say("归档记录名称已更新。");
   });
-}
-async function connectProvider(provider: "baidu" | "quark") {
-  try {
-    const allowed = await runCloudAction(session.value, localWorkspace.value, async () => {
-      say(await api.settings.connectProvider(provider));
-    });
-    if (!allowed) say("本机模式已禁用网盘授权；不会发送云端请求。");
-  } catch (error) {
-    showError(error);
-  }
 }
 async function resetSettings() {
   try {
@@ -1866,8 +1890,8 @@ function baiduTaskStateLabel(state: string) {
           </button>
         </div>
       </header>
-      <div class="page-scroll">
-        <div class="page-content">
+      <div :class="['page-scroll', { 'agent-page-scroll': page === 'agent' }]">
+        <div :class="['page-content', { 'agent-page-content': page === 'agent' }]">
           <div v-if="notice" class="toast inline-toast">{{ notice }}</div>
           <div v-if="localWorkspace" class="local-mode-banner" role="status">
             <b>本机模式已开启</b><span>无需影序账号；素材索引、备份和 Agent 工具在本机运行。你可自带云端模型 Key，也可单独授权百度网盘并确认上传已校验副本；影序账号和跨设备同步保持关闭。</span>
@@ -2235,11 +2259,6 @@ function baiduTaskStateLabel(state: string) {
                         name: '百度网盘',
                         meta: '需要官方账号授权',
                       },
-                      {
-                        id: 'quark',
-                        name: '夸克网盘',
-                        meta: '官方 API 能力待核验',
-                      },
                     ]"
                     :key="item.id"
                     class="option-row"
@@ -2358,7 +2377,7 @@ function baiduTaskStateLabel(state: string) {
                                   ? "本机硬盘"
                                   : id === "baidu"
                                     ? "百度网盘"
-                                    : "夸克网盘",
+                                    : "百度网盘",
                               )
                               .join("、")
                           : backupTargets.join("、") || "请选择目标"
@@ -2934,10 +2953,13 @@ function baiduTaskStateLabel(state: string) {
                 </button>
                 <h4>最近对话</h4>
                 <div class="agent-conversation-list">
-                  <button v-for="conversation in agentConversations" :key="conversation.id" :class="['conversation-link', { active: conversation.id === activeAgentConversationId }]" :disabled="modelConsentRef?.isBusy()" @click="openAgentConversation(conversation.id)">
-                    <Sparkles :size="14" /><span>{{ conversation.title }}</span>
-                    <small>{{ new Date(conversation.updatedAt).toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</small>
-                  </button>
+                  <div v-for="conversation in agentConversations" :key="conversation.id" :class="['conversation-item', { active: conversation.id === activeAgentConversationId }]">
+                    <button class="conversation-link" type="button" :disabled="modelConsentRef?.isBusy()" @click="openAgentConversation(conversation.id)">
+                      <Sparkles :size="14" /><span>{{ conversation.title }}</span>
+                      <small>{{ new Date(conversation.updatedAt).toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</small>
+                    </button>
+                    <button class="conversation-delete" type="button" :disabled="conversation.id === activeAgentConversationId && modelConsentRef?.isBusy()" :aria-label="`删除对话：${conversation.title}`" title="删除对话" @click="deleteAgentConversation(conversation.id)">删除</button>
+                  </div>
                   <p v-if="!agentConversations.length" class="agent-conversation-empty">暂无对话，点击“新建对话”开始。</p>
                 </div>
                 <div class="safety-callout">
@@ -2945,7 +2967,7 @@ function baiduTaskStateLabel(state: string) {
                 </div>
               </aside>
               <div class="panel chat-panel">
-                <div :class="['chat-scroll', { 'chat-scroll-empty': agentMessages.length === 0 }]">
+                <div ref="agentChatScrollRef" :class="['chat-scroll', { 'chat-scroll-empty': agentMessages.length === 0 }]">
                   <div class="agent-welcome">
                     <span class="agent-orb"><Sparkles :size="20" /></span
                     ><b>你好，{{ displayName }}</b>
