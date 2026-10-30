@@ -1,0 +1,101 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (backend/target/debug/deps/yingxu_core-11bb7b1f5b149971)
+
+running 30 tests
+test fsops::scan_tests::unportable_names_are_skipped_not_fatal ... ok
+test fsops::scan_tests::symlinks_are_skipped_not_fatal ... ok
+test netdisk::tests::pkce_challenge_matches_verifier ... ok
+test netdisk::tests::baidu_upload_is_gated_until_approved ... ok
+test agent::tests::executor_rejects_unknown_or_wrong_typed_arguments_before_effects ... ok
+test agent::tests::open_item_requires_current_root_and_rejects_symlinks_and_changed_files ... ok
+test netdisk_baidu::tests::block_md5_matches_reference ... ok
+test netdisk_baidu::tests::encodes_form_values ... ok
+test netdisk_baidu::tests::redirect_port_is_parsed ... ok
+test netdisk_baidu::tests::remote_path_strips_directories ... ok
+test netdisk::tests::cancel_never_records_uploaded ... ok
+test raw::tests::cr3_exif_comes_from_cmt2_uuid_box ... ok
+test raw::tests::cr3_without_cmt_returns_none ... ok
+test netdisk::tests::tampered_local_copy_is_refused ... ok
+test raw::tests::files_without_preview_report_explicit_error ... ok
+test raw::tests::non_raw_file_is_rejected ... ok
+test raw::tests::raf_header_offset_is_used ... ok
+test raw::tests::jpeg_scan_fallback_finds_cr3_style_preview ... ok
+test video::tests::analyze_video_on_sample_writes_metadata_without_frames ... ok
+test video::tests::missing_moov_is_reported_not_panicking ... ok
+test video::tests::mov_metadata_is_parsed ... ok
+test video::tests::non_bmff_container_is_explicitly_rejected ... ok
+test netdisk::tests::loopback_callback_rejects_wrong_state ... ok
+test agent::tests::local_search_metadata_and_backup_job_are_redacted ... ok
+test netdisk::tests::chunked_upload_resumes_and_verifies ... ok
+test raw::tests::tiff_ifd_preview_is_extracted ... ok
+test netdisk::tests::uploads_with_configured_concurrency ... ok
+test raw::tests::analyze_raw_end_to_end_keeps_source_bytes ... ok
+test video::tests::repeated_video_analysis_keeps_frame_signals_when_cache_exists ... ok
+test netdisk::tests::throttle_limits_upload_rate ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+     Running unittests src/main.rs (backend/target/debug/deps/yingxu_core-b33263527129ae8d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/api_and_delivery.rs (backend/target/debug/deps/api_and_delivery-b201e753e2212177)
+
+running 6 tests
+test rpc_rejects_bad_versions_unknown_fields_and_fake_cloud ... ok
+test delivery_damaged_replica_never_commits ... ok
+test restore_replay_and_report_rename ... ok
+test delivery_writes_verified_manifest_and_repeat_is_idempotent ... ok
+test cli_recovers_after_invalid_json ... ok
+test separate_process_kill_recovers_owned_temp_and_requires_resume ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.07s
+
+     Running tests/local_backend.rs (backend/target/debug/deps/local_backend-1a13bbf3acee2fb7)
+
+running 21 tests
+test checksum_mismatch_does_not_commit_corrupt_restore ... ok
+test changed_source_before_confirm_invalidates_plan ... ok
+test newer_database_version_is_refused ... ok
+test idempotent_start_returns_one_persisted_job ... ok
+test changed_source_after_queue_is_preserved_and_fails ... ok
+test interruption_mid_copy_leaves_no_final_and_retains_source ... ok
+test missing_source_is_not_fake_success ... ok
+test reject_nested_paths_and_network_paths ... ok
+test root_replacement_after_confirm_does_not_redirect_copy ... ok
+test conflicts_skip_same_and_number_different_without_overwrite ... ok
+test outbox_defaults_do_not_include_paths ... ok
+test only_retry_failed_destination_preserves_successful_replica ... ok
+test pause_resume_cancel_validate_transitions ... ok
+test real_copy_sha256_raw_video_and_sidecar_preserve_source ... ok
+test audit_detects_tampering_restore_uses_only_healthy_data ... ok
+test symlinks_cannot_escape_source_or_target ... ok
+test single_worker_and_persisted_recovery_require_resume ... ok
+test search_settings_reports_and_history_are_persistent ... ok
+test unchecked_backup_is_reported_unverified_and_transfer_cannot_skip_sha ... ok
+test transfer_needs_fresh_second_confirmation_and_can_be_undone ... ok
+test transfer_preserves_changed_source_or_damaged_target ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s
+
+     Running tests/media.rs (backend/target/debug/deps/media-1218c4e1fdcc139d)
+
+running 7 tests
+test undecodable_raw_is_retained_and_not_fake_good ... ok
+test oversized_dimensions_are_unanalyzed_not_damaged ... ok
+test queued_path_payload_respects_current_privacy_switch ... ok
+test source_index_is_read_only_and_preserves_current_analysis ... ok
+test library_search_page_covers_501_rows_and_applies_filters_from_zero ... ok
+test changed_source_invalidates_thumbnail_and_analysis ... ok
+test bounded_photo_thumbnail_signals_and_human_review ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+   Doc-tests yingxu_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,30 @@
+   Compiling objc2-exception-helper v0.1.1
+   Compiling ring v0.17.14
+   Compiling libsqlite3-sys v0.39.1
+   Compiling objc2 v0.6.5
+   Compiling rustls v0.23.46
+    Checking rustls-webpki v0.103.16
+    Checking block2 v0.6.2
+    Checking objc2-core-foundation v0.3.2
+    Checking rusqlite v0.41.0
+    Checking dispatch2 v0.3.1
+    Checking objc2-foundation v0.3.2
+    Checking objc2-core-graphics v0.3.2
+    Checking yingxu-core v0.2.0-draft.1 (/Users/nanyu/Documents/AI项目/new-影序agent开发/backend/core)
+    Checking objc2-quartz-core v0.3.2
+    Checking objc2-app-kit v0.3.2
+    Checking objc2-web-kit v0.3.2
+    Checking muda v0.20.0
+    Checking tao v0.37.2
+    Checking window-vibrancy v0.8.1
+    Checking rfd v0.16.1
+    Checking tauri-runtime v2.12.2
+    Checking wry v0.57.1
+    Checking tray-icon v0.25.1
+    Checking tauri-runtime-wry v2.12.3
+    Checking tauri v2.12.5
+    Checking tauri-plugin-fs v2.7.1
+    Checking tauri-plugin-single-instance v2.5.4
+    Checking tauri-plugin-dialog v2.8.3
+    Checking yingxu-desktop-host v0.2.0-draft.1 (/Users/nanyu/Documents/AI项目/new-影序agent开发/backend/tauri-host)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.43s
