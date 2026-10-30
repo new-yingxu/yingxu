@@ -61,6 +61,10 @@ async function submit(query:string) {
   }
   await prepare(query.trim())
 }
+async function submit(query:string) {
+  if(!query.trim())return
+  await prepare(query.trim())
+}
 async function confirm(accepted:boolean) {
   if(!controller||!plan.value||busy.value)return
   const current=plan.value;busy.value=true

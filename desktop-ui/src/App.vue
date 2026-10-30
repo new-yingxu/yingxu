@@ -72,6 +72,20 @@ import {
 } from "./api/library-paging";
 import type { LibraryPageState } from "./api/library-paging";
 import {
+  applyLibraryPage,
+  canLoadNextPage,
+  canLoadPreviousPage,
+  createLibraryPage,
+  describeLibraryPage,
+  failLibraryLoad,
+  LIBRARY_PAGE_SIZE,
+  nextLibraryOffset,
+  previousLibraryOffset,
+  resetLibraryPage,
+  startLibraryLoad,
+} from "./api/library-paging";
+import type { LibraryPageState } from "./api/library-paging";
+import {
   Activity,
   Archive,
   ArrowDownToLine,
@@ -1067,6 +1081,45 @@ async function loadLibraryPage(offset: number, append: boolean) {
   try {
     const page = await api.library.searchPage(
       libraryQuery.value,
+      filterKind.value,
+      filterQuality.value,
+      libraryPage.value.limit,
+      offset,
+    );
+    if (epoch !== thumbnailEpoch) return;
+    const next = applyLibraryPage(libraryPage.value, page);
+    libraryPage.value = next;
+    files.value = next.items;
+    await loadThumbnails(next.items, epoch);
+  } catch (error) {
+    if (epoch !== thumbnailEpoch) return;
+    libraryPage.value = failLibraryLoad(
+      libraryPage.value,
+      errorText(error),
+    );
+    showError(error);
+  }
+}
+async function searchFiles() {
+  await loadLibraryPage(0, false);
+}
+async function loadNextPage() {
+  if (!canLoadNextPage(libraryPage.value)) return;
+  await loadLibraryPage(nextLibraryOffset(libraryPage.value), true);
+}
+async function loadPreviousPage() {
+  if (!canLoadPreviousPage(libraryPage.value)) return;
+  await loadLibraryPage(previousLibraryOffset(libraryPage.value), false);
+}
+async function loadLibraryPage(offset: number, append: boolean) {
+  const epoch = ++thumbnailEpoch;
+  const base = append
+    ? libraryPage.value
+    : resetLibraryPage(libraryPage.value);
+  libraryPage.value = startLibraryLoad(base);
+  try {
+    const page = await api.library.searchPage(
+      query.value,
       filterKind.value,
       filterQuality.value,
       libraryPage.value.limit,
