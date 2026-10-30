@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "影序 Pocket",
+    "slug": "yingxu-pocket",
+    "scheme": "yingxu-pocket",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yingxuapp.pocket",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "影序 Pocket 需要连接同一局域网中的影序桌面端，读取备份状态并同步拍摄备注。"
+      }
+    },
+    "android": {
+      "package": "com.yingxuapp.pocket",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "./plugins/withAndroidGradleMemory"
+    ],
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "e83a97a0-f588-4068-a66d-f3e38782bcc1"
+      }
+    },
+    "owner": "nanyu-lu"
+  }
+}
