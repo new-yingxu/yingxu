@@ -65,10 +65,19 @@ pub fn relative(path: &Path) -> CoreResult<()> {
     Ok(())
 }
 pub fn local_directory(path: &Path) -> CoreResult<PathBuf> {
-    if !path.is_absolute()
-        || path.to_string_lossy().starts_with("//")
-        || path.to_string_lossy().starts_with("\\\\")
-    {
+    // canonicalize() 在 Windows 上返回 \\?\C:\...，而 select_directory 会把
+    // canonical 路径回传给前端、再传回来。verbatim 的盘符路径同样是本机路径，
+    // 只有 UNC 共享和设备命名空间必须拒绝。
+    #[cfg(windows)]
+    let local_prefix = matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_))
+    );
+    #[cfg(not(windows))]
+    let local_prefix =
+        !path.to_string_lossy().starts_with("//") && !path.to_string_lossy().starts_with("\\\\");
+    if !path.is_absolute() || !local_prefix {
         return Err(CoreError::new(
             "LOCAL_PATH_REQUIRED",
             "请选择本机/移动磁盘的绝对路径，不支持网络共享",
@@ -80,6 +89,11 @@ pub fn local_directory(path: &Path) -> CoreResult<PathBuf> {
     let mut walked = PathBuf::new();
     for c in path.components() {
         walked.push(c.as_os_str());
+        // \\?\D: 这种前缀本身不是文件系统条目，补上根分隔符之前不能查询，
+        // 否则会得到 ERROR_INVALID_FUNCTION。
+        if matches!(c, Component::Prefix(_)) {
+            continue;
+        }
         let m = fs::symlink_metadata(&walked)?;
         if m.file_type().is_symlink() {
             return Err(CoreError::new("SYMLINK_REJECTED", walked.display()));
@@ -787,6 +801,35 @@ mod scan_tests {
         // 旧接口保持"只给文件列表"的语义
         assert_eq!(scan(&dir).unwrap().len(), 1);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn local_windows_paths_round_trip_and_network_paths_stay_rejected() {
+        // select_directory 会把 canonicalize 的结果（\\?\C:\...）回传给前端，
+        // 用户点「选择来源并扫描」时这个字符串又作为 source 传回来，
+        // 所以 verbatim 盘符路径必须和普通盘符路径一样被接受。
+        let root = unique("windows-local");
+        let canonical = root.canonicalize().unwrap();
+        assert!(
+            canonical.to_string_lossy().starts_with(r"\\?\"),
+            "canonicalize 在 Windows 上应返回 verbatim 路径：{}",
+            canonical.display()
+        );
+        assert_eq!(local_directory(&root).unwrap(), canonical);
+        assert_eq!(local_directory(&canonical).unwrap(), canonical);
+        for path in [
+            r"\\server\share",
+            r"\\?\UNC\server\share",
+            r"\\.\PhysicalDrive0",
+            r"relative\folder",
+        ] {
+            assert_eq!(
+                local_directory(Path::new(path)).unwrap_err().code,
+                "LOCAL_PATH_REQUIRED"
+            );
+        }
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[cfg(unix)]

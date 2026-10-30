@@ -83,6 +83,16 @@ async function resume(accepted:boolean){
  }catch(error){if(mounted){failure.value=modelFailure(error);if(props.hideStatus)emit('unavailable',failure.value.message);recoveryRequired.value=controller.requiresRecovery();recoveryAvailable.value=controller.canResume()}}
  finally{if(mounted){recoveryReview.value=null;busy.value=false;await nextTick();review.value?.focus()}}
 }
+function abandon(){
+  if(!controller||busy.value)return
+  controller.abandon()
+  recoveryRequired.value=false
+  recoveryAvailable.value=false
+  failure.value=null
+  plan.value=null
+  recoveryReview.value=null
+  emit('unavailable','已放弃上一轮并解锁，现在可以重新发送。若上一轮可能已被计费，请到供应商后台核对。')
+}
 function keyboard(event:KeyboardEvent){
  if(event.key==='Escape'){event.preventDefault();if(!busy.value){if(recoveryReview.value)void resume(false);else void confirm(false)}}
  if(event.key==='Tab'){
@@ -103,6 +113,11 @@ defineExpose({
 })
 </script>
 <template>
+ <div v-if="hideStatus && recoveryRequired" class="model-recovery-inline" role="alert">
+  <span>{{ failure?.message || '上一轮状态未解决，已暂停发送。' }}</span>
+  <button v-if="recoveryAvailable" class="secondary-button compact" :disabled="busy" @click="openRecovery">{{ busy ? '处理中…' : '查看并恢复本轮' }}</button>
+  <button class="secondary-button compact" :disabled="busy" @click="abandon">{{ busy ? '处理中…' : '放弃本轮并解锁' }}</button>
+ </div>
   <section v-if="!hideStatus" class="model-consent-panel" aria-label="模型服务状态">
   <div class="model-status-row"><strong>Agent 执行环境</strong><span :data-availability="statusView.availability" :class="{ 'status-ready': statusView.ready, 'status-unavailable': !statusView.ready }">{{ statusView.label }}</span><button class="text-button" :disabled="!controller||busy||statusTimedOut" @click="refresh">刷新状态</button></div>
   <p>{{ statusView.detail }}</p>
@@ -128,6 +143,8 @@ defineExpose({
 </template>
 <style scoped>
 .model-consent-panel{padding:14px 16px;margin:12px 0;border:1px solid var(--line);border-radius:12px;background:var(--card);font-size:13px}
+.model-recovery-inline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 12px;margin:12px 0;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:12.5px;line-height:1.5}
+.model-recovery-inline span{flex:1;min-width:200px;color:var(--red);overflow-wrap:anywhere}
 .model-status-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.model-status-row span{flex:1;min-width:120px}.status-ready{color:var(--green);font-weight:700}.status-unavailable{color:var(--red);font-weight:700}.model-consent-panel p{margin:8px 0;line-height:1.6}.model-failure{color:var(--red);overflow-wrap:anywhere}
 .model-consent-overlay{position:fixed;inset:0;background:#17291fc0;z-index:140;display:grid;place-items:center;padding:20px}.model-consent-dialog{width:min(680px,100%);max-height:calc(100dvh - 40px);overflow:auto;padding:24px;border-radius:20px;background:var(--card);box-shadow:0 18px 80px #0004}.model-consent-dialog h2{margin:0 0 16px}.model-consent-dialog dt{font-weight:700;margin:12px 0 6px}.model-consent-dialog dd{margin:0;overflow-wrap:anywhere;line-height:1.65}.model-query{white-space:pre-wrap}.model-consent-actions{display:flex;gap:12px;justify-content:flex-end;position:sticky;bottom:-24px;background:var(--card);padding:16px 0 0}.model-consent-actions button{min-width:0}
 @media(max-width:800px){.model-consent-dialog{padding:18px}.model-consent-actions{bottom:-18px;flex-wrap:wrap}}
