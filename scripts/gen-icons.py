@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "docs" / "品牌" / "影序图标-源图-512.png"
+SOURCE = ROOT / "site" / "assets" / "icon-512.png"
 ICON_DIR = ROOT / "backend" / "tauri-host" / "icons"
 SITE_ASSETS = ROOT / "site" / "assets"
 DESKTOP_UI_PUBLIC = ROOT / "desktop-ui" / "public"
