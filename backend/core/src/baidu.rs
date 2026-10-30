@@ -375,12 +375,12 @@ impl Engine {
                 if path.extension().and_then(|s| s.to_str()) != Some("json") {
                     continue;
                 }
-                if let Ok(raw) = fs::read(path) {
-                    if let Ok(task) = serde_json::from_slice::<BaiduTask>(&raw) {
-                        if task.owner_id == owner {
-                            tasks.push(task.summary());
-                        }
-                    }
+                if let Some(task) = fs::read(path)
+                    .ok()
+                    .and_then(|raw| serde_json::from_slice::<BaiduTask>(&raw).ok())
+                    .filter(|task| task.owner_id == owner)
+                {
+                    tasks.push(task.summary());
                 }
             }
         }
