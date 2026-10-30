@@ -322,11 +322,13 @@ def _as_utc(dt: datetime) -> datetime:
 
 
 @app.get("/healthz")
+@app.get("/v1/healthz")
 def healthz(request: Request):
     return {"ok": True, "service": "yingxu-cloud", "version": request.app.state.settings.app_version}
 
 
 @app.get("/readyz")
+@app.get("/v1/readyz")
 def readyz(request: Request):
     settings: Settings = request.app.state.settings
     try:

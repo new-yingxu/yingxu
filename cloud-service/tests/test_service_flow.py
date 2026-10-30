@@ -147,8 +147,10 @@ class ServiceFlow(unittest.TestCase):
             'CLOUDBASE_ENV_ID':'','CLOUDBASE_APIKEY':'','JWT_ISSUER':'','JWT_AUDIENCE':'','JWT_JWKS_URL':''}):
             with TestClient(app) as client:
                 self.assertEqual(client.get('/healthz').status_code,200)
+                self.assertEqual(client.get('/v1/healthz').status_code,200)
                 result=client.get('/readyz')
                 self.assertEqual(result.status_code,503)
+                self.assertEqual(client.get('/v1/readyz').status_code,503)
                 self.assertEqual(result.json()['authentication'],'not_configured')
                 self.assertEqual(client.get('/v1/devices',headers={'Authorization':'Bearer invalid'}).status_code,503)
 
