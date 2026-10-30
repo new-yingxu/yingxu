@@ -3005,7 +3005,6 @@ function baiduTaskStateLabel(state: string) {
                     <span v-if="message.role !== 'user'" class="agent-mini">✦</span>
                     <div class="message-content">
                       <p>{{ message.text }}</p>
-                      <small v-if="message.reply?.historySync === 'not_synced'">未同步历史（已关闭 Agent 历史同步）</small>
                       <div
                         v-if="message.reply?.matches.length"
                         class="match-list"
