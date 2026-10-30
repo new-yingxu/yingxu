@@ -152,6 +152,8 @@ const operationBusy = ref(false);
 const analysis = ref<MediaAnalysis | null>(null);
 const analysisTitle = ref("");
 const thumbnails = reactive<Record<string, string>>({});
+// 自动生成缩略图时失败过的条目，避免反复重试拖慢列表
+const thumbnailFailed = new Set<string>();
 const taskReport = ref<Record<string, unknown> | null>(null);
 const healthyReplicas = ref<{ id: string; path: string; verified: boolean }[]>(
   [],
@@ -1046,14 +1048,37 @@ async function refreshHistory() {
 async function loadThumbnails(list: MediaFile[], epoch: number) {
   if (!api.local) return;
   const pending = list
-    .filter((file) => file.kind !== "other" && !thumbnails[file.id])
-    .slice(0, 24);
+    .filter(
+      (file) =>
+        file.kind !== "other" &&
+        !thumbnails[file.id] &&
+        !thumbnailFailed.has(file.id),
+    )
+    .slice(0, 60);
   for (let i = 0; i < pending.length; i += 4) {
     if (epoch !== thumbnailEpoch) return;
     await Promise.allSettled(
       pending.slice(i, i + 4).map(async (file) => {
-        const image = await api.local!.thumbnail(file.id);
-        if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
+        // 已有导数就直接取；没有就顺手生成本地缩略图（只解码一次），
+        // 这样列表打开即可显示图片，不用逐张点「分析/预览」。
+        try {
+          const image = await api.local!.thumbnail(file.id);
+          if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
+          return;
+        } catch {
+          if (file.kind !== "photo") {
+            thumbnailFailed.add(file.id);
+            return;
+          }
+        }
+        try {
+          await api.local!.analyze(file.id, file.kind);
+          const image = await api.local!.thumbnail(file.id);
+          if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
+        } catch {
+          // 解码失败（RAW/损坏/无权限）就记下来，不再重试
+          thumbnailFailed.add(file.id);
+        }
       }),
     );
   }
@@ -2970,15 +2995,14 @@ function baiduTaskStateLabel(state: string) {
                 <div ref="agentChatScrollRef" :class="['chat-scroll', { 'chat-scroll-empty': agentMessages.length === 0 }]">
                   <div class="agent-welcome">
                     <span class="agent-orb"><Sparkles :size="20" /></span
-                    ><b>你好，{{ displayName }}</b>
+                    ><b>你好</b>
                   </div>
                   <div
                     v-for="(message, index) in agentMessages"
                     :key="index"
                     :class="['message-row', message.role]"
                   >
-                    <b v-if="message.role === 'user'">{{ displayName }}</b
-                    ><span v-else class="agent-mini">✦</span>
+                    <span v-if="message.role !== 'user'" class="agent-mini">✦</span>
                     <div class="message-content">
                       <p>{{ message.text }}</p>
                       <small v-if="message.reply?.historySync === 'not_synced'">未同步历史（已关闭 Agent 历史同步）</small>

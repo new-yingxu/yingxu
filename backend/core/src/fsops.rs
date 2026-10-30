@@ -25,13 +25,20 @@ pub fn fingerprint(m: &fs::Metadata) -> Fingerprint {
         // 「换了一块盘 / 换了一个文件」；真正的差异检测还有 bytes + modified_ns，
         // 以及每次读写前的重新指纹比对，不单靠 identity。
         use std::os::windows::fs::MetadataExt;
-        format!(
-            "{:?}:{:?}:{:?}:{}",
-            m.creation_time(),
-            m.last_write_time(),
-            m.file_attributes(),
-            m.len()
-        )
+        if m.is_dir() {
+            // 目录的 last_write_time 会随目录内容变化：备份一往里写文件，
+            // 「根目录身份」就变了，check_root 便误报 ROOT_CHANGED。
+            // 目录只认创建时间 + 属性；文件才额外比较写入时间和大小。
+            format!("dir:{:?}:{:?}", m.creation_time(), m.file_attributes())
+        } else {
+            format!(
+                "file:{:?}:{:?}:{:?}:{}",
+                m.creation_time(),
+                m.last_write_time(),
+                m.file_attributes(),
+                m.len()
+            )
+        }
     };
     #[cfg(not(any(unix, windows)))]
     let identity = format!("{:?}", m.created().ok());
@@ -519,7 +526,10 @@ pub fn scan_report(root: &Path) -> CoreResult<ScanReport> {
         if e.file_type().is_dir() {
             continue;
         }
-        if let Some(detail) = unportable_reason(&shown) {
+        // 只校验「文件自身的名字」。`shown` 是整条相对路径，Windows 上天然带 `\`，
+        // 拿它去查不可移植字符会把所有子目录里的文件全判成 unportable。
+        let file_name = e.file_name().to_string_lossy().to_string();
+        if let Some(detail) = unportable_reason(&file_name) {
             skipped.push(SkippedEntry {
                 relative: shown,
                 reason: "unportable_name",
@@ -847,6 +857,32 @@ mod scan_tests {
                 .any(|s| s.reason == "symlink" && s.relative == "link.jpg"),
             "符号链接应被跳过并说明原因"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn directory_identity_survives_content_changes() {
+        // 备份会往目标目录里写文件；目录身份不能因此变化，
+        // 否则 SafeDir::check_root 会在第一个文件落盘后报 ROOT_CHANGED。
+        let dir = unique("dir-identity");
+        let before = fingerprint(&fs::metadata(&dir).unwrap()).identity;
+        std::fs::write(dir.join("sample.jpg"), b"x").unwrap();
+        let after = fingerprint(&fs::metadata(&dir).unwrap()).identity;
+        assert_eq!(before, after, "目录身份不应随目录内容变化");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn nested_files_are_not_flagged_as_unportable() {
+        // 相对路径在 Windows 上一定带 `\`；不可移植字符只能拿文件名判断，
+        // 否则子目录里的正常照片会被整批跳过（用户表现为“扫描漏了一堆图”）。
+        let dir = unique("nested");
+        std::fs::create_dir_all(dir.join("光影")).unwrap();
+        std::fs::write(dir.join("光影").join("a.jpg"), b"x").unwrap();
+        let report = scan_report(&dir).unwrap();
+        assert_eq!(report.files.len(), 1, "子目录里的文件应被收录");
+        assert!(report.skipped.is_empty(), "子目录里的正常文件不该被跳过");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

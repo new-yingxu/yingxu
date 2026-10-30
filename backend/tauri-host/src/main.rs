@@ -787,6 +787,13 @@ fn spawn_local_agent_with_profile(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(local_agent_stderr_log().map_or(Stdio::null(), Stdio::from));
+    // 侧车是控制台程序：不设置 CREATE_NO_WINDOW，Windows 每次启动都会弹一个黑窗口。
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     for name in [
         "HOME",
         "TMPDIR",
@@ -2484,6 +2491,13 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+            // 窗口在配置里是隐藏启动的：等 Engine::open / manage(HostState) / 托盘都就绪后再显示，
+            // 否则前端 onMounted 立刻发的第一批 backend_request 会抢在 state 注册之前失败，
+            // 表现为“每个板块第一次点都报错，第二次才好”。
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
