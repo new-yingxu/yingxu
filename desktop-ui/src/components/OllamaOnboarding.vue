@@ -39,8 +39,10 @@ async function refresh() {
     models.value = catalog.models
     const current = providerConfig?.localModel || (nextStatus.configured && nextStatus.provider === 'ollama' ? nextStatus.model : '')
     selectedModel.value = current && catalog.models.includes(current) ? current : catalog.models[0] || ''
-  } catch {
-    if (mounted) failure.value = '读取 Ollama 模型列表失败。请确认本机 Ollama 已启动，再刷新。'
+  } catch (error) {
+    if (mounted) failure.value = error instanceof Error && error.message.startsWith('DESKTOP_STATUS_TIMEOUT:')
+      ? error.message.slice('DESKTOP_STATUS_TIMEOUT: '.length)
+      : '读取 Ollama 模型列表失败。请确认本机 Ollama 已启动，再刷新。'
   } finally {
     if (mounted) busy.value = false
   }

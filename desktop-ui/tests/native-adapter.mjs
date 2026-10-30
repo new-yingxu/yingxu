@@ -111,6 +111,7 @@ try {
   let resolveProviderStatus;
   let providerStatusCalls = 0;
   const statusApi = createTauriApi({
+    statusTimeoutMs: 5,
     invoke: async (command) => {
       assert.equal(command, "agent_model_provider_config");
       providerStatusCalls += 1;
@@ -124,6 +125,19 @@ try {
   resolveProviderStatus(providerStatus);
   assert.deepEqual(await Promise.all([statusOne, statusTwo]), [providerStatus, providerStatus]);
   results.push("concurrent model settings share one keychain status IPC request");
+
+  let blockedStatusCalls = 0;
+  const blockedStatusApi = createTauriApi({
+    statusTimeoutMs: 5,
+    invoke: async () => {
+      blockedStatusCalls += 1;
+      return new Promise(() => {});
+    },
+  });
+  await assert.rejects(blockedStatusApi.modelProviderConfig.status(), /DESKTOP_STATUS_TIMEOUT/);
+  await assert.rejects(blockedStatusApi.modelProviderConfig.status(), /DESKTOP_STATUS_TIMEOUT/);
+  assert.equal(blockedStatusCalls, 1);
+  results.push("timed-out keychain status does not automatically trigger repeated native prompts");
 
   assert.equal((await api.local.health()).protocolVersion, 1);
   results.push("health protocol");
