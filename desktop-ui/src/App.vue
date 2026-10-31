@@ -1652,7 +1652,7 @@ function baiduTaskStateLabel(state: string) {
     </div>
     <section class="login-card">
       <div class="login-intro">
-        <span class="eyebrow">影序 · 桌面端 V2 草稿</span>
+        <span class="eyebrow">影序</span>
         <h1>欢迎回到影序</h1>
         <p>
           登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。
@@ -1822,8 +1822,7 @@ function baiduTaskStateLabel(state: string) {
           <span>影序</span><ChevronRight :size="13" /><b>{{ activeTitle }}</b>
         </div>
         <div class="top-actions">
-          <span v-if="!localWorkspace" class="draft-chip"><i></i> V2 草稿预览</span
-          ><span class="demo-chip"
+          <span class="demo-chip"
             ><i></i>{{ isMock ? "演示数据" : localWorkspace ? "本机模式 · 账号同步停用" : "本地真实数据" }}</span
           >
           <div class="search-action-wrap">
@@ -3904,7 +3903,7 @@ function baiduTaskStateLabel(state: string) {
         ><span class="statusbar-right"
           ><button class="statusbar-help" type="button" disabled title="帮助与反馈入口尚未接入">
             <CircleHelp :size="13" />帮助与反馈（暂未接入）
-          </button><i></i>{{ localWorkspace ? "本机模式" : "V2 草稿预览" }}</span
+          </button><i></i>{{ localWorkspace ? "本机模式" : "影序" }}</span
         >
       </footer>
     </section>
