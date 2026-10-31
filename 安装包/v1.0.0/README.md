@@ -5,7 +5,13 @@
 | 平台 | 文件 | 大小 | SHA-256 |
 |---|---|---|---|
 | Windows x64（NSIS 安装版） | `影序_1.0.0_x64-setup.exe` | 37,037,579 字节 | `3a10c2c801429a391b4386b65abc616a7497909488304dd7ea6d9fc812375762` |
-| Android arm64-v8a | `影序_1.0.0_android.apk` | 94,991,304 字节 | `3054d512178da54a374bae98de2943386a49df485e7842e8c7535e87e2b8e1f5` |
+| macOS arm64（dmg） | `影序_1.0.0_aarch64.dmg` | 55,535,312 字节 | `9788cb8f0f9be18eaefe8e382777b97b3b4a5e55c7ce4d7c5eb27dcedfa5293b` |
+| Android arm64-v8a（APK） | `影序_1.0.0_android.apk` | 94,991,304 字节 | `3054d512178da54a374bae98de2943386a49df485e7842e8c7535e87e2b8e1f5` |
+
+> macOS dmg 取自 tag `v1.0.0` 的 CI Release 产物。
+> Windows 包为本机构建件，与 CI Release 上的 `_1.0.0_x64-setup.exe`
+> （37,154,942 字节，sha256 `7ea7c8215d72cf934ebf83896899dddf10f40c617d31544a33a973f0aa880002`）**不是同一次构建**，
+> 两者版本号相同；如需与 tag 完全可复现的包，请用 Release 里的那份。
 
 ## 版本一致性
 
