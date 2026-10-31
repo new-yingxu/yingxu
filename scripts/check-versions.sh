@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 校验版本号是否四处一致。CI 的发布门禁会调用它。
+# 校验版本号是否所有端一致（桌面 Tauri/Cargo/前端 + 移动 Expo）。CI 的发布门禁会调用它。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,6 +25,9 @@ pairs = [
     ("backend/tauri-host/Cargo.toml", cargo_version("backend/tauri-host/Cargo.toml")),
     ("backend/core/Cargo.toml", cargo_version("backend/core/Cargo.toml")),
     ("desktop-ui/package.json", json.loads((root / "desktop-ui/package.json").read_text(encoding="utf-8"))["version"]),
+    ("desktop-ui-v1/package.json", json.loads((root / "desktop-ui-v1/package.json").read_text(encoding="utf-8"))["version"]),
+    ("source/package.json", json.loads((root / "source/package.json").read_text(encoding="utf-8"))["version"]),
+    ("source/app.json", json.loads((root / "source/app.json").read_text(encoding="utf-8"))["expo"]["version"]),
 ]
 
 for path, version in pairs:

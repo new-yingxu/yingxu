@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# 统一版本号：四处必须一致，改完请跑 scripts/check-versions.sh 复核。
+# 统一版本号：所有端必须一致，改完请跑 scripts/check-versions.sh 复核。
 #
 #   backend/tauri-host/tauri.conf.json   bundle 版本（打包实际使用）
 #   backend/tauri-host/Cargo.toml        宿主 crate（Tauri 要求与 conf 一致）
 #   backend/core/Cargo.toml              本地核心库（health 里回报的版本）
-#   desktop-ui/package.json              前端包
+#   desktop-ui/package.json              桌面前端（V2，当前使用）
+#   desktop-ui-v1/package.json           桌面前端（V1 留档）
+#   source/package.json                  移动端（Expo）包
+#   source/app.json                      移动端（Expo）应用版本
 #
-# 用法：scripts/bump-version.sh 0.2.0-draft.2
+# 用法：scripts/bump-version.sh 1.0.0
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -54,6 +57,19 @@ data = json.loads(pkg.read_text(encoding="utf-8"))
 data["version"] = version
 pkg.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print("  desktop-ui/package.json")
+
+for rel in ("desktop-ui-v1/package.json", "source/package.json"):
+    target = root / rel
+    data = json.loads(target.read_text(encoding="utf-8"))
+    data["version"] = version
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"  {rel}")
+
+app = root / "source/app.json"
+data = json.loads(app.read_text(encoding="utf-8"))
+data["expo"]["version"] = version
+app.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print("  source/app.json")
 PY
 
 echo
