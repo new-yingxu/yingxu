@@ -166,6 +166,8 @@ const operationBusy = ref(false);
 const analysis = ref<MediaAnalysis | null>(null);
 const analysisTitle = ref("");
 const thumbnails = reactive<Record<string, string>>({});
+// 自动生成缩略图时失败过的条目，避免反复重试拖慢列表
+const thumbnailFailed = new Set<string>();
 const taskReport = ref<Record<string, unknown> | null>(null);
 const healthyReplicas = ref<{ id: string; path: string; verified: boolean }[]>(
   [],
@@ -1060,14 +1062,37 @@ async function refreshHistory() {
 async function loadThumbnails(list: MediaFile[], epoch: number) {
   if (!api.local) return;
   const pending = list
-    .filter((file) => file.kind !== "other" && !thumbnails[file.id])
-    .slice(0, 24);
+    .filter(
+      (file) =>
+        file.kind !== "other" &&
+        !thumbnails[file.id] &&
+        !thumbnailFailed.has(file.id),
+    )
+    .slice(0, 60);
   for (let i = 0; i < pending.length; i += 4) {
     if (epoch !== thumbnailEpoch) return;
     await Promise.allSettled(
       pending.slice(i, i + 4).map(async (file) => {
-        const image = await api.local!.thumbnail(file.id);
-        if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
+        // 已有导数就直接取；没有就顺手生成本地缩略图（只解码一次），
+        // 这样列表打开即可显示图片，不用逐张点「分析/预览」。
+        try {
+          const image = await api.local!.thumbnail(file.id);
+          if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
+          return;
+        } catch {
+          if (file.kind !== "photo") {
+            thumbnailFailed.add(file.id);
+            return;
+          }
+        }
+        try {
+          await api.local!.analyze(file.id, file.kind);
+          const image = await api.local!.thumbnail(file.id);
+          if (epoch === thumbnailEpoch) thumbnails[file.id] = image;
+        } catch {
+          // 解码失败（RAW/损坏/无权限）就记下来，不再重试
+          thumbnailFailed.add(file.id);
+        }
       }),
     );
   }
@@ -1680,7 +1705,7 @@ function baiduTaskStateLabel(state: string) {
     </div>
     <section class="login-card">
       <div class="login-intro">
-        <span class="eyebrow">影序 · 桌面端 V2 草稿</span>
+        <span class="eyebrow">影序</span>
         <h1>欢迎回到影序</h1>
         <p>
           登录后同步备份进度、归档记录与设备状态。你的照片和视频原片不会上传到影序云端。
@@ -1850,8 +1875,7 @@ function baiduTaskStateLabel(state: string) {
           <span>影序</span><ChevronRight :size="13" /><b>{{ activeTitle }}</b>
         </div>
         <div class="top-actions">
-          <span v-if="!localWorkspace" class="draft-chip"><i></i> V2 草稿预览</span
-          ><span class="demo-chip"
+          <span class="demo-chip"
             ><i></i>{{ isMock ? "演示数据" : localWorkspace ? "本机模式 · 账号同步停用" : "本地真实数据" }}</span
           >
           <div class="search-action-wrap">
@@ -3023,18 +3047,16 @@ function baiduTaskStateLabel(state: string) {
                 <div ref="agentChatScrollRef" :class="['chat-scroll', { 'chat-scroll-empty': agentMessages.length === 0 }]">
                   <div class="agent-welcome">
                     <span class="agent-orb"><Sparkles :size="20" /></span
-                    ><b>你好，{{ displayName }}</b>
+                    ><b>你好</b>
                   </div>
                   <div
                     v-for="(message, index) in agentMessages"
                     :key="index"
                     :class="['message-row', message.role]"
                   >
-                    <b v-if="message.role === 'user'">{{ displayName }}</b
-                    ><span v-else class="agent-mini">✦</span>
+                    <span v-if="message.role !== 'user'" class="agent-mini">✦</span>
                     <div class="message-content">
                       <p>{{ message.text }}</p>
-                      <small v-if="message.reply?.historySync === 'not_synced'">未同步历史（已关闭 Agent 历史同步）</small>
                       <div
                         v-if="message.reply?.matches.length"
                         class="match-list"
@@ -3934,7 +3956,7 @@ function baiduTaskStateLabel(state: string) {
         ><span class="statusbar-right"
           ><button class="statusbar-help" type="button" disabled title="帮助与反馈入口尚未接入">
             <CircleHelp :size="13" />帮助与反馈（暂未接入）
-          </button><i></i>{{ localWorkspace ? "本机模式" : "V2 草稿预览" }}</span
+          </button><i></i>{{ localWorkspace ? "本机模式" : "影序" }}</span
         >
       </footer>
     </section>

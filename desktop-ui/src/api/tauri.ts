@@ -15,7 +15,7 @@ import type {
 } from "./contracts";
 import { ACTION_WINDOW_MS, createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
 import { confirmLocalFileAction, prepareLocalFileAction, selectLocalDirectory } from "./local-file-actions";
-import { createNativeCloudBaseAuth } from "./native-cloudbase-auth";
+import { createNativeAuthService } from "./native-auth-service";
 import { formatBytes, formatTime, mapJob, mapMedia } from "./format";
 import type { RawJob, RawMedia } from "./format";
 export class ApiError extends Error {
@@ -136,7 +136,7 @@ export function createTauriApi(options: Options = {}): AppApi {
   const pendingStarts = new Map<string, { plan: Plan; key: string }>();
   const writeKeys = new Map<string, string>();
   let counter = 0;
-  const cloudAuth = createNativeCloudBaseAuth();
+  const cloudAuth = createNativeAuthService();
   let lastIndex: IndexResult | null = null;
   const eventListen = options.listen || listen;
   const localAgent = createLocalAgentService({

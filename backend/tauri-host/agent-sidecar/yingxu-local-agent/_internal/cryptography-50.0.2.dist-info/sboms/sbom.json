@@ -2,9 +2,9 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "version": 1,
-  "serialNumber": "urn:uuid:c6073d07-748d-4073-86b8-34a732cbb0a6",
+  "serialNumber": "urn:uuid:fd5505e0-bfbb-4b63-a519-d916bdf43baf",
   "metadata": {
-    "timestamp": "2026-09-29T23:03:05Z"
+    "timestamp": "2026-09-29T23:08:25Z"
   },
   "components": [
     {
@@ -27,15 +27,15 @@
       "properties": [
         {
           "name": "build:operating-system",
-          "value": "macos"
+          "value": "windows"
         },
         {
           "name": "build:architecture",
-          "value": "arm64"
+          "value": "win64"
         },
         {
           "name": "build:flags",
-          "value": "no-zlib no-shared no-module no-comp no-apps no-docs no-sm2-precomp no-atexit enable-ec_nistp_64_gcc_128"
+          "value": "no-zlib no-shared no-module no-comp no-apps no-docs no-sm2-precomp no-atexit"
         }
       ]
     }
