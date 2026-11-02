@@ -25,7 +25,7 @@ import { mediaAccess } from "../services/media-access";
 import { AGENT_TOOL_DEFS, executeAgentTool } from "../services/agent-tools";
 import { loadAgentKey, runAgentTurn, saveAgentKey } from "../services/agent-client";
 import { loadApiKey as loadVisionKey } from "../services/ai-review";
-import { createCloudClient, hasSkippedLogin } from "../services/firebase-auth";
+import { createCloudClient, hasSkippedLogin } from "../services/cloudbase-auth";
 import { filterAndSortMedia, mediaTypeForName, MobileBackupEngine } from "../services/mobile-backup.cjs";
 import { DesktopDownloadEngine } from "../services/desktop-download.cjs";
 import { createMobileStore } from "../services/mobile-store.cjs";
@@ -151,7 +151,7 @@ export default function PocketHome() {
   const [visionKey, setVisionKey] = useState<string | null>(null);
   const [eventName, setEventName] = useState("");
   const [mobileBusy, setMobileBusy] = useState(false);
-  const [firebaseUser, setFirebaseUser] = useState("");
+  const [cloudUser, setCloudUser] = useState("");
   const [cloudMessage, setCloudMessage] = useState("");
   const [cloudHistory, setCloudHistory] = useState<Record<string, any>[]>([]);
   const [expandedCloudRecordId, setExpandedCloudRecordId] = useState("");
@@ -216,7 +216,7 @@ export default function PocketHome() {
           if (!skipped) router.replace("/login");
           return;
         }
-        setFirebaseUser(cloud.session?.displayName || cloud.session?.email || "已登录");
+        setCloudUser(cloud.session?.displayName || cloud.session?.email || "已登录");
         await refreshCloudHistory(cloud).catch(() => {});
         startCloudWatches(cloud);
         await flushCloudOutbox(cloud);
@@ -1116,16 +1116,16 @@ export default function PocketHome() {
           </>}
 
           {activeTab === "history" && <>
-          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>异地进度与历史</Text><Text style={styles.sectionMeta}>{firebaseUser || "未登录"}</Text></View>
+          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>异地进度与历史</Text><Text style={styles.sectionMeta}>{cloudUser || "未登录"}</Text></View>
           <View style={styles.card}>
-            {firebaseUser ? (
+            {cloudUser ? (
               <>
-                <Text style={styles.bodyText}>已登录为 {firebaseUser}。Firebase 账号只同步备份元数据：进度、历史、事件名。照片、视频、电脑路径和凭据不会进入云端。</Text>
+                <Text style={styles.bodyText}>已登录为 {cloudUser}。影序账号（CloudBase）只同步任务摘要：进度、状态与设备。照片、视频、原片路径和笔记不会进入云端。</Text>
                 <Pressable
                   onPress={async () => {
                     cloudWatchStopsRef.current.splice(0).forEach((stop) => stop());
                     await cloudClientRef.current?.signOut();
-                    setFirebaseUser("");
+                    setCloudUser("");
                     setCloudHistory([]);
                     setCloudMessage("已退出账号，本机备份不受影响。");
                   }}
@@ -1136,7 +1136,7 @@ export default function PocketHome() {
               </>
             ) : (
               <>
-                <Text style={styles.bodyText}>登录 Firebase 账号后，同一账号的设备之间可以同步备份进度与历史元数据。不登录也能正常使用手机本机备份。</Text>
+                <Text style={styles.bodyText}>登录影序账号（CloudBase）后，与桌面端共用同一账号，多台设备之间可以同步备份进度与历史摘要。不登录也能正常使用手机本机备份。</Text>
                 <Pressable
                   onPress={() => router.push("/login")}
                   style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}

@@ -5,6 +5,7 @@ use std::{fmt, io::Read, sync::Arc, time::Duration};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const AUTH_PATH: &str = "/auth/v1/signin";
+const TOKEN_PATH: &str = "/auth/v1/token";
 const SIGNOUT_PATH: &str = "/auth/v1/user/signout";
 const EMAIL_VERIFICATION_PATH: &str = "/auth/v1/verification";
 const VERIFY_EMAIL_PATH: &str = "/auth/v1/verification/verify";
@@ -70,6 +71,14 @@ impl AuthConfig {
         url.query_pairs_mut()
             .append_pair("client_id", &self.client_id);
         Ok(url)
+    }
+
+    /// Token grant endpoint. Per the CloudBase contract the client_id travels
+    /// in the JSON body for this endpoint, not in the query string.
+    fn token_url(&self) -> Result<Url, AuthError> {
+        self.origin
+            .join(TOKEN_PATH)
+            .map_err(|_| AuthError::InvalidConfiguration)
     }
 
     fn endpoint_url(&self, path: &str) -> Result<Url, AuthError> {
@@ -164,6 +173,13 @@ impl fmt::Debug for AuthTokens {
 struct PasswordGrant<'a> {
     username: &'a str,
     password: &'a str,
+}
+
+#[derive(Serialize)]
+struct RefreshGrant<'a> {
+    grant_type: &'static str,
+    refresh_token: &'a str,
+    client_id: &'a str,
 }
 
 #[derive(Serialize)]
@@ -289,6 +305,28 @@ impl CloudBaseAuthClient {
         };
         self.token_store.save(&tokens)?;
         Ok(identity)
+    }
+
+    /// Exchange the stored refresh token for a fresh access token (RFC 6749
+    /// §6). CloudBase rotates refresh tokens: the old one is invalid the
+    /// moment the new pair is persisted, so this must not run concurrently
+    /// with itself. Returns [`AuthError::Unauthenticated`] when no account
+    /// session is stored or the refresh token was rejected.
+    pub fn refresh_access_token(&self) -> Result<AuthIdentity, AuthError> {
+        let tokens = self.token_store.load()?.ok_or(AuthError::Unauthenticated)?;
+        if tokens.refresh_token.is_empty() {
+            return Err(AuthError::Unauthenticated);
+        }
+        let url = self.config.token_url()?;
+        let request = RefreshGrant {
+            grant_type: "refresh_token",
+            refresh_token: &tokens.refresh_token,
+            client_id: &self.config.client_id,
+        };
+        let body =
+            Zeroizing::new(serde_json::to_vec(&request).map_err(|_| AuthError::InvalidResponse)?);
+        let response = self.transport.post_json(&url, &body, None)?;
+        self.store_token_response(response)
     }
 
     pub fn request_email_code(

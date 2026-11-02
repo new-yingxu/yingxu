@@ -5,7 +5,7 @@ const KEYS = {
   preferences: "yingxuNativePreferencesV1",
   cloudOutbox: "yingxuNativeCloudOutboxV1",
 };
-const { publicMetadata } = require("./firebase-sync.cjs");
+const { publicMetadata } = require("./yingxu-cloud.cjs");
 
 function createMobileStore(storage) {
   if (!storage || typeof storage.getItem !== "function") throw new TypeError("storage is required");
