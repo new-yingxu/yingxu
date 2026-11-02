@@ -282,9 +282,6 @@ class PocketTcpBridge:
         notes_store,
         host: str = "0.0.0.0",
         port: int = 18080,
-        pause_provider: Callable[[], dict] | None = None,
-        cancel_provider: Callable[[], dict] | None = None,
-        start_provider: Callable[[], dict] | None = None,
         mobile_inbox: MobileInbox | None = None,
         desktop_media_source: DesktopMediaSource | None = None,
     ):
@@ -294,9 +291,6 @@ class PocketTcpBridge:
         self.notes_store = notes_store
         self.host = host
         self.port = int(port)
-        self.pause_provider = pause_provider
-        self.cancel_provider = cancel_provider
-        self.start_provider = start_provider
         self.mobile_inbox = mobile_inbox
         self.desktop_media_source = desktop_media_source
         self._server = None
@@ -459,7 +453,7 @@ class PocketTcpBridge:
             result = self._pair(peer, code)
             if connection_tokens is not None and result.get("ok"):
                 connection_tokens.add(result["token"])
-        elif command in {"status", "history", "notes.get", "notes.save", "disconnect", "desktop.start", "desktop.pause", "desktop.cancel", "file.begin", "file.chunk", "file.finish", "file.abort", "desktop.files.list", "desktop.file.begin", "desktop.file.chunk", "desktop.file.finish", "desktop.import.progress"}:
+        elif command in {"status", "history", "notes.get", "notes.save", "disconnect", "file.begin", "file.chunk", "file.finish", "file.abort", "desktop.files.list", "desktop.file.begin", "desktop.file.chunk", "desktop.file.finish", "desktop.import.progress"}:
             token = str(request.get("token", ""))
             if (
                 not self.pairing.is_authorized(token)
@@ -482,18 +476,6 @@ class PocketTcpBridge:
                     result = {"ok": False, "error": "拍摄信息格式错误"}
                 else:
                     result = {"ok": True, "notes": self.notes_store.save(data)}
-            elif command == "desktop.start":
-                result = self.start_provider() if self.start_provider else {"ok": False, "error": "桌面端不支持手机启动备份"}
-                if result.get("ok") is not False:
-                    result = {"ok": True, **(result or {})}
-            elif command == "desktop.pause":
-                result = self.pause_provider() if self.pause_provider else {"ok": False, "error": "桌面端不支持暂停控制"}
-                if result.get("ok") is not False:
-                    result = {"ok": True, **(result or {})}
-            elif command == "desktop.cancel":
-                result = self.cancel_provider() if self.cancel_provider else {"ok": False, "error": "桌面端不支持取消控制"}
-                if result.get("ok") is not False:
-                    result = {"ok": True, **(result or {})}
             elif command == "file.begin":
                 try:
                     if not self.mobile_inbox or session is None:

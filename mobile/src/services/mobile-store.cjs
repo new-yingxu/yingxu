@@ -28,6 +28,17 @@ function createMobileStore(storage) {
       await storage.setItem(KEYS.history, JSON.stringify(next));
       return next;
     },
+    async deleteHistory(ids) {
+      const drop = new Set((Array.isArray(ids) ? ids : [ids]).map((id) => String(id)));
+      const records = await this.getHistory();
+      const next = records.filter((item) => !drop.has(String(item.id)));
+      await storage.setItem(KEYS.history, JSON.stringify(next));
+      return next;
+    },
+    async clearHistory() {
+      await storage.setItem(KEYS.history, JSON.stringify([]));
+      return [];
+    },
     async getActiveTask() {
       return read(KEYS.task, null);
     },

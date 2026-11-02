@@ -1,5 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
+import { router } from "expo-router";
 import TcpSocket from "react-native-tcp-socket";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -19,21 +21,19 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { mediaAccess, secureStore } from "../services/media-access";
+import { mediaAccess } from "../services/media-access";
+import { AGENT_TOOL_DEFS, executeAgentTool } from "../services/agent-tools";
+import { loadAgentKey, runAgentTurn, saveAgentKey } from "../services/agent-client";
+import { loadApiKey as loadVisionKey } from "../services/ai-review";
+import { createCloudClient, hasSkippedLogin } from "../services/firebase-auth";
 import { filterAndSortMedia, mediaTypeForName, MobileBackupEngine } from "../services/mobile-backup.cjs";
 import { DesktopDownloadEngine } from "../services/desktop-download.cjs";
 import { createMobileStore } from "../services/mobile-store.cjs";
-import { FirebaseSyncClient } from "../services/firebase-sync.cjs";
 import { PocketTcpClient } from "../services/pocket-tcp-client.cjs";
 
 const PORT = 18080;
 const ADDRESS_KEY = "yingxuPocketAddress";
 const NOTES_KEY = "yingxuPocketLocalNotesV1";
-const DEVICE_KEY = "yingxuFirebaseDeviceIdV1";
-const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyA0NzN1SVbyNT2xi1HoDNn9hZQouknk-qA",
-  databaseUrl: "https://yingxu-73c7b-default-rtdb.asia-southeast1.firebasedatabase.app",
-};
 const STATUS_LABELS: Record<string, string> = {
   idle: "空闲",
   scanning: "正在扫描",
@@ -48,16 +48,37 @@ const STATUS_LABELS: Record<string, string> = {
   interrupted: "任务已保留，可继续",
   paused: "任务已暂停",
   cancelled: "任务已取消",
+  failed: "备份失败",
 };
 
 type Notes = { event: string; location: string; device: string; notes: string };
 const EMPTY_NOTES: Notes = { event: "", location: "", device: "", notes: "" };
+
+type AgentMessage = {
+  id: string;
+  role: "user" | "agent";
+  text: string;
+  source?: string;
+  toolNotes?: string[];
+};
+
+const INITIAL_AGENT_MESSAGES: AgentMessage[] = [
+  {
+    id: "agent-welcome",
+    role: "agent",
+    text: "我是影序 Pocket Agent。可以查手机备份进度和历史，也能查看已连接电脑的任务状态与历史；不会从手机控制电脑任务。",
+    source: "影序 Pocket Agent",
+  },
+];
+const TABS = [
+  { key: "home" as const, label: "主界面", icon: "home", iconOutline: "home-outline" },
+  { key: "history" as const, label: "历史", icon: "time", iconOutline: "time-outline" },
+  { key: "connect" as const, label: "连接桌面端", icon: "desktop", iconOutline: "desktop-outline" },
+  { key: "agent" as const, label: "Agent", icon: "sparkles", iconOutline: "sparkles-outline" },
+  { key: "settings" as const, label: "设置", icon: "settings", iconOutline: "settings-outline" },
+] as const;
 const mobileStore = createMobileStore(AsyncStorage);
 const DEFAULT_PREFERENCES = { sortByCaptureTime: true, includeDateFolder: true, includeVideos: true, preserveSourceStructure: false };
-
-function makeFirebaseClient(config: { apiKey: string; databaseUrl: string }, deviceId: string) {
-  return new FirebaseSyncClient({ ...config, secureStore, deviceId });
-}
 
 function isPrivateIPv4(address: string) {
   const parts = address.trim().split(".");
@@ -83,6 +104,7 @@ function formatBytes(value: number) {
 }
 
 export default function PocketHome() {
+  const [activeTab, setActiveTab] = useState<"home" | "history" | "connect" | "agent" | "settings">("home");
   const clientRef = useRef<PocketTcpClient | null>(null);
   const tokenRef = useRef("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -107,11 +129,20 @@ export default function PocketHome() {
   const [computerTarget, setComputerTarget] = useState<{ uri: string; name: string } | null>(null);
   const [computerImportTask, setComputerImportTask] = useState<Record<string, any> | null>(null);
   const [localHistory, setLocalHistory] = useState<Record<string, any>[]>([]);
+  const [historyEditMode, setHistoryEditMode] = useState(false);
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<string[]>([]);
+  const [confirmHistoryDelete, setConfirmHistoryDelete] = useState(false);
+  const [confirmHistoryClear, setConfirmHistoryClear] = useState(false);
+  const [agentMessages, setAgentMessages] = useState<AgentMessage[]>(INITIAL_AGENT_MESSAGES);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentKey, setAgentKey] = useState<string | null>(null);
+  const [agentPhoto, setAgentPhoto] = useState<{ uri: string; name: string; size?: number } | null>(null);
+  const [agentConfigOpen, setAgentConfigOpen] = useState(false);
+  const [agentKeyInput, setAgentKeyInput] = useState("");
+  const [visionKey, setVisionKey] = useState<string | null>(null);
   const [eventName, setEventName] = useState("");
   const [mobileBusy, setMobileBusy] = useState(false);
-  const [firebaseEmail, setFirebaseEmail] = useState("");
-  const [firebaseDisplayName, setFirebaseDisplayName] = useState("");
-  const [firebasePassword, setFirebasePassword] = useState("");
   const [firebaseUser, setFirebaseUser] = useState("");
   const [cloudMessage, setCloudMessage] = useState("");
   const [cloudHistory, setCloudHistory] = useState<Record<string, any>[]>([]);
@@ -126,6 +157,11 @@ export default function PocketHome() {
   const cloudClientRef = useRef<any>(null);
   const lastCloudProgressAtRef = useRef(0);
   const cloudWatchStopsRef = useRef<(() => void)[]>([]);
+
+  useEffect(() => {
+    loadAgentKey().then((value) => setAgentKey(value)).catch(() => setAgentKey(null));
+    loadVisionKey().then((value) => setVisionKey(value)).catch(() => setVisionKey(null));
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -164,10 +200,14 @@ export default function PocketHome() {
       }).catch(() => {});
       if (Array.isArray(savedFolders.targets)) setExtraTargetFolders(savedFolders.targets as { uri: string; name: string }[]);
       setPreferences(savedPreferences as typeof DEFAULT_PREFERENCES);
-      const cloud = makeFirebaseClient(FIREBASE_CONFIG, await getDeviceId());
+      const cloud = await createCloudClient();
       cloudClientRef.current = cloud;
       cloud.restoreSession().then(async (restored: boolean) => {
-        if (!restored) return;
+        if (!restored) {
+          const skipped = await hasSkippedLogin().catch(() => true);
+          if (!skipped) router.replace("/login");
+          return;
+        }
         setFirebaseUser(cloud.session?.displayName || cloud.session?.email || "已登录");
         await refreshCloudHistory(cloud).catch(() => {});
         startCloudWatches(cloud);
@@ -202,15 +242,6 @@ export default function PocketHome() {
     const [historyData, liveData] = await Promise.all([client.get("history"), client.get("live")]);
     const histories = (Object.values(historyData || {}) as Record<string, any>[]).sort((left, right) => String(right.startedAt || "").localeCompare(String(left.startedAt || "")));
     setCloudHistory([...(Object.values(liveData || {}) as Record<string, any>[]), ...histories].slice(0, 100));
-  }
-
-  async function getDeviceId() {
-    let deviceId = await AsyncStorage.getItem(DEVICE_KEY);
-    if (!deviceId) {
-      deviceId = `pocket-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-      await AsyncStorage.setItem(DEVICE_KEY, deviceId);
-    }
-    return deviceId;
   }
 
   function startCloudWatches(client: any) {
@@ -602,24 +633,130 @@ export default function PocketHome() {
     await Share.share({ title: "影序备份报告", message: lines.join("\n") });
   }
 
-  async function signInFirebase(createAccount = false) {
-    setCloudMessage("");
+  function toggleHistorySelection(id: string) {
+    setSelectedHistoryIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  }
+
+  function beginHistorySelection(id: string) {
+    setHistoryEditMode(true);
+    setSelectedHistoryIds((current) => (current.includes(id) ? current : [...current, id]));
+  }
+
+  function exitHistorySelection() {
+    setHistoryEditMode(false);
+    setSelectedHistoryIds([]);
+    setConfirmHistoryDelete(false);
+  }
+
+  async function deleteSelectedHistory() {
+    if (selectedHistoryIds.length === 0) return;
+    if (!confirmHistoryDelete) {
+      setConfirmHistoryDelete(true);
+      return;
+    }
+    const next = await mobileStore.deleteHistory(selectedHistoryIds);
+    setLocalHistory(next as Record<string, any>[]);
+    setConfirmHistoryDelete(false);
+    exitHistorySelection();
+  }
+
+  async function clearAllHistory() {
+    if (!confirmHistoryClear) {
+      setConfirmHistoryClear(true);
+      return;
+    }
+    const next = await mobileStore.clearHistory();
+    setLocalHistory(next as Record<string, any>[]);
+    setConfirmHistoryClear(false);
+    exitHistorySelection();
+  }
+
+  async function sendAgentMessage(textOverride?: string) {
+    const text = (textOverride ?? agentInput).trim();
+    if (!text || agentBusy) return;
+
+    const key = agentKey;
+    if (!key) {
+      setAgentMessages((current) => [...current, {
+        id: `agent-${Date.now()}`,
+        role: "agent",
+        text: "还没有配置对话模型的 API Key。点上面的「配置 Key」，填一个 DeepSeek 的 key（platform.deepseek.com 申请）。",
+        source: "配置提示",
+      }]);
+      return;
+    }
+
+    setAgentMessages((current) => [...current, { id: `user-${Date.now()}`, role: "user", text }]);
+    setAgentInput("");
+    setAgentBusy(true);
     try {
-      if (createAccount && !firebaseDisplayName.trim()) {
-        setCloudMessage("注册时请填写用户名。");
+      const conversationHistory = agentMessages
+        .filter((message) => message.role === "user" || message.role === "agent")
+        .map((message) => ({ role: message.role === "user" ? ("user" as const) : ("assistant" as const), text: message.text }));
+
+      const result = await runAgentTurn({
+        history: conversationHistory,
+        userText: text,
+        apiKey: key,
+        tools: AGENT_TOOL_DEFS,
+        executeTool: async (name, argsJson) => executeAgentTool(name, argsJson, {
+          selectedPhoto: agentPhoto,
+          visionApiKey: visionKey,
+          mobileTask: await mobileStore.getActiveTask(),
+          mobileHistory: await mobileStore.getHistory(),
+          desktopConnected: connected,
+          desktopTask: status,
+          desktopHistory: history,
+        }),
+      });
+
+      const source = result.toolNotes.length > 0
+        ? `工具：${Array.from(new Set(result.toolNotes.map((note) => note.name))).join("、")}`
+        : "DeepSeek · deepseek-chat";
+
+      setAgentMessages((current) => [...current, {
+        id: `agent-${Date.now()}`,
+        role: "agent",
+        text: result.reply,
+        source,
+        toolNotes: result.toolNotes.map((note) => `${note.name}：${note.result}`),
+      }]);
+    } catch (cause) {
+      setAgentMessages((current) => [...current, {
+        id: `agent-err-${Date.now()}`,
+        role: "agent",
+        text: `出错了：${cause instanceof Error ? cause.message : String(cause)}`,
+        source: "请求失败",
+      }]);
+    } finally {
+      setAgentBusy(false);
+    }
+  }
+
+  async function saveAgentConfig() {
+    const value = agentKeyInput.trim();
+    if (!value) return;
+    await saveAgentKey(value);
+    setAgentKey(value);
+    setAgentKeyInput("");
+    setAgentConfigOpen(false);
+  }
+
+  async function pickAgentPhoto() {
+    try {
+      const folder = await mediaAccess.pickDirectoryAsync();
+      if (!folder) return;
+      const files = await mediaAccess.scanMediaAsync(folder.uri);
+      const photo = files.find((file) => file.mediaType === "photo" && /\.(jpe?g|png|webp)$/i.test(file.name));
+      if (!photo) {
+        Alert.alert("没有可审的照片", "这个目录里没有找到 JPEG/PNG 照片（RAW 暂不支持）。");
         return;
       }
-      const client = makeFirebaseClient(FIREBASE_CONFIG, await getDeviceId());
-      cloudClientRef.current = client;
-      const account = await client.signIn(firebaseEmail, firebasePassword, createAccount, firebaseDisplayName.trim());
-      setFirebaseUser(account.displayName || account.email);
-      setFirebasePassword("");
-      await refreshCloudHistory(client);
-      startCloudWatches(client);
-      await flushCloudOutbox(client);
-      setCloudMessage("已登录；同一账号的设备可同步备份进度与历史元数据。");
+      setAgentPhoto({ uri: photo.uri, name: photo.name, size: photo.size });
     } catch (cause) {
-      setCloudMessage(cause instanceof Error ? cause.message : "登录失败。");
+      Alert.alert("选择失败", cause instanceof Error ? cause.message : String(cause));
     }
   }
 
@@ -727,18 +864,6 @@ export default function PocketHome() {
     }
   }
 
-  async function controlDesktopTask(command: "desktop.start" | "desktop.pause" | "desktop.cancel") {
-    const client = clientRef.current;
-    const token = tokenRef.current;
-    if (!client || !token) return setError("请先连接桌面端。");
-    try {
-      await client.request(command, { token });
-      await refreshAll(client, token);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "桌面任务操作失败。");
-    }
-  }
-
   const progress = status?.progress || {};
   const percent = Math.max(0, Math.min(100, Number(progress.phase_progress || 0)));
 
@@ -748,8 +873,8 @@ export default function PocketHome() {
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.header}>
+        <ScrollView style={styles.flex} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {activeTab === "home" && <View style={styles.header}>
             <View>
               <Text style={styles.eyebrow}>影序 · 桌面协作</Text>
               <Text style={styles.title}>Pocket</Text>
@@ -758,8 +883,9 @@ export default function PocketHome() {
               <View style={[styles.connectionDot, connected && styles.connectionDotOn]} />
               <Text style={styles.connectionPillText}>{connected ? "已连接" : "未连接"}</Text>
             </View>
-          </View>
+          </View>}
 
+          {activeTab === "home" && <>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>手机本机备份</Text>
             <Text style={styles.sectionMeta}>电脑离线仍可使用</Text>
@@ -767,8 +893,18 @@ export default function PocketHome() {
           <View style={styles.card}>
             <Text style={styles.bodyText}>从 SD 卡、手机文件夹或旧归档中选择素材；目标可选手机存储或已授权的外接盘。所有流程只复制并校验，不会删除来源文件。</Text>
             <View style={styles.actionRow}>
-              <Pressable onPress={() => setMobileSourceKind("camera")} style={sourceKind === "camera" ? styles.primaryButton : styles.secondaryButton}><Text style={sourceKind === "camera" ? styles.primaryButtonText : styles.secondaryButtonText}>备份新素材</Text></Pressable>
-              <Pressable onPress={() => setMobileSourceKind("archive")} style={sourceKind === "archive" ? styles.primaryButton : styles.secondaryButton}><Text style={sourceKind === "archive" ? styles.primaryButtonText : styles.secondaryButtonText}>导入旧归档</Text></Pressable>
+              <Pressable
+                onPress={() => setMobileSourceKind("camera")}
+                style={[styles.segmentButton, sourceKind === "camera" && styles.segmentButtonActive]}
+              >
+                <Text style={[styles.segmentButtonText, sourceKind === "camera" && styles.segmentButtonTextActive]}>备份新素材</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setMobileSourceKind("archive")}
+                style={[styles.segmentButton, sourceKind === "archive" && styles.segmentButtonActive]}
+              >
+                <Text style={[styles.segmentButtonText, sourceKind === "archive" && styles.segmentButtonTextActive]}>导入旧归档</Text>
+              </Pressable>
             </View>
             <FolderButton label={sourceKind === "archive" ? "选择旧归档来源" : "选择素材来源"} value={sourceFolder?.name || (sourceKind === "archive" ? "选择旧照片/视频归档文件夹" : "选择 SD 卡或文件夹")} onPress={() => pickFolder("source")} />
             <FolderButton label="选择备份目标" value={targetFolder?.name || "选择手机或外接盘"} onPress={() => pickFolder("target")} />
@@ -802,21 +938,58 @@ export default function PocketHome() {
             {!!error && <Text style={styles.errorText}>{error}</Text>}
             <Text style={styles.smallHint}>iOS/Android 的后台策略由系统控制；离开 App 或系统暂停后任务会保留为可恢复状态。请返回 App 后继续。外接存储授权被撤销时需重新选择。</Text>
           </View>
+          </>}
 
+          {activeTab === "history" && <>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>本机历史</Text>
-            <Text style={styles.sectionMeta}>{localHistory.length} 条</Text>
+            <View style={styles.sectionActions}>
+              <Text style={styles.sectionMeta}>{localHistory.length} 条</Text>
+              {historyEditMode ? (
+                <>
+                  <Pressable onPress={exitHistorySelection} accessibilityRole="button">
+                    <Text style={styles.headerAction}>取消</Text>
+                  </Pressable>
+                  <Pressable onPress={deleteSelectedHistory} accessibilityRole="button">
+                    <Text style={styles.headerActionDanger}>{confirmHistoryDelete ? "确认删除" : `删除(${selectedHistoryIds.length})`}</Text>
+                  </Pressable>
+                </>
+              ) : (
+                localHistory.length > 0 && (
+                  <Pressable onPress={clearAllHistory} accessibilityRole="button">
+                    <Text style={styles.headerActionDanger}>{confirmHistoryClear ? "确认清空" : "清空"}</Text>
+                  </Pressable>
+                )
+              )}
+            </View>
           </View>
           <View style={styles.card}>
-            {localHistory.length === 0 ? <Text style={styles.bodyText}>完成本机备份后，记录会保存在手机上。</Text> : localHistory.slice(0, 8).map((item, index) => (
-              <View key={String(item.id || index)} style={[styles.historyRow, index > 0 && styles.rowDivider]}>
-                <View style={styles.historyMain}><Text style={styles.historyTitle} numberOfLines={1}>{item.eventName || item.sourceName || "手机备份"}</Text><Text style={styles.historyMeta}>{item.destinationName || "本机"} · {item.startedAt || "时间未知"}</Text></View>
-                <Text style={styles.historyCount}>{formatCount(item.processedFiles)} / {formatCount(item.totalFiles)}</Text>
-                <Pressable onPress={() => exportMobileReport(item)} style={styles.reportButton}><Text style={styles.reportButtonText}>导出</Text></Pressable>
-              </View>
-            ))}
+            {localHistory.length === 0 ? <Text style={styles.bodyText}>完成本机备份后，记录会保存在手机上。</Text> : localHistory.slice(0, 8).map((item, index) => {
+              const recordId = String(item.id || index);
+              const selected = selectedHistoryIds.includes(recordId);
+              return (
+                <Pressable
+                  key={recordId}
+                  onLongPress={() => beginHistorySelection(recordId)}
+                  delayLongPress={350}
+                  onPress={() => {
+                    if (historyEditMode) toggleHistorySelection(recordId);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.eventName || item.sourceName || "手机备份"} 历史记录`}
+                  style={[styles.historyRow, index > 0 && styles.rowDivider]}
+                >
+                  {historyEditMode && <Text style={[styles.historyCheck, selected && styles.historyCheckOn]}>{selected ? "✓" : "○"}</Text>}
+                  <View style={styles.historyMain}><Text style={styles.historyTitle} numberOfLines={1}>{item.eventName || item.sourceName || "手机备份"}</Text><Text style={styles.historyMeta}>{item.destinationName || "本机"} · {item.startedAt || "时间未知"}</Text></View>
+                  <Text style={styles.historyCount}>{formatCount(item.processedFiles)} / {formatCount(item.totalFiles)}</Text>
+                  {!historyEditMode && <Pressable onPress={() => exportMobileReport(item)} style={styles.reportButton}><Text style={styles.reportButtonText}>导出</Text></Pressable>}
+                </Pressable>
+              );
+            })}
           </View>
+          </>}
 
+          {activeTab === "settings" && <>
           <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>备份偏好</Text><Text style={styles.sectionMeta}>仅保存在本机</Text></View>
           <View style={styles.card}>
             <View style={styles.preferenceRow}><Text style={styles.preferenceLabel}>优先按 EXIF 拍摄时间排序</Text><Switch value={preferences.sortByCaptureTime} onValueChange={(value) => updatePreference("sortByCaptureTime", value)} /></View>
@@ -830,7 +1003,7 @@ export default function PocketHome() {
           <View style={styles.card}>
             <Text style={styles.bodyText}>检查 Android 原生 App 正式发行版。iPhone 使用 Safari PWA，请刷新页面获取最新内容。</Text>
             <View style={styles.actionRow}>
-              <Pressable onPress={checkForUpdates} disabled={checkingUpdate} style={[styles.primaryButton, checkingUpdate && styles.disabled]}>
+              <Pressable onPress={checkForUpdates} disabled={checkingUpdate} style={[styles.primaryButton, styles.rowButton, checkingUpdate && styles.disabled]}>
                 <Text style={styles.primaryButtonText}>{checkingUpdate ? "正在检查…" : "检查更新"}</Text>
               </Pressable>
               {!!updateUrl && <Pressable onPress={() => Linking.openURL(updateUrl).catch(() => setUpdateMessage("无法打开更新页面，请检查设备网络。"))} style={styles.secondaryButton}>
@@ -839,18 +1012,100 @@ export default function PocketHome() {
             </View>
             {!!updateMessage && <Text style={styles.smallHint}>{updateMessage}</Text>}
           </View>
+          </>}
 
+          {activeTab === "agent" && <>
+          <View style={styles.agentHeader}>
+            <View>
+              <Text style={styles.eyebrow}>影序 · 助手</Text>
+              <Text style={styles.title}>Agent</Text>
+            </View>
+            <View style={styles.agentPrototypeBadge}><Text style={styles.agentPrototypeText}>{agentKey ? "DeepSeek" : "未配置模型"}</Text></View>
+          </View>
+          <View style={styles.agentNotice}>
+            <Text style={styles.agentNoticeText}>
+              对话发送至已配置的 DeepSeek 模型；备份状态、历史和审片由手机白名单工具读取。审片会将选中的照片发送给视觉模型。
+            </Text>
+          </View>
+          <Pressable onPress={() => router.push("/review")} style={styles.agentReviewEntry}>
+            <View style={styles.agentReviewMain}>
+              <Text style={styles.agentReviewTitle}>AI 审片</Text>
+              <Text style={styles.agentReviewDesc}>从素材目录里逐张看照片，给「可留用 / 需注意 / 建议重拍」的判断与原因</Text>
+            </View>
+            <Text style={styles.agentReviewArrow}>›</Text>
+          </Pressable>
+          <View style={styles.agentConfigRow}>
+            <Pressable onPress={() => setAgentConfigOpen((value) => !value)} style={styles.agentConfigButton}>
+              <Text style={styles.agentConfigButtonText}>{agentKey ? "已配置 Key" : "配置 Key"}</Text>
+            </Pressable>
+            <Pressable onPress={pickAgentPhoto} style={styles.agentConfigButton}>
+              <Text style={styles.agentConfigButtonText} numberOfLines={1}>{agentPhoto ? agentPhoto.name : "选择审片素材"}</Text>
+            </Pressable>
+          </View>
+          {agentConfigOpen && (
+            <View style={styles.agentConfigPanel}>
+              <TextInput
+                value={agentKeyInput}
+                onChangeText={setAgentKeyInput}
+                placeholder="sk-...（DeepSeek Key）"
+                placeholderTextColor="#99958E"
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+                style={styles.agentKeyInput}
+              />
+              <View style={styles.agentToolActions}>
+                <Pressable onPress={saveAgentConfig} style={styles.agentToolConfirm}><Text style={styles.agentToolConfirmText}>保存</Text></Pressable>
+                <Pressable onPress={() => setAgentConfigOpen(false)} style={styles.agentToolCancel}><Text style={styles.agentToolCancelText}>取消</Text></Pressable>
+              </View>
+            </View>
+          )}
+          {agentMessages.map((message) => (
+            <View key={message.id} style={[styles.agentRow, message.role === "user" && styles.agentRowUser]}>
+              <View style={[styles.agentBubble, message.role === "user" ? styles.agentBubbleUser : styles.agentBubbleAgent]}>
+                <Text style={[styles.agentText, message.role === "user" && styles.agentTextUser]}>{message.text}</Text>
+                {!!message.source && (
+                  <Text style={[styles.agentSource, message.role === "user" && styles.agentSourceUser]}>{message.source}</Text>
+                )}
+                {message.toolNotes?.map((note, index) => (
+                  <Text key={`${message.id}-tool-${index}`} style={styles.agentSource}>{note}</Text>
+                ))}
+              </View>
+            </View>
+          ))}
+          {agentBusy && <Text style={styles.agentThinking}>Agent 正在输入…</Text>}
+          </>}
+
+          {activeTab === "history" && <>
           <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>异地进度与历史</Text><Text style={styles.sectionMeta}>{firebaseUser || "未登录"}</Text></View>
           <View style={styles.card}>
-            <Text style={styles.bodyText}>Firebase 账号仅同步备份元数据；照片、视频、电脑路径和凭据不会进入云端。Firebase Spark 免费额度不是服务稳定性承诺。</Text>
-            <TextInput autoCapitalize="none" keyboardType="email-address" value={firebaseEmail} onChangeText={setFirebaseEmail} placeholder="邮箱" placeholderTextColor="#99958E" style={[styles.input, styles.cloudInput]} />
-            <TextInput value={firebaseDisplayName} onChangeText={setFirebaseDisplayName} maxLength={40} placeholder="用户名（注册必填；已有账号可修改）" placeholderTextColor="#99958E" style={[styles.input, styles.cloudInput]} />
-            <TextInput secureTextEntry value={firebasePassword} onChangeText={setFirebasePassword} placeholder="密码（只用于登录，不保存）" placeholderTextColor="#99958E" style={[styles.input, styles.cloudInput]} />
-            <View style={styles.actionRow}>
-              <Pressable onPress={() => signInFirebase(false)} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>登录</Text></Pressable>
-              <Pressable onPress={() => signInFirebase(true)} style={[styles.primaryButton, styles.rowButton]}><Text style={styles.primaryButtonText}>注册账号</Text></Pressable>
-            </View>
-            {firebaseUser ? <Pressable onPress={async () => { cloudWatchStopsRef.current.splice(0).forEach((stop) => stop()); await cloudClientRef.current?.signOut(); setFirebaseUser(""); setFirebaseDisplayName(""); setCloudHistory([]); }}><Text style={styles.smallHint}>退出账号</Text></Pressable> : null}
+            {firebaseUser ? (
+              <>
+                <Text style={styles.bodyText}>已登录为 {firebaseUser}。Firebase 账号只同步备份元数据：进度、历史、事件名。照片、视频、电脑路径和凭据不会进入云端。</Text>
+                <Pressable
+                  onPress={async () => {
+                    cloudWatchStopsRef.current.splice(0).forEach((stop) => stop());
+                    await cloudClientRef.current?.signOut();
+                    setFirebaseUser("");
+                    setCloudHistory([]);
+                    setCloudMessage("已退出账号，本机备份不受影响。");
+                  }}
+                  style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.secondaryButtonText}>退出账号</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Text style={styles.bodyText}>登录 Firebase 账号后，同一账号的设备之间可以同步备份进度与历史元数据。不登录也能正常使用手机本机备份。</Text>
+                <Pressable
+                  onPress={() => router.push("/login")}
+                  style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.primaryButtonText}>登录 / 注册账号</Text>
+                </Pressable>
+              </>
+            )}
             {!!cloudMessage && <Text style={styles.smallHint}>{cloudMessage}</Text>}
             {cloudHistory.slice(0, 100).map((item: any, index) => {
               const recordId = String(item.id || `${item.deviceId || "cloud"}-${index}`);
@@ -871,11 +1126,12 @@ export default function PocketHome() {
               </View>;
             })}
           </View>
+          </>}
 
-          {!connected ? (
+          {activeTab === "connect" && (!connected ? (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>连接影序桌面端</Text>
-              <Text style={styles.bodyText}>手机和电脑需在同一局域网。配对后可查看电脑进度与历史、同步拍摄备注，并在两端之间校验传输照片和视频。</Text>
+              <Text style={styles.bodyText}>手机和电脑需在同一局域网。配对后可只读查看电脑进度与历史、同步拍摄备注，并在两端之间校验传输照片和视频。电脑备份任务仍需在桌面端管理。</Text>
               <Text style={styles.fieldLabel}>电脑局域网 IPv4 地址</Text>
               <TextInput
                 autoCapitalize="none"
@@ -933,9 +1189,6 @@ export default function PocketHome() {
                   <Stat label="异常" value={formatCount(progress.failed_files)} />
                 </View>
                 <View style={styles.actionRow}>
-                  {status?.status === "idle" || status?.status === "done" || status?.status === "error" ? <Pressable onPress={() => Alert.alert("开始电脑备份？", "将使用电脑已配置的来源和目标位置开始备份。", [{ text: "取消", style: "cancel" }, { text: "开始备份", onPress: () => controlDesktopTask("desktop.start") }])} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>开始电脑备份</Text></Pressable> : null}
-                  {(["copying", "verifying", "paused"].includes(String(status?.status))) ? <Pressable onPress={() => controlDesktopTask("desktop.pause")} style={styles.secondaryButton}><Text style={styles.secondaryButtonText}>{status?.status === "paused" ? "继续电脑备份" : "暂停电脑备份"}</Text></Pressable> : null}
-                  {(["copying", "verifying", "paused"].includes(String(status?.status))) ? <Pressable onPress={() => Alert.alert("取消电脑备份？", "当前文件会完成或安全中止，已复制内容会保留。", [{ text: "继续备份", style: "cancel" }, { text: "取消任务", style: "destructive", onPress: () => controlDesktopTask("desktop.cancel") }])} style={styles.cancelButton}><Text style={styles.cancelButtonText}>取消</Text></Pressable> : null}
                 </View>
               </View>
 
@@ -1009,9 +1262,9 @@ export default function PocketHome() {
                 </Pressable>
               </View>
             </>
-          )}
+          ))}
 
-          {!connected && <View style={styles.card}>
+          {activeTab === "home" && !connected && <View style={styles.card}>
             <Text style={styles.cardTitle}>本机拍摄信息</Text>
             <Text style={styles.bodyText}>电脑离线时仍可填写并保存在手机；连接电脑后可再同步到桌面端。</Text>
             <NoteField label="事件" value={notes.event} onChange={(value) => setNotes({ ...notes, event: value })} />
@@ -1022,8 +1275,67 @@ export default function PocketHome() {
             <Pressable onPress={saveNotes} style={styles.primaryButton}><Text style={styles.primaryButtonText}>保存到手机</Text></Pressable>
           </View>}
 
-          <Text style={styles.footer}>影序 Pocket · 局域网连接 · 不上传原始素材</Text>
+          {activeTab === "home" && <Text style={styles.footer}>影序 Pocket · 局域网连接 · 不上传原始素材</Text>}
         </ScrollView>
+
+        {activeTab === "agent" && (
+          <View>
+            <View style={styles.agentQuickRow}>
+              {["最近的备份记录", "清理历史记录", "桌面连接状态"].map((question) => (
+                <Pressable
+                  key={question}
+                  onPress={() => sendAgentMessage(question)}
+                  style={({ pressed }) => [styles.agentQuickChip, pressed && styles.pressed]}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.agentQuickText}>{question}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.agentComposer}>
+              <TextInput
+                value={agentInput}
+                onChangeText={setAgentInput}
+                placeholder="问点什么，或让它整理备份记录"
+                placeholderTextColor="#99958E"
+                style={styles.agentInput}
+                onSubmitEditing={() => sendAgentMessage()}
+                returnKeyType="send"
+                accessibilityLabel="给 Agent 发消息"
+              />
+              <Pressable
+                onPress={() => sendAgentMessage()}
+                disabled={!agentInput.trim() || agentBusy}
+                style={[styles.agentSend, (!agentInput.trim() || agentBusy) && styles.disabled]}
+              >
+                <Text style={styles.agentSendText}>发送</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
+        <View style={styles.tabBar}>
+          {TABS.map((tab) => {
+            const selected = activeTab === tab.key;
+            return (
+              <Pressable
+                key={tab.key}
+                onPress={() => setActiveTab(tab.key)}
+                style={styles.tabItem}
+                accessibilityRole="tab"
+                accessibilityState={{ selected }}
+                accessibilityLabel={tab.label}
+              >
+                <Ionicons
+                  name={(selected ? tab.icon : tab.iconOutline) as any}
+                  size={23}
+                  color={selected ? "#27804A" : "#86837B"}
+                />
+                <Text style={[styles.tabLabel, selected && styles.tabLabelActive]}>{tab.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -1060,6 +1372,53 @@ function FolderButton({ label, value, onPress }: { label: string; value: string;
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   safeArea: { flex: 1, backgroundColor: "#F4F2ED" },
+  tabBar: { flexDirection: "row", backgroundColor: "#FFFFFF", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#DCD9D2", paddingTop: 8, paddingBottom: 8 },
+  tabItem: { flex: 1, alignItems: "center", justifyContent: "center", gap: 3 },
+  tabLabel: { fontSize: 11, color: "#86837B" },
+  tabLabelActive: { color: "#27804A", fontWeight: "600" },
+  tabHeader: { minHeight: 84, justifyContent: "center" },
+  tabHeaderTitle: { color: "#1E2420", fontSize: 30, fontWeight: "700", letterSpacing: -0.7 },
+  agentHeader: { minHeight: 84, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  agentPrototypeBadge: { backgroundColor: "#EDE7D8", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
+  agentPrototypeText: { color: "#7A6A45", fontSize: 11, fontWeight: "700" },
+  agentNotice: { backgroundColor: "#F3F0E8", borderRadius: 12, padding: 12, marginBottom: 16 },
+  agentReviewEntry: { flexDirection: "row", alignItems: "center", backgroundColor: "#FFFFFF", borderRadius: 16, padding: 16, marginBottom: 14, borderWidth: 1, borderColor: "#E9E6E0" },
+  agentReviewMain: { flex: 1, paddingRight: 10 },
+  agentReviewTitle: { color: "#1E2420", fontSize: 15, fontWeight: "600", marginBottom: 4 },
+  agentReviewDesc: { color: "#7A756C", fontSize: 12, lineHeight: 18 },
+  agentReviewArrow: { color: "#273D31", fontSize: 22, fontWeight: "700" },
+  agentConfigRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
+  agentConfigButton: { flex: 1, backgroundColor: "#EFEBE2", borderRadius: 10, paddingVertical: 10, paddingHorizontal: 12, alignItems: "center" },
+  agentConfigButtonText: { color: "#3A4A3F", fontSize: 12, fontWeight: "600" },
+  agentConfigPanel: { backgroundColor: "#FFFFFF", borderRadius: 12, borderWidth: 1, borderColor: "#E9E6E0", padding: 12, marginBottom: 14, gap: 10 },
+  agentKeyInput: { borderWidth: 1, borderColor: "#E2DFD8", borderRadius: 10, backgroundColor: "#FEFDFC", paddingHorizontal: 12, color: "#242823", fontSize: 14, minHeight: 44 },
+  agentNoticeText: { color: "#7A7469", fontSize: 11, lineHeight: 17 },
+  agentRow: { flexDirection: "row", marginBottom: 12 },
+  agentRowUser: { justifyContent: "flex-end" },
+  agentBubble: { maxWidth: "86%", borderRadius: 16, paddingHorizontal: 14, paddingVertical: 11 },
+  agentBubbleAgent: { backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E9E6E0" },
+  agentBubbleUser: { backgroundColor: "#273D31" },
+  agentText: { color: "#343932", fontSize: 14, lineHeight: 21 },
+  agentTextUser: { color: "#FFFFFF" },
+  agentSource: { color: "#8A877F", fontSize: 10, marginTop: 7 },
+  agentSourceUser: { color: "#B7C2B8" },
+  agentToolCard: { marginTop: 10, backgroundColor: "#F6F4EE", borderRadius: 10, padding: 10, borderWidth: 1, borderColor: "#E6E0D2" },
+  agentToolName: { color: "#273D31", fontSize: 12, fontWeight: "700" },
+  agentToolArgs: { color: "#7A7469", fontSize: 11, marginTop: 4 },
+  agentToolActions: { flexDirection: "row", gap: 8, marginTop: 10 },
+  agentToolConfirm: { flex: 1, backgroundColor: "#273D31", borderRadius: 8, alignItems: "center", paddingVertical: 8 },
+  agentToolConfirmText: { color: "#FFFFFF", fontSize: 12, fontWeight: "700" },
+  agentToolCancel: { flex: 1, borderWidth: 1, borderColor: "#C9C2B4", borderRadius: 8, alignItems: "center", paddingVertical: 8 },
+  agentToolCancelText: { color: "#7A7469", fontSize: 12, fontWeight: "600" },
+  agentToolResult: { color: "#27804A", fontSize: 11, marginTop: 8 },
+  agentThinking: { color: "#8A877F", fontSize: 12, marginTop: 4 },
+  agentComposer: { flexDirection: "row", gap: 10, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: "#FFFFFF", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: "#DCD9D2" },
+  agentQuickRow: { flexDirection: "row", gap: 8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 2, backgroundColor: "#FFFFFF" },
+  agentQuickChip: { borderRadius: 14, borderWidth: 1, borderColor: "#DDD8CD", backgroundColor: "#F8F6F1", paddingHorizontal: 11, paddingVertical: 6 },
+  agentQuickText: { color: "#5F5B52", fontSize: 11, fontWeight: "600" },
+  agentInput: { flex: 1, minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: "#E2DFD8", backgroundColor: "#FEFDFC", paddingHorizontal: 12, color: "#242823", fontSize: 14 },
+  agentSend: { minWidth: 64, borderRadius: 12, backgroundColor: "#273D31", alignItems: "center", justifyContent: "center", paddingHorizontal: 14 },
+  agentSendText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
   content: { paddingHorizontal: 20, paddingBottom: 28 },
   header: { minHeight: 92, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   eyebrow: { color: "#827D73", fontSize: 13, letterSpacing: 0.4 },
@@ -1082,14 +1441,18 @@ const styles = StyleSheet.create({
   fieldLabel: { color: "#4A4B45", fontSize: 12, fontWeight: "600", marginBottom: 7, marginTop: 12 },
   input: { minHeight: 48, borderColor: "#E2DFD8", borderWidth: 1, borderRadius: 11, paddingHorizontal: 13, color: "#242823", fontSize: 15, backgroundColor: "#FEFDFC" },
   multilineInput: { minHeight: 88, paddingTop: 12 },
-  primaryButton: { minHeight: 50, backgroundColor: "#273D31", borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 17 },
+  primaryButton: { minHeight: 50, backgroundColor: "#273D31", borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 17, paddingHorizontal: 22 },
   primaryButtonText: { color: "#FFFFFF", fontSize: 15, fontWeight: "700" },
-  secondaryButton: { minHeight: 50, flex: 1, borderColor: "#273D31", borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 17 },
+  secondaryButton: { minHeight: 50, flex: 1, borderColor: "#273D31", borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 17, paddingHorizontal: 22 },
   secondaryButtonText: { color: "#273D31", fontSize: 14, fontWeight: "700" },
   cancelButton: { minHeight: 50, flex: 1, borderColor: "#A33A32", borderWidth: 1, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 17 },
   cancelButtonText: { color: "#A33A32", fontSize: 14, fontWeight: "700" },
   actionRow: { flexDirection: "row", gap: 10, alignItems: "stretch" },
   rowButton: { flex: 1 },
+  segmentButton: { flex: 1, minHeight: 50, borderRadius: 12, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#273D31", backgroundColor: "#FEFDFC", marginTop: 17, paddingHorizontal: 10 },
+  segmentButtonActive: { backgroundColor: "#273D31" },
+  segmentButtonText: { color: "#273D31", fontSize: 15, fontWeight: "700" },
+  segmentButtonTextActive: { color: "#FFFFFF" },
   taskPanel: { backgroundColor: "#F4F7F3", borderRadius: 13, padding: 13, marginTop: 14 },
   cloudInput: { marginTop: 10 },
   pressed: { opacity: 0.82 },
@@ -1112,6 +1475,11 @@ const styles = StyleSheet.create({
   statValue: { color: "#FFFFFF", fontSize: 19, fontWeight: "700" },
   statLabel: { color: "#B9C5BA", fontSize: 11, marginTop: 3 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10, marginTop: 2 },
+  sectionActions: { flexDirection: "row", alignItems: "center", gap: 14 },
+  headerAction: { color: "#27804A", fontSize: 12, fontWeight: "700" },
+  headerActionDanger: { color: "#A33A32", fontSize: 12, fontWeight: "700" },
+  historyCheck: { color: "#86837B", fontSize: 16, width: 26, textAlign: "center" },
+  historyCheckOn: { color: "#27804A", fontWeight: "700" },
   sectionTitle: { color: "#292E29", fontSize: 17, fontWeight: "700" },
   sectionMeta: { color: "#89857D", fontSize: 12 },
   historyRow: { flexDirection: "row", alignItems: "center", paddingVertical: 12 },

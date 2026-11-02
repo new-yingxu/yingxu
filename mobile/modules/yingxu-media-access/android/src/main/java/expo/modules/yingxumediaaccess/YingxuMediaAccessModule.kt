@@ -148,6 +148,13 @@ class YingxuMediaAccessModule : Module() {
       }
     }
 
+    AsyncFunction("readThumbnailBase64Async") { source: String, maxDimension: Int, quality: Int ->
+      require(maxDimension in 64..4096) { "缩略图尺寸无效" }
+      require(quality in 20..100) { "压缩质量无效" }
+      val context = appContext.reactContext ?: throw IllegalStateException("Android context unavailable")
+      thumbnailBase64(context, Uri.parse(source), maxDimension, quality)
+    }
+
     AsyncFunction("sha256Async") { source: String -> digest(appContext.reactContext ?: error("Android context unavailable"), Uri.parse(source)) }
 
     AsyncFunction("copyFileVerifiedAsync") { source: String, destinationRoot: String, relativePath: String ->
@@ -428,6 +435,31 @@ class YingxuMediaAccessModule : Module() {
   }
 
   private fun openInput(context: Context, uri: Uri) = if (uri.scheme == ContentResolver.SCHEME_FILE) FileInputStream(File(uri.path!!)) else context.contentResolver.openInputStream(uri)
+
+  private fun thumbnailBase64(context: Context, uri: Uri, maxDimension: Int, quality: Int): Map<String, Any> {
+    val input = openInput(context, uri) ?: error("无法读取来源文件")
+    val bytes = input.use { it.readBytes() }
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) error("不是可解码的图片")
+    var sample = 1
+    val longestSide = maxOf(bounds.outWidth, bounds.outHeight)
+    while (longestSide / (sample * 2) >= maxDimension) sample *= 2
+    val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+    val decoded = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: error("图片解码失败")
+    val currentLongest = maxOf(decoded.width, decoded.height)
+    val scaled = if (currentLongest > maxDimension) {
+      val ratio = maxDimension.toFloat() / currentLongest
+      android.graphics.Bitmap.createScaledBitmap(decoded, (decoded.width * ratio).toInt().coerceAtLeast(1), (decoded.height * ratio).toInt().coerceAtLeast(1), true)
+    } else decoded
+    val out = java.io.ByteArrayOutputStream()
+    scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality, out)
+    val width = scaled.width
+    val height = scaled.height
+    if (scaled !== decoded) scaled.recycle()
+    decoded.recycle()
+    return mapOf("data" to Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP), "width" to width, "height" to height, "mimeType" to "image/jpeg")
+  }
 
   private fun digest(context: Context, uri: Uri): String {
     val input = openInput(context, uri) ?: error("无法读取文件进行校验")

@@ -118,6 +118,14 @@ public final class YingxuMediaAccessModule: Module {
       return ["data": data.base64EncodedString(), "bytesRead": data.count]
     }
 
+    AsyncFunction("readThumbnailBase64Async") { (source: String, maxDimension: Int, quality: Int) throws -> [String: Any] in
+      guard (64...4096).contains(maxDimension), (20...100).contains(quality) else {
+        throw NSError(domain: "YingxuMediaAccess", code: 7, userInfo: [NSLocalizedDescriptionKey: "缩略图参数无效"])
+      }
+      let url = try self.accessibleURL(source)
+      return try self.thumbnailBase64(url: url, maxDimension: maxDimension, quality: quality)
+    }
+
     AsyncFunction("sha256Async") { (source: String) throws -> String in
       try self.sha256(self.accessibleURL(source))
     }
@@ -307,6 +315,26 @@ public final class YingxuMediaAccessModule: Module {
     var current = root
     while let presented = current.presentedViewController { current = presented }
     return current
+  }
+
+  private func thumbnailBase64(url: URL, maxDimension: Int, quality: Int) throws -> [String: Any] {
+    guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+      throw NSError(domain: "YingxuMediaAccess", code: 6, userInfo: [NSLocalizedDescriptionKey: "无法读取图片"])
+    }
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceShouldCacheImmediately: true,
+      kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+    ]
+    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
+      throw NSError(domain: "YingxuMediaAccess", code: 6, userInfo: [NSLocalizedDescriptionKey: "图片解码失败"])
+    }
+    let image = UIImage(cgImage: cgImage)
+    guard let data = image.jpegData(compressionQuality: CGFloat(quality) / 100.0) else {
+      throw NSError(domain: "YingxuMediaAccess", code: 6, userInfo: [NSLocalizedDescriptionKey: "图片编码失败"])
+    }
+    return ["data": data.base64EncodedString(), "width": cgImage.width, "height": cgImage.height, "mimeType": "image/jpeg"]
   }
 
   private func accessibleURL(_ raw: String) throws -> URL {

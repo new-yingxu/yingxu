@@ -18,6 +18,7 @@ type YingxuMediaAccess = {
   requestNotificationPermissionAsync(): Promise<boolean>;
   scanMediaAsync(uri: string): Promise<MediaFile[]>;
   readFileChunkBase64Async(sourceUri: string, offset: number, length: number): Promise<{ data: string; bytesRead: number }>;
+  readThumbnailBase64Async(sourceUri: string, maxDimension: number, quality: number): Promise<{ data: string; width: number; height: number; mimeType: string }>;
   sha256Async(sourceUri: string): Promise<string>;
   copyFileVerifiedAsync(sourceUri: string, destinationUri: string, relativePath: string): Promise<{
     status: "copied" | "skipped";

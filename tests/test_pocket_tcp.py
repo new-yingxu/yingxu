@@ -55,9 +55,6 @@ class PocketTcpBridgeTests(unittest.TestCase):
             notes_store=self.notes,
             host="127.0.0.1",
             port=0,
-            start_provider=lambda: {"ok": True, "status": "started"},
-            pause_provider=lambda: {"ok": True, "status": "paused"},
-            cancel_provider=lambda: {"ok": True, "status": "cancelling"},
             mobile_inbox=MobileInbox(lambda: self.backup_root),
             desktop_media_source=desktop_source,
         )
@@ -110,20 +107,14 @@ class PocketTcpBridgeTests(unittest.TestCase):
         self.assertEqual(saved["notes"]["event"], "山景")
         self.assertNotIn("secret", saved["notes"])
 
-    def test_authenticated_mobile_can_control_only_allowlisted_desktop_backup_actions(self):
+    def test_mobile_cannot_control_desktop_backup_actions(self):
         self.pairing.authorized.add("session-token")
-        for command, expected in (("desktop.start", "started"), ("desktop.pause", "paused"), ("desktop.cancel", "cancelling")):
+        for command in ("desktop.start", "desktop.pause", "desktop.cancel"):
             response = self.bridge.handle_message({
                 "id": command, "command": command, "token": "session-token",
             })
-            self.assertTrue(response["ok"])
-            self.assertEqual(response["status"], expected)
-
-        denied = self.bridge.handle_message({
-            "id": "unauthorized", "command": "desktop.cancel", "token": "invalid",
-        })
-        self.assertFalse(denied["ok"])
-        self.assertEqual(denied["error"], "未配对或会话已过期")
+            self.assertFalse(response["ok"])
+            self.assertEqual(response["error"], "不支持的操作")
 
     def test_authenticated_mobile_upload_is_confined_and_sha256_verified(self):
         self.pairing.authorized.add("session-token")

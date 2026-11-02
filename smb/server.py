@@ -186,48 +186,6 @@ def _pocket_tcp_history(limit: int) -> list[dict]:
     return clean
 
 
-def _pocket_start_desktop_backup() -> dict:
-    if engine.progress.status in ("copying", "verifying", "paused"):
-        return {"ok": False, "error": "电脑已有备份任务正在运行"}
-    source = find_likely_media_source(list_candidate_source_volumes())
-    if not source:
-        return {"ok": False, "error": "电脑没有检测到可用的 SD 卡或素材来源"}
-    backup_root = config.last_backup_root
-    backup_targets = list(config.backup_targets or [])
-    if not backup_root and not backup_targets:
-        return {"ok": False, "error": "请先在电脑端设置备份目标位置"}
-
-    def run_backup():
-        try:
-            engine.run(
-                source["mount_point"], "", backup_root,
-                enable_verify=config.verify_method == "sha256",
-                backup_targets=backup_targets or None,
-            )
-        except Exception as error:
-            print(f"[SMB] Pocket 启动的桌面备份失败: {error}", file=sys.stderr)
-
-    threading.Thread(target=run_backup, daemon=True, name="yingxu-pocket-backup").start()
-    return {"ok": True, "status": "started"}
-
-
-def _pocket_pause_desktop_backup() -> dict:
-    if engine.progress.status == "paused":
-        engine.resume()
-        return {"ok": True, "status": "resumed"}
-    if engine.progress.status not in ("copying", "verifying"):
-        return {"ok": False, "error": "当前没有可暂停的电脑备份任务"}
-    engine.pause()
-    return {"ok": True, "status": "paused"}
-
-
-def _pocket_cancel_desktop_backup() -> dict:
-    if engine.progress.status not in ("copying", "verifying", "paused"):
-        return {"ok": False, "error": "当前没有可取消的电脑备份任务"}
-    engine.cancel()
-    return {"ok": True, "status": "cancelling"}
-
-
 def _pocket_mobile_inbox_root() -> str | None:
     return config.last_backup_root or next(iter(config.backup_targets or []), None)
 
@@ -247,9 +205,6 @@ def _configure_pocket_tcp(enabled: bool) -> None:
                     notes_store=pocket_notes,
                     host="0.0.0.0",
                     port=POCKET_TCP_PORT,
-                    start_provider=_pocket_start_desktop_backup,
-                    pause_provider=_pocket_pause_desktop_backup,
-                    cancel_provider=_pocket_cancel_desktop_backup,
                     mobile_inbox=_pocket_mobile_inbox,
                     desktop_media_source=DesktopMediaSource(lambda: _scan_cache),
                 )
