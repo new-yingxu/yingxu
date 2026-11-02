@@ -4,7 +4,7 @@
  * 登录态由 CloudBase 账号令牌 + 影序设备短会话组成，凭证只存系统安全存储。
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createYingxuCloudClient } from "./yingxu-cloud.cjs";
+import { createYingxuCloudClient, CLOUD_RUNTIME_CONFIG } from "./yingxu-cloud.cjs";
 import { secureStore } from "./media-access";
 
 export const LOGIN_SKIPPED_KEY = "yingxuLoginSkippedV1";
@@ -39,11 +39,11 @@ export async function clearLoginSkipped(): Promise<void> {
   await AsyncStorage.removeItem(LOGIN_SKIPPED_KEY).catch(() => {});
 }
 
-/** 云端登录是否已配置（缺环境变量时引导用户使用本机模式）。 */
+/** 云端登录是否已配置（内嵌默认值 + EXPO_PUBLIC_* 覆盖，全部就绪才可云端登录）。 */
 export function cloudConfigReady(): boolean {
   return Boolean(
-    process.env.EXPO_PUBLIC_CLOUDBASE_AUTH_ORIGIN
-    && process.env.EXPO_PUBLIC_CLOUDBASE_CLIENT_ID
-    && process.env.EXPO_PUBLIC_IDENTITY_API_BASE_URL,
+    CLOUD_RUNTIME_CONFIG.authOrigin
+    && CLOUD_RUNTIME_CONFIG.clientId
+    && CLOUD_RUNTIME_CONFIG.identityApiUrl,
   );
 }

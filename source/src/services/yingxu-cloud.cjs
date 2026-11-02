@@ -614,16 +614,29 @@ class YingxuCloudClient {
   }
 }
 
+/** 运行时配置：与桌面端 Rust 宿主内嵌值一致（公开仓库已含同样信息），EXPO_PUBLIC_* 可覆盖。 */
+const CLOUD_RUNTIME_CONFIG = {
+  authOrigin:
+    process.env.EXPO_PUBLIC_CLOUDBASE_AUTH_ORIGIN
+    || "https://yingxu-dev-d8gowpye17ee27a61.api.tcloudbasegateway.com",
+  clientId:
+    process.env.EXPO_PUBLIC_CLOUDBASE_CLIENT_ID
+    || "yingxu-dev-d8gowpye17ee27a61",
+  identityApiUrl:
+    process.env.EXPO_PUBLIC_IDENTITY_API_BASE_URL
+    || "https://yingxu-dev-d8gowpye17ee27a61-1479513274.ap-shanghai.app.tcloudbase.com",
+};
+
 /** 组装完整的云端客户端；任一配置缺失返回 configured=false 的实例（保持可离线使用）。 */
 function createYingxuCloudClient({ secureStore, deviceId, fetchImpl } = {}) {
   const account = new CloudBaseAccount({
-    authOrigin: process.env.EXPO_PUBLIC_CLOUDBASE_AUTH_ORIGIN || "",
-    clientId: process.env.EXPO_PUBLIC_CLOUDBASE_CLIENT_ID || "",
+    authOrigin: CLOUD_RUNTIME_CONFIG.authOrigin,
+    clientId: CLOUD_RUNTIME_CONFIG.clientId,
     secureStore,
     fetchImpl,
   });
   const session = new YingxuSession({
-    identityApiUrl: process.env.EXPO_PUBLIC_IDENTITY_API_BASE_URL || "",
+    identityApiUrl: CLOUD_RUNTIME_CONFIG.identityApiUrl,
     account,
     secureStore,
     fetchImpl,
@@ -636,6 +649,7 @@ module.exports = {
   YingxuSession,
   YingxuCloudClient,
   createYingxuCloudClient,
+  CLOUD_RUNTIME_CONFIG,
   publicMetadata,
   STATE_TO_CLOUDBASE,
   STATE_FROM_CLOUDBASE,

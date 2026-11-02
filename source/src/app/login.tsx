@@ -153,7 +153,7 @@ export default function LoginScreen() {
           {!configReady ? (
             <View style={styles.warnCard}>
               <Text style={styles.warnText}>
-                云端登录尚未配置（缺少 EXPO_PUBLIC_CLOUDBASE_* 环境变量）。可先跳过登录使用本机备份。
+                云端登录服务暂不可用（配置缺失或云端未就绪）。可先跳过登录使用本机备份。
               </Text>
             </View>
           ) : null}
