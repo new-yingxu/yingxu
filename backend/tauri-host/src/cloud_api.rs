@@ -316,6 +316,52 @@ impl CloudApiClient {
         }))
     }
 
+    /// Silently re-establish the device session from the stored CloudBase
+    /// account tokens (refreshing the account token once if the provider
+    /// rejects it). Returns `Ok(None)` when no stored account session exists
+    /// or the account tokens are no longer valid; only then should callers
+    /// fall back to interactive sign-in. Never clears the account token store.
+    pub fn refresh_session(&self) -> Result<Option<CloudSessionInfo>, CloudApiError> {
+        let client = match crate::cloud_auth::CloudBaseAuthClient::from_embedded_config() {
+            Ok(client) => client,
+            Err(crate::cloud_auth::AuthError::NotConfigured) => return Ok(None),
+            Err(_) => return Err(CloudApiError::Unavailable),
+        };
+        let Some(account_token) = client
+            .access_token_for_native_exchange()
+            .map_err(|_| CloudApiError::Unavailable)?
+        else {
+            return Ok(None);
+        };
+        let display_name = self
+            .session_store
+            .load()?
+            .map(|session| session.display_name)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "影序桌面端".to_string());
+        match self.exchange(&account_token, &display_name) {
+            Ok(info) => Ok(Some(info)),
+            Err(CloudApiError::Unauthenticated) => {
+                // The stored account access token is expired or revoked; one
+                // rotation attempt with the refresh token, then give up so the
+                // UI falls back to interactive sign-in.
+                if client.refresh_access_token().is_err() {
+                    return Ok(None);
+                }
+                let account_token = client
+                    .access_token_for_native_exchange()
+                    .map_err(|_| CloudApiError::Unavailable)?
+                    .ok_or(CloudApiError::Unauthenticated)?;
+                match self.exchange(&account_token, &display_name) {
+                    Ok(info) => Ok(Some(info)),
+                    Err(CloudApiError::Unauthenticated) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn logout(&self) -> Result<(), CloudApiError> {
         let Some(session) = self.session_store.load()? else {
             return self.session_store.clear();
@@ -333,18 +379,27 @@ impl CloudApiClient {
         path: &str,
         body: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, CloudApiError> {
-        let session = self
-            .session_store
-            .load()?
-            .ok_or(CloudApiError::Unauthenticated)?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| CloudApiError::InvalidResponse)?
             .as_secs();
-        if session.expires_at_unix <= now {
-            self.session_store.clear()?;
-            return Err(CloudApiError::Unauthenticated);
-        }
+        let stored = self.session_store.load()?;
+        let session = match stored {
+            Some(session) if session.expires_at_unix > now => session,
+            // Expired or missing device session: one silent re-establishment
+            // attempt from the stored CloudBase account tokens before the
+            // caller is told to sign in interactively.
+            _ => match self.refresh_session()? {
+                Some(_) => self
+                    .session_store
+                    .load()?
+                    .ok_or(CloudApiError::Unauthenticated)?,
+                None => {
+                    self.session_store.clear()?;
+                    return Err(CloudApiError::Unauthenticated);
+                }
+            },
+        };
         let url = self.request_url(method, path)?;
         let body = Zeroizing::new(match body {
             Some(value) => serde_json::to_vec(value).map_err(|_| CloudApiError::InvalidResponse)?,
@@ -358,8 +413,37 @@ impl CloudApiClient {
             .request_json(method, &url, &body, Some(&session.access_token))
         {
             Err(CloudApiError::Unauthenticated) => {
-                self.session_store.clear()?;
-                Err(CloudApiError::Unauthenticated)
+                // Mid-session 401/403: one re-authentication attempt, then one
+                // retried request; any further rejection ends the session.
+                let refreshed = match self.refresh_session() {
+                    Ok(Some(info)) => Some(info),
+                    Ok(None) | Err(CloudApiError::Unauthenticated) => None,
+                    Err(error) => return Err(error),
+                };
+                match refreshed {
+                    None => {
+                        self.session_store.clear()?;
+                        Err(CloudApiError::Unauthenticated)
+                    }
+                    Some(_) => {
+                        let retry_session = self
+                            .session_store
+                            .load()?
+                            .ok_or(CloudApiError::Unauthenticated)?;
+                        match self.transport.request_json(
+                            method,
+                            &url,
+                            &body,
+                            Some(&retry_session.access_token),
+                        ) {
+                            result @ Ok(_) => result,
+                            Err(_) => {
+                                self.session_store.clear()?;
+                                Err(CloudApiError::Unauthenticated)
+                            }
+                        }
+                    }
+                }
             }
             result => result,
         }

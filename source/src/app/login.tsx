@@ -14,9 +14,10 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   clearLoginSkipped,
+  cloudConfigReady,
   createCloudClient,
   markLoginSkipped,
-} from "../services/firebase-auth";
+} from "../services/cloudbase-auth";
 
 type Mode = "signin" | "signup";
 
@@ -25,9 +26,12 @@ export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [existingUser, setExistingUser] = useState("");
+  const configReady = cloudConfigReady();
 
   useEffect(() => {
     let cancelled = false;
@@ -43,24 +47,71 @@ export default function LoginScreen() {
     };
   }, []);
 
-  async function submit(nextMode: Mode = mode) {
+  function resetFlow(nextMode: Mode) {
+    setMode(nextMode);
     setMessage("");
-    const trimmedEmail = email.trim();
-    const trimmedName = displayName.trim();
-    if (!trimmedEmail || !password) {
-      setMessage("请填写邮箱和密码。");
+    setVerificationCode("");
+    setCodeSent(false);
+  }
+
+  async function sendCode() {
+    setMessage("");
+    const address = email.trim();
+    if (!address) {
+      setMessage("请先填写邮箱地址。");
       return;
     }
-    if (nextMode === "signup" && !trimmedName) {
-      setMessage("注册时请填写用户名。");
-      return;
+    if (mode === "signup") {
+      if (!displayName.trim()) {
+        setMessage("注册前请先填写用户名。");
+        return;
+      }
+      if (password.length < 8) {
+        setMessage("注册密码至少 8 个字符。");
+        return;
+      }
     }
     setBusy(true);
     try {
       const client = await createCloudClient();
-      await client.signIn(trimmedEmail, password, nextMode === "signup", trimmedName);
+      if (!client.configured) throw new Error("云端登录尚未配置，请先使用本机模式。");
+      await client.sendEmailCode(address, "register");
+      setCodeSent(true);
+      setMessage("验证码已发送，请查收邮箱。");
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "验证码发送失败，请稍后重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    setMessage("");
+    const address = email.trim();
+    const name = displayName.trim();
+    if (!address || !password) {
+      setMessage("请填写邮箱和密码。");
+      return;
+    }
+    if (mode === "signup") {
+      if (!name) {
+        setMessage("注册时请填写用户名。");
+        return;
+      }
+      if (!verificationCode.trim()) {
+        setMessage("请填写邮箱验证码。");
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      const client = await createCloudClient();
+      if (!client.configured) throw new Error("云端登录尚未配置，请先使用本机模式。");
+      await client.signIn(address, password, mode === "signup", name, verificationCode);
       await clearLoginSkipped();
       setPassword("");
+      setVerificationCode("");
+      setCodeSent(false);
       router.replace("/");
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : "登录失败，请稍后重试。");
@@ -82,7 +133,7 @@ export default function LoginScreen() {
             <Text style={styles.eyebrow}>影序 · 账号</Text>
             <Text style={styles.brand}>Pocket</Text>
             <Text style={styles.subtitle}>
-              登录后可在多台设备间同步备份进度与历史元数据。不登录也能使用手机本机备份。
+              使用影序账号登录，与桌面端共享同一账号，多端同步备份进度与历史元数据。不登录也能使用手机本机备份。
             </Text>
           </View>
 
@@ -99,12 +150,19 @@ export default function LoginScreen() {
             </View>
           ) : null}
 
+          {!configReady ? (
+            <View style={styles.warnCard}>
+              <Text style={styles.warnText}>
+                云端登录尚未配置（缺少 EXPO_PUBLIC_CLOUDBASE_* 环境变量）。可先跳过登录使用本机备份。
+              </Text>
+            </View>
+          ) : null}
+
           <View style={styles.card}>
             <View style={styles.modeRow}>
               <Pressable
                 onPress={() => {
-                  setMode("signin");
-                  setMessage("");
+                  resetFlow("signin");
                 }}
                 style={[styles.modeTab, mode === "signin" && styles.modeTabActive]}
               >
@@ -112,8 +170,7 @@ export default function LoginScreen() {
               </Pressable>
               <Pressable
                 onPress={() => {
-                  setMode("signup");
-                  setMessage("");
+                  resetFlow("signup");
                 }}
                 style={[styles.modeTab, mode === "signup" && styles.modeTabActive]}
               >
@@ -134,18 +191,22 @@ export default function LoginScreen() {
               accessibilityLabel="邮箱"
             />
 
-            <Text style={styles.fieldLabel}>用户名{mode === "signup" ? "（必填）" : "（可修改）"}</Text>
-            <TextInput
-              value={displayName}
-              onChangeText={setDisplayName}
-              maxLength={40}
-              placeholder={mode === "signup" ? "用于在设备列表里显示" : "已有账号可留空"}
-              placeholderTextColor="#A8A49C"
-              style={styles.input}
-              accessibilityLabel="用户名"
-            />
+            {mode === "signup" ? (
+              <>
+                <Text style={styles.fieldLabel}>用户名（必填）</Text>
+                <TextInput
+                  value={displayName}
+                  onChangeText={setDisplayName}
+                  maxLength={40}
+                  placeholder="用于在设备列表里显示"
+                  placeholderTextColor="#A8A49C"
+                  style={styles.input}
+                  accessibilityLabel="用户名"
+                />
+              </>
+            ) : null}
 
-            <Text style={styles.fieldLabel}>密码</Text>
+            <Text style={styles.fieldLabel}>密码{mode === "signup" ? "（至少 8 位）" : ""}</Text>
             <TextInput
               secureTextEntry
               value={password}
@@ -156,24 +217,54 @@ export default function LoginScreen() {
               accessibilityLabel="密码"
             />
 
-            {!!message && <Text style={styles.errorText}>{message}</Text>}
+            {mode === "signup" ? (
+              <>
+                <Text style={styles.fieldLabel}>邮箱验证码</Text>
+                <View style={styles.codeRow}>
+                  <TextInput
+                    autoCapitalize="characters"
+                    keyboardType="number-pad"
+                    value={verificationCode}
+                    onChangeText={setVerificationCode}
+                    maxLength={8}
+                    placeholder="6 位验证码"
+                    placeholderTextColor="#A8A49C"
+                    style={[styles.input, styles.codeInput]}
+                    accessibilityLabel="邮箱验证码"
+                  />
+                  <Pressable
+                    disabled={busy}
+                    onPress={sendCode}
+                    style={({ pressed }) => [styles.codeButton, pressed && styles.pressed, busy && styles.disabled]}
+                  >
+                    <Text style={styles.codeButtonText}>{codeSent ? "重新发送" : "获取验证码"}</Text>
+                  </Pressable>
+                </View>
+              </>
+            ) : null}
+
+            {!!message && <Text style={styles.messageText}>{message}</Text>}
 
             <Pressable
-              disabled={busy}
-              onPress={() => submit(mode)}
-              style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed, busy && styles.disabled]}
+              disabled={busy || (mode === "signup" && !codeSent)}
+              onPress={() => submit()}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                pressed && styles.pressed,
+                (busy || (mode === "signup" && !codeSent)) && styles.disabled,
+              ]}
             >
               {busy ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.primaryButtonText}>
-                  {mode === "signup" ? "注册并登录" : "登录"}
+                  {mode === "signup" ? "验证并创建账号" : "登录"}
                 </Text>
               )}
             </Pressable>
 
             <Text style={styles.hint}>
-              Firebase 账号只同步备份元数据：进度、历史、事件名。照片、视频、电脑路径和凭据都不会上传云端。
+              影序账号（CloudBase）只同步任务摘要：进度、状态与设备。照片、视频、原片路径和笔记不会上传云端。
             </Text>
           </View>
 
@@ -198,6 +289,8 @@ const styles = StyleSheet.create({
   noticeCard: { backgroundColor: "#E8F0EA", borderRadius: 16, padding: 16, marginBottom: 18 },
   noticeTitle: { color: "#273D31", fontSize: 13, fontWeight: "700" },
   noticeBody: { color: "#3C4A40", fontSize: 14, marginTop: 6 },
+  warnCard: { backgroundColor: "#F6EFE3", borderRadius: 16, padding: 16, marginBottom: 18 },
+  warnText: { color: "#6B5A32", fontSize: 13, lineHeight: 19 },
   card: { backgroundColor: "#FFFFFF", borderRadius: 18, padding: 18, borderWidth: 1, borderColor: "#E9E6E0" },
   modeRow: { flexDirection: "row", backgroundColor: "#F1EEE8", borderRadius: 12, padding: 4, marginBottom: 6 },
   modeTab: { flex: 1, minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 9 },
@@ -215,6 +308,18 @@ const styles = StyleSheet.create({
     fontSize: 15,
     backgroundColor: "#FEFDFC",
   },
+  codeRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  codeInput: { flex: 1 },
+  codeButton: {
+    minHeight: 48,
+    paddingHorizontal: 14,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: "#273D31",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  codeButtonText: { color: "#273D31", fontSize: 13, fontWeight: "700" },
   primaryButton: {
     minHeight: 50,
     backgroundColor: "#273D31",
@@ -227,7 +332,7 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.82 },
   disabled: { opacity: 0.6 },
   hint: { color: "#86837B", fontSize: 11, lineHeight: 17, marginTop: 14 },
-  errorText: { color: "#A33A32", fontSize: 13, lineHeight: 19, marginTop: 12 },
+  messageText: { color: "#6B5A32", fontSize: 13, lineHeight: 19, marginTop: 12 },
   skipButton: { minHeight: 48, alignItems: "center", justifyContent: "center", marginTop: 18 },
   skipText: { color: "#27804A", fontSize: 14, fontWeight: "600" },
   footer: { color: "#9A968F", textAlign: "center", fontSize: 11, marginTop: 8 },

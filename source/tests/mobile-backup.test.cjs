@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { MobileBackupEngine, filterAndSortMedia, mediaTypeForName, organizeMedia } = require("../src/services/mobile-backup.cjs");
-const { publicMetadata } = require("../src/services/firebase-sync.cjs");
+const { publicMetadata } = require("../src/services/yingxu-cloud.cjs");
 const { createMobileStore } = require("../src/services/mobile-store.cjs");
 
 test("classifies common photo, RAW, and video files while ignoring non-media", () => {
@@ -190,15 +190,17 @@ test("continues local targets while desktop is offline and completes queued copi
   assert.ok(resumed.files.every((file) => file.targets.every((target) => ["copied", "skipped"].includes(target.status))));
 });
 
-test("cloud metadata includes file names and counts but excludes local paths and credentials", () => {
+test("cloud metadata keeps only counts and excludes file names, local paths and credentials", () => {
   const metadata = publicMetadata({
     id: "backup-1", sourcePath: "/Volumes/PRIVATE/DCIM", destinationPath: "/Users/me/Photos",
     token: "never-share", eventName: "旅行", totalFiles: 1, files: [
       { name: "IMG_1.JPG", size: 44, status: "verified", sourceUri: "file:///secret", mediaType: "photo" },
     ],
   });
-  assert.equal(metadata.files[0].name, "IMG_1.JPG");
-  assert.equal(metadata.files[0].size, 44);
+  // CloudBase 托管后的同步契约（job.snapshot.v1）只含任务摘要：文件名不上云。
+  assert.equal(metadata.files, 1);
+  assert.equal(metadata.totalFiles, 1);
+  assert.ok(!JSON.stringify(metadata).includes("IMG_1.JPG"));
   assert.ok(!JSON.stringify(metadata).includes("PRIVATE"));
   assert.ok(!JSON.stringify(metadata).includes("secret"));
   assert.ok(!JSON.stringify(metadata).includes("never-share"));
@@ -232,9 +234,9 @@ test("cloud offline outbox keeps only sanitized metadata and deduplicates histor
   await store.queueCloudHistory(record);
   await store.queueCloudHistory({ ...record, status: "partial" });
   const outbox = await store.getCloudOutbox();
-  assert.equal(outbox.progress.files[0].name, "IMG_1.JPG");
+  assert.equal(outbox.progress.files, 1);
   assert.equal(outbox.history.length, 1);
-  assert.doesNotMatch(JSON.stringify(outbox), /private|do-not-sync|sourceUri/);
+  assert.doesNotMatch(JSON.stringify(outbox), /IMG_1|private|do-not-sync|sourceUri/);
   await store.clearCloudProgress();
   await store.clearCloudHistory("backup-1");
   assert.deepEqual(await store.getCloudOutbox(), { progress: null, history: [] });

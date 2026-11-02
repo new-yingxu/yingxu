@@ -4,7 +4,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, workbuddy/dev]
+    branches: [main, workbuddy/dev, workbuddy/cloudbase-auth]
   workflow_dispatch:
 
 concurrency:
