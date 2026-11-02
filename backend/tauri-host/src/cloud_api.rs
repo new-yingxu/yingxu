@@ -336,7 +336,7 @@ impl CloudApiClient {
         let display_name = self
             .session_store
             .load()?
-            .map(|session| session.display_name)
+            .map(|session| session.display_name.clone())
             .filter(|name| !name.trim().is_empty())
             .unwrap_or_else(|| "影序桌面端".to_string());
         match self.exchange(&account_token, &display_name) {
