@@ -3,21 +3,21 @@
     "name": "影序 Pocket",
     "slug": "yingxu-pocket",
     "scheme": "yingxu-pocket",
-    "version": "1.1.0-draft.2",
+    "version": "1.1.0-draft.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yingxuapp.pocket",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "影序 Pocket 需要连接同一局域网中的影序桌面端，读取备份状态并同步拍摄备注。"
       }
     },
     "android": {
       "package": "com.yingxuapp.pocket",
-      "versionCode": 2,
+      "versionCode": 3,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE",
