@@ -122,6 +122,11 @@ arg!(AgentTool {
     arguments: Value
 });
 arg!(QuarantineId { item_id: String });
+arg!(CardLabel {
+    mount_key: String,
+    name: String,
+    note: String
+});
 arg!(QuarantineAction {
     action_id: String,
     accepted: bool
@@ -160,8 +165,17 @@ impl Engine {
     fn call(&self, method: &str, p: Value) -> CoreResult<Value> {
         match method {
             "health" => Ok(
-                json!({"service":"yingxu-local-core","version":env!("CARGO_PKG_VERSION"),"protocolVersion":PROTOCOL_VERSION,"databaseVersion":3,"capabilities":{"localBackup":true,"persistentQueue":true,"multiTarget":true,"transferToRecovery":true,"history":true,"replicaAudit":true,"restore":true,"delivery":true,"agentProvider":false,"cloudConnection":false,"photoSignals":true,"photoThumbnails":true,"rawDecode":false,"rawPreview":true,"videoMetadata":true,"videoFrameExtraction":"optional_ffmpeg","videoQualityModel":false,"netdiskUpload":false,"quarantine":true,"agentFileActionPreview":true}}),
+                json!({"service":"yingxu-local-core","version":env!("CARGO_PKG_VERSION"),"protocolVersion":PROTOCOL_VERSION,"databaseVersion":4,"capabilities":{"localBackup":true,"persistentQueue":true,"multiTarget":true,"transferToRecovery":true,"history":true,"replicaAudit":true,"restore":true,"delivery":true,"agentProvider":false,"cloudConnection":false,"photoSignals":true,"photoThumbnails":true,"rawDecode":false,"rawPreview":true,"videoMetadata":true,"videoFrameExtraction":"optional_ffmpeg","videoQualityModel":false,"netdiskUpload":false,"quarantine":true,"agentFileActionPreview":true,"cardLabels":true}}),
             ),
+            "volumes.list" => {
+                let _: Empty = decode(p)?;
+                value(self.volumes()?)
+            }
+            "cards.setLabel" => {
+                let a: CardLabel = decode(p)?;
+                self.set_card_label(&a.mount_key, &a.name, &a.note)?;
+                value(self.volumes()?)
+            }
             "backup.scan" => {
                 let a: Source = decode(p)?;
                 let source = crate::fsops::local_directory(&a.source)?;

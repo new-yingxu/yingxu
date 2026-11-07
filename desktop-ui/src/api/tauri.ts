@@ -12,6 +12,7 @@ import type {
   NamePreset,
   ScanReport, IndexResult, NetdiskProvider, NetdiskTask,
   QuarantineItem,
+  VolumeCard,
 } from "./contracts";
 import { ACTION_WINDOW_MS, createLocalAgentService, type LocalActionReceipt, type LocalOpenPlan, type LocalTurnRequest, type LocalTurnResponse, type LocalToolResult } from "./local-agent";
 import { confirmLocalFileAction, prepareLocalFileAction, selectLocalDirectory } from "./local-file-actions";
@@ -442,8 +443,8 @@ export function createTauriApi(options: Options = {}): AppApi {
       },
     },
     backup: {
-      async scan() {
-        const source = await chooseDirectory("source");
+      async scan(providedSource?: string) {
+        const source = providedSource?.trim() || (await chooseDirectory("source"));
         const report = await rpc<ScanReport & { files: { relative: string; fingerprint: { bytes: number } }[] }>("backup.scanReport", { source });
         const rows = report.files;
         return { scanReport: { skipped: report.skipped, scanned: report.scanned, skippedTotal: report.skippedTotal, skippedTruncated: report.skippedTruncated },
@@ -577,6 +578,13 @@ export function createTauriApi(options: Options = {}): AppApi {
         return mapPreset(saved);
       },
       remove: (id) => rpc("presets.remove", { id }),
+    },
+    volumes: {
+      list: () => rpc<VolumeCard[]>("volumes.list"),
+      async setLabel(mountKey, name, note) {
+        await rpc("cards.setLabel", { mountKey, name, note });
+        return rpc<VolumeCard[]>("volumes.list");
+      },
     },
     audit: {
       run: () => rpc("audit.run"),

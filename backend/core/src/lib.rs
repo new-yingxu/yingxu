@@ -19,3 +19,4 @@ pub mod netdisk_baidu;
 pub mod quarantine;
 pub mod raw;
 pub mod video;
+pub mod volumes;

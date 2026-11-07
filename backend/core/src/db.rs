@@ -1,6 +1,8 @@
 use crate::model::*;
+use crate::volumes::CardLabel;
 use rusqlite::{Connection, params};
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -17,7 +19,7 @@ impl Store {
         };
         let mut c = this.connect()?;
         let version: i32 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version > 3 {
+        if version > 4 {
             return Err(CoreError::new(
                 "DATABASE_VERSION_NEWER",
                 "数据库版本高于当前程序，未修改数据库",
@@ -58,6 +60,17 @@ impl Store {
                 );\
                 CREATE INDEX IF NOT EXISTS file_action_state_expiry ON file_action_previews(state,expires_at_ms);\
                 PRAGMA user_version=3;",
+            )?;
+            tx.commit()?;
+        }
+        if version <= 3 {
+            let tx = c.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS card_labels(\
+                    mount_key TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',\
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL\
+                );\
+                PRAGMA user_version=4;",
             )?;
             tx.commit()?;
         }
@@ -202,6 +215,31 @@ impl Store {
         )?;
         Ok(())
     }
+    pub fn card_labels(&self) -> CoreResult<HashMap<String, CardLabel>> {
+        let c = self.connect()?;
+        let mut s = c.prepare("SELECT mount_key, name, note, updated_at FROM card_labels")?;
+        let rows = s.query_map([], |r| {
+            Ok(CardLabel {
+                mount_key: r.get(0)?,
+                name: r.get(1)?,
+                note: r.get(2)?,
+                updated_at: r.get(3)?,
+            })
+        })?;
+        rows.map(|row| {
+            let label = row?;
+            Ok((label.mount_key.clone(), label))
+        })
+        .collect()
+    }
+    pub fn set_card_label(&self, mount_key: &str, name: &str, note: &str) -> CoreResult<()> {
+        self.connect()?.execute(
+            "INSERT INTO card_labels(mount_key, name, note, created_at, updated_at) VALUES(?1,?2,?3,?4,?4)\
+             ON CONFLICT(mount_key) DO UPDATE SET name=excluded.name, note=excluded.note, updated_at=excluded.updated_at",
+            params![mount_key, name, note, now()],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -229,11 +267,31 @@ mod migration_tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         let table_count: i64 = connection.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('quarantine_items','quarantine_actions','file_action_previews')",
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('quarantine_items','quarantine_actions','file_action_previews','card_labels')",
             [],
             |row| row.get(0),
         ).unwrap();
-        assert_eq!(version, 3);
-        assert_eq!(table_count, 3);
+        assert_eq!(version, 4);
+        assert_eq!(table_count, 4);
+    }
+
+    #[test]
+    fn card_labels_round_trip_and_upsert() {
+        let temp = TempDir::new().unwrap();
+        let store = Store::open(temp.path()).unwrap();
+        assert!(store.card_labels().unwrap().is_empty());
+        store
+            .set_card_label("win-serial-1A2B3C4D", "云南旅拍 A 卡", "客户成片已交付")
+            .unwrap();
+        store
+            .set_card_label("win-serial-1A2B3C4D", "云南旅拍 A 卡", "备注更新")
+            .unwrap();
+        store
+            .set_card_label("mac-uuid-0123", "海岛航拍", "")
+            .unwrap();
+        let labels = store.card_labels().unwrap();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels["win-serial-1A2B3C4D"].note, "备注更新");
+        assert_eq!(labels["mac-uuid-0123"].name, "海岛航拍");
     }
 }
