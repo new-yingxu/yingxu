@@ -184,7 +184,8 @@ mod platform {
         pub internal: Option<bool>,
     }
 
-    /// 纯函数，便于单测。
+    /// 纯函数，便于单测。仅在 macOS 编译（Linux 构建不调用 diskutil）。
+    #[cfg(target_os = "macos")]
     pub(super) fn parse_diskutil_info(text: &str) -> DiskutilInfo {
         let mut info = DiskutilInfo::default();
         for line in text.lines() {
@@ -361,7 +362,7 @@ mod platform {
                 mount_key: mount_key(platform_tag, hardware_id.as_deref(), &path),
                 mount_point: path,
                 label,
-                kind: kind.into(),
+                kind,
                 file_system,
                 total_bytes: total,
                 available_bytes: available,
@@ -437,7 +438,7 @@ mod tests {
         assert!(validate_card_label("bad\u{7}key", "", "").is_err());
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[test]
     fn parses_diskutil_info_output() {
         let text = "Device Identifier: disk4s1\nDevice Node: /dev/disk4s1\n  Volume Name:              SDXC\n  Internal:                 No\n  Volume UUID:              01234567-89AB-CDEF-0123-456789ABCDEF\n  File System Personality:  exFAT\n";
@@ -448,7 +449,7 @@ mod tests {
         assert_eq!(info.internal, Some(false));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     #[test]
     fn parses_diskutil_info_defaults_on_missing_fields() {
         let info = platform::parse_diskutil_info("Device Identifier: disk1s1\n");
