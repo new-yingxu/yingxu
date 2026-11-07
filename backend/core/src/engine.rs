@@ -678,3 +678,40 @@ impl FileName for std::borrow::Cow<'_, str> {
             .into_owned()
     }
 }
+
+impl Engine {
+    /// 列出当前可见的卷，并合入本机保存的卡片名称/备注。
+    /// 可移动介质排在前，便于"插入的存储卡"一眼可见。
+    pub fn volumes(&self) -> CoreResult<Vec<crate::volumes::VolumeCard>> {
+        let labels = self.store.card_labels()?;
+        let mut cards: Vec<_> = crate::volumes::list_volumes()
+            .into_iter()
+            .map(|volume| {
+                let label = labels.get(&volume.mount_key);
+                crate::volumes::VolumeCard {
+                    custom_name: label.map(|l| l.name.clone()).unwrap_or_default(),
+                    note: label.map(|l| l.note.clone()).unwrap_or_default(),
+                    volume,
+                }
+            })
+            .collect();
+        cards.sort_by(|a, b| {
+            let key = |c: &crate::volumes::VolumeCard| {
+                (
+                    c.volume.kind != "removable",
+                    c.volume.mount_point.to_string_lossy().to_string(),
+                )
+            };
+            key(a).cmp(&key(b))
+        });
+        Ok(cards)
+    }
+
+    /// 按卡片硬件身份保存名称与备注；同一张卡换盘符、换读卡器仍能对上。
+    pub fn set_card_label(&self, mount_key: &str, name: &str, note: &str) -> CoreResult<()> {
+        crate::volumes::validate_card_label(mount_key, name, note)
+            .map_err(|message| CoreError::new("INVALID_CARD_LABEL", message))?;
+        self.store
+            .set_card_label(mount_key.trim(), name.trim(), note.trim())
+    }
+}

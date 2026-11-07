@@ -1,5 +1,11 @@
-import type { AppSettings, ArchiveTask, AuditResult, AgentReply, DeliveryPackage, DesktopApi, Device, MediaFile, NamePreset, TaskState, UserSession, QuarantineItem } from './contracts'
+import type { AppSettings, ArchiveTask, AuditResult, AgentReply, DeliveryPackage, DesktopApi, Device, MediaFile, NamePreset, TaskState, UserSession, QuarantineItem, VolumeCard } from './contracts'
 import type { LocalFileActionPreview, LocalFileActionReceipt } from './local-file-actions'
+
+const demoVolumes: VolumeCard[] = [
+  { mountKey: 'mock-serial-1A2B3C4D', mountPoint: '/Volumes/SD_CARD', label: 'SDXC-128G', customName: '', note: '', kind: 'removable', fileSystem: 'exFAT', totalBytes: 128_849_018_880, availableBytes: 84_589_967_360 },
+  { mountKey: 'mock-serial-99887766', mountPoint: '/Volumes/ArchiveHD', label: 'ArchiveHD', customName: '', note: '', kind: 'fixed', fileSystem: 'APFS', totalBytes: 2_199_023_255_552, availableBytes: 616_562_647_040 },
+]
+const cardLabels = new Map<string, { name: string; note: string }>()
 
 const delay = (ms = 140) => new Promise(resolve => setTimeout(resolve, ms))
 const fileData: MediaFile[] = [
@@ -101,7 +107,7 @@ export function createMockApi(): DesktopApi {
     },
     workbench: { async snapshot() { await delay(); return { tasks: tasks.slice(0, 3), fileCount: 2486, totalSize: '1.28 TB', destinations: 2, reviewCount: 36 } } },
     backup: {
-      async scan() { await delay(340); return { sources: [{ id: 'sd-1', name: 'SD_CARD', path: '/Volumes/SD_CARD/DCIM', files: 1248, size: '42.8 GB', free: '84.6 GB' }] } },
+      async scan(source) { await delay(340); const mount = source || '/Volumes/SD_CARD/DCIM'; return { sources: [{ id: 'sd-1', name: mount.split(/[\\/]/).filter(Boolean).pop() || 'SD_CARD', path: mount, files: 1248, size: '42.8 GB', free: '84.6 GB' }] } },
       async start(payload) {
         await delay(220)
         const task: ArchiveTask = { id: `YX-DEMO-${Date.now().toString().slice(-6)}`, name: '新建备份任务', state: 'running', createdAt: '刚刚', files: 1248, size: '42.8 GB', progress: 0, speed: '0 MB/s', phase: '准备复制', source: payload.sourceId, destinations: payload.destinations.map(id => ({ id, name: id === 'local' ? '本机硬盘' : id === 'baidu' ? '百度网盘' : '本地目录', state: 'queued', progress: 0 })) }
@@ -161,6 +167,18 @@ export function createMockApi(): DesktopApi {
       async list() { await delay(60); return presets },
       async save(preset) { await delay(80); presets = presets.some(item => item.id === preset.id) ? presets.map(item => item.id === preset.id ? preset : item) : [...presets, preset]; return preset },
       async remove(id) { await delay(60); presets = presets.filter(item => item.id !== id) },
+    },
+    volumes: {
+      async list() {
+        await delay(60)
+        return demoVolumes.map(volume => ({ ...volume, customName: cardLabels.get(volume.mountKey)?.name || '', note: cardLabels.get(volume.mountKey)?.note || '' }))
+      },
+      async setLabel(mountKey, name, note) {
+        await delay(80)
+        if (!demoVolumes.some(volume => volume.mountKey === mountKey)) throw new Error('演示环境中找不到该存储卡')
+        cardLabels.set(mountKey, { name, note })
+        return demoVolumes.map(volume => ({ ...volume, customName: cardLabels.get(volume.mountKey)?.name || '', note: cardLabels.get(volume.mountKey)?.note || '' }))
+      },
     },
     audit: {
       async run(): Promise<AuditResult> { await delay(420); return { checked: 2486, healthy: 2484, issues: [{ path: '山野纪行/视频/clip_07.MP4', reason: '目标盘当前离线，无法抽查', recoverable: true }, { path: '城市漫步/IMG_2840.JPG', reason: '文件哈希与上次记录不符，需复核', recoverable: true }], lastRun: '刚刚（演示）' } },

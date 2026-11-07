@@ -154,6 +154,20 @@ export interface DeliveryPackage {
   includeManifest: boolean;
   createdAt: string;
 }
+export interface VolumeCard {
+  /** 跨插拔稳定的卡片身份；换盘符、换读卡器后仍能对上同一张卡。 */
+  mountKey: string;
+  mountPoint: string;
+  /** 系统卷标。 */
+  label: string;
+  /** 用户为本卡起的名称。 */
+  customName: string;
+  note: string;
+  kind: "removable" | "fixed" | "unknown";
+  fileSystem: string;
+  totalBytes: number;
+  availableBytes: number;
+}
 
 /** UI contract: native adapter maps to local RPC; browser preview uses explicit mock data. */
 export interface DesktopApi {
@@ -181,7 +195,7 @@ export interface DesktopApi {
     }>;
   };
   backup: {
-    scan(): Promise<{
+    scan(source?: string): Promise<{
       scanReport?: ScanReport;
     sources: {
         id: string;
@@ -255,6 +269,10 @@ export interface DesktopApi {
     list(): Promise<NamePreset[]>;
     save(preset: NamePreset): Promise<NamePreset>;
     remove(id: string): Promise<void>;
+  };
+  volumes: {
+    list(): Promise<VolumeCard[]>;
+    setLabel(mountKey: string, name: string, note: string): Promise<VolumeCard[]>;
   };
   audit: {
     run(): Promise<AuditResult>;

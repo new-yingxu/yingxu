@@ -35,6 +35,7 @@ import type {
   ScanReport, IndexResult,
   NetdiskProvider,
   NetdiskTask,
+  VolumeCard,
 } from "./api/contracts";
 import { createDesktopApi } from "./api";
 import { errorText } from "./api/tauri";
@@ -243,6 +244,14 @@ const devices = ref<Device[]>([]);
 const presets = ref<NamePreset[]>([]);
 const auditResult = ref<AuditResult | null>(null);
 const scanBusy = ref(false);
+const volumes = ref<VolumeCard[]>([]);
+const cardToEdit = ref<VolumeCard | null>(null);
+const cardDraftName = ref("");
+const cardDraftNote = ref("");
+const cardSaveBusy = ref(false);
+const detectedCards = computed(() =>
+  volumes.value.filter((volume) => volume.kind === "removable"),
+);
 const backupScan = ref<ScanReport|null>(null);
 const indexScan = ref<IndexResult|null>(null);
 const transferScan = ref<IndexResult|null>(null);
@@ -754,6 +763,7 @@ onUnmounted(() => {
   thumbnailEpoch++;
   stopEvents?.();
   if (polling) clearInterval(polling);
+  stopVolumeWatch();
   window.removeEventListener("yingxu-error", onAppError);
   window.removeEventListener("unhandledrejection", onUnhandled);
   finishConfirmation(false);
@@ -970,10 +980,12 @@ async function saveAccountPassword() {
     accountVerificationCode.value = "";
   }
 }
-async function scanSource() {
+async function scanSource(path?: unknown) {
   scanBusy.value = true;
   try {
-    const scanned = await api.backup.scan();
+    // 事件处理器直接绑定 @click="scanSource" 时首参是 MouseEvent，仅接受字符串路径
+    const provided = typeof path === "string" && path.trim() ? path.trim() : undefined;
+    const scanned = await api.backup.scan(provided);
     sources.value = scanned.sources;
     backupScan.value = scanned.scanReport || null;
     backupSource.value = sources.value[0]?.path || "";
@@ -987,6 +999,53 @@ async function scanSource() {
   } finally {
     scanBusy.value = false;
   }
+}
+let volumeTimer: number | undefined;
+async function refreshVolumes() {
+  try {
+    volumes.value = await api.volumes.list();
+  } catch {
+    // 识别失败不打断备份流程，下次轮询会重试
+  }
+}
+function startVolumeWatch() {
+  void refreshVolumes();
+  if (volumeTimer === undefined)
+    volumeTimer = window.setInterval(() => void refreshVolumes(), 5000);
+}
+function stopVolumeWatch() {
+  if (volumeTimer !== undefined) {
+    window.clearInterval(volumeTimer);
+    volumeTimer = undefined;
+  }
+}
+function useCardAsSource(card: VolumeCard) {
+  void scanSource(card.mountPoint);
+}
+function editCardLabel(card: VolumeCard) {
+  cardToEdit.value = card;
+  cardDraftName.value = card.customName;
+  cardDraftNote.value = card.note;
+}
+async function saveCardLabel() {
+  if (!cardToEdit.value) return;
+  cardSaveBusy.value = true;
+  try {
+    volumes.value = await api.volumes.setLabel(
+      cardToEdit.value.mountKey,
+      cardDraftName.value.trim(),
+      cardDraftNote.value.trim(),
+    );
+    cardToEdit.value = null;
+    say("已保存存储卡名称与备注。");
+  } catch (error) {
+    showError(error);
+  } finally {
+    cardSaveBusy.value = false;
+  }
+}
+function volumeSummary(card: VolumeCard) {
+  return `${formatBytes(card.totalBytes)} · 可用 ${formatBytes(card.availableBytes)} · ${card.fileSystem || "未知格式"}`;
 }
 async function chooseBackupDestination() {
   if (api.local)
@@ -1294,6 +1353,8 @@ async function selectAgentModel() {
 
 watch(page, (next) => {
   if (next === "agent") void refreshAgentModelChoices();
+  if (next === "backup") startVolumeWatch();
+  else stopVolumeWatch();
 });
 watch(localWorkspace, () => void refreshDashboardBaidu(true));
 watch(agentConversations, (value) => saveAgentConversations(value), { deep: true, immediate: true });
@@ -2201,6 +2262,36 @@ function baiduTaskStateLabel(state: string) {
                     {{ scanBusy ? "扫描中…" : "重新扫描来源" }}
                   </button>
                 </div>
+                <div v-if="detectedCards.length" class="card-detect-list">
+                  <div
+                    v-for="card in detectedCards"
+                    :key="card.mountKey"
+                    class="source-card card-identity"
+                  >
+                    <HardDrive :size="20" />
+                    <div>
+                      <b>{{ card.customName || card.label || card.mountPoint }} · 已识别</b
+                      ><span
+                        >{{ card.note || "未填写备注" }} · {{ card.mountPoint }} ·
+                        {{ volumeSummary(card) }}</span
+                      >
+                    </div>
+                    <div class="card-identity-actions">
+                      <button
+                        class="text-button"
+                        @click="useCardAsSource(card)"
+                      >
+                        用作来源
+                      </button>
+                      <button
+                        class="text-button"
+                        @click="editCardLabel(card)"
+                      >
+                        名称备注
+                      </button>
+                    </div>
+                  </div>
+                </div>
                 <div v-if="sources.length" class="source-card">
                   <HardDrive :size="22" />
                   <div>
@@ -2215,7 +2306,7 @@ function baiduTaskStateLabel(state: string) {
                 </div>
                 <div v-else class="empty-state">
                   <HardDrive :size="28" /><b>尚未扫描来源</b
-                  ><span>插入存储卡或移动盘后手动开始预检。</span
+                  ><span>插入存储卡后会自动识别；也可手动选择来源目录开始预检。</span
                   ><button
                     class="primary-button"
                     @click="scanSource"
@@ -3955,6 +4046,22 @@ function baiduTaskStateLabel(state: string) {
         <div class="modal-actions">
           <button class="secondary-button" type="button" @click="taskToRename = null">取消</button>
           <button class="primary-button" type="submit">保存名称</button>
+        </div>
+      </form>
+    </div>
+    <div v-if="cardToEdit" class="modal-backdrop" @click.self="cardToEdit = null">
+      <form class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="card-label-title" @submit.prevent="saveCardLabel">
+        <button class="modal-close" type="button" aria-label="关闭" @click="cardToEdit = null">×</button>
+        <h2 id="card-label-title">存储卡名称与备注</h2>
+        <p>名称与备注保存在本机，按卡片硬件身份关联；同一张卡换读卡器、换盘符后仍能对上。</p>
+        <label class="field-label" for="card-label-name">卡片名称</label>
+        <input id="card-label-name" v-model="cardDraftName" maxlength="80" :placeholder="cardToEdit.label || '例如：云南旅拍 A 卡'" />
+        <label class="field-label" for="card-label-note">备注</label>
+        <input id="card-label-note" v-model="cardDraftNote" maxlength="300" placeholder="例如：客户成片已交付" />
+        <p class="card-identity-key">卡片身份：{{ cardToEdit.mountKey }}</p>
+        <div class="modal-actions">
+          <button class="secondary-button" type="button" @click="cardToEdit = null">取消</button>
+          <button class="primary-button" type="submit" :disabled="cardSaveBusy">{{ cardSaveBusy ? "保存中…" : "保存" }}</button>
         </div>
       </form>
     </div>
