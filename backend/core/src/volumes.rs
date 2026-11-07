@@ -69,13 +69,18 @@ pub fn mount_key(platform_tag: &str, hardware_id: Option<&str>, mount_point: &Pa
         let serial = serial.trim();
         if !serial.is_empty()
             && serial.len() <= 128
-            && serial.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
+            && serial
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
         {
             return format!("{platform_tag}-{serial}");
         }
     }
     let path = mount_point.to_string_lossy().replace('\\', "/");
-    format!("{platform_tag}-path-{}", path.trim_end_matches('/').to_lowercase())
+    format!(
+        "{platform_tag}-path-{}",
+        path.trim_end_matches('/').to_lowercase()
+    )
 }
 
 pub fn list_volumes() -> Vec<VolumeInfo> {
@@ -88,7 +93,6 @@ mod platform {
     use std::path::{Path, PathBuf};
     use windows_sys::Win32::Storage::FileSystem::{
         GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
-        DRIVE_FIXED, DRIVE_REMOVABLE,
     };
 
     pub(super) fn list() -> Vec<VolumeInfo> {
@@ -105,8 +109,9 @@ mod platform {
             let root = format!("{letter}:\\");
             let root_w: Vec<u16> = root.encode_utf16().chain([0]).collect();
             let kind = match unsafe { GetDriveTypeW(root_w.as_ptr()) } {
-                DRIVE_REMOVABLE => "removable",
-                DRIVE_FIXED => "fixed",
+                // GetDriveTypeW 返回值：2=可移动介质（存储卡/U盘），3=固定磁盘
+                2 => "removable",
+                3 => "fixed",
                 _ => "unknown",
             };
             let mut label_buf = [0u16; 33];
@@ -201,13 +206,33 @@ mod platform {
     /// 解析 /proc/mounts，只保留本地文件系统挂载点（Linux 开发环境用）。纯函数，便于单测。
     pub(super) fn parse_proc_mounts(text: &str) -> Vec<(String, String, String)> {
         let virtual_fs = [
-            "proc", "sysfs", "devpts", "tmpfs", "devtmpfs", "squashfs", "cgroup", "cgroup2",
-            "overlay", "mqueue", "shm", "efivarfs", "bpf", "tracefs", "debugfs", "binfmt_misc",
-            "fusectl", "securityfs", "pstore", "configfs", "hugetlbfs", "ramfs", "autofs", "nsfs",
+            "proc",
+            "sysfs",
+            "devpts",
+            "tmpfs",
+            "devtmpfs",
+            "squashfs",
+            "cgroup",
+            "cgroup2",
+            "overlay",
+            "mqueue",
+            "shm",
+            "efivarfs",
+            "bpf",
+            "tracefs",
+            "debugfs",
+            "binfmt_misc",
+            "fusectl",
+            "securityfs",
+            "pstore",
+            "configfs",
+            "hugetlbfs",
+            "ramfs",
+            "autofs",
+            "nsfs",
         ];
         let local_fs = [
-            "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "ntfs", "ntfs3", "vfat", "exfat",
-            "udf",
+            "ext2", "ext3", "ext4", "xfs", "btrfs", "f2fs", "ntfs", "ntfs3", "vfat", "exfat", "udf",
         ];
         text.lines()
             .filter_map(|line| {
@@ -267,7 +292,10 @@ mod platform {
         if unsafe { libc::statvfs(c.as_ptr(), &mut fs) } != 0 || fs.f_frsize == 0 {
             return None;
         }
-        Some((fs.f_blocks as u64 * fs.f_frsize as u64, fs.f_bavail as u64 * fs.f_frsize as u64))
+        Some((
+            fs.f_blocks as u64 * fs.f_frsize as u64,
+            fs.f_bavail as u64 * fs.f_frsize as u64,
+        ))
     }
 
     pub(super) fn list() -> Vec<VolumeInfo> {
@@ -309,7 +337,9 @@ mod platform {
                     "removable".to_string()
                 };
                 let label = if info.volume_name.is_empty() {
-                    path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()
                 } else {
                     info.volume_name.clone()
                 };
@@ -381,7 +411,10 @@ mod tests {
 
     #[test]
     fn mount_key_falls_back_to_normalized_path() {
-        assert_eq!(mount_key("mac", Some(""), Path::new("/Volumes/SD")), "mac-path-/volumes/sd");
+        assert_eq!(
+            mount_key("mac", Some(""), Path::new("/Volumes/SD")),
+            "mac-path-/volumes/sd"
+        );
         assert_eq!(mount_key("win", None, Path::new("E:\\")), "win-path-e:");
     }
 
@@ -399,15 +432,12 @@ mod tests {
         assert!(validate_card_label("", "x", "").is_err());
         let long_name = "卡".repeat(CARD_NAME_MAX + 1);
         let long_note = "备".repeat(CARD_NOTE_MAX + 1);
-        assert!(
-            validate_card_label("win-serial-1A2B3C4D", &long_name, "").is_err()
-        );
-        assert!(
-            validate_card_label("win-serial-1A2B3C4D", "", &long_note).is_err()
-        );
+        assert!(validate_card_label("win-serial-1A2B3C4D", &long_name, "").is_err());
+        assert!(validate_card_label("win-serial-1A2B3C4D", "", &long_note).is_err());
         assert!(validate_card_label("bad\u{7}key", "", "").is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn parses_diskutil_info_output() {
         let text = "Device Identifier: disk4s1\nDevice Node: /dev/disk4s1\n  Volume Name:              SDXC\n  Internal:                 No\n  Volume UUID:              01234567-89AB-CDEF-0123-456789ABCDEF\n  File System Personality:  exFAT\n";
@@ -418,6 +448,7 @@ mod tests {
         assert_eq!(info.internal, Some(false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parses_diskutil_info_defaults_on_missing_fields() {
         let info = platform::parse_diskutil_info("Device Identifier: disk1s1\n");

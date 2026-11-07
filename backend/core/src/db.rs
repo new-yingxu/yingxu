@@ -280,9 +280,15 @@ mod migration_tests {
         let temp = TempDir::new().unwrap();
         let store = Store::open(temp.path()).unwrap();
         assert!(store.card_labels().unwrap().is_empty());
-        store.set_card_label("win-serial-1A2B3C4D", "云南旅拍 A 卡", "客户成片已交付").unwrap();
-        store.set_card_label("win-serial-1A2B3C4D", "云南旅拍 A 卡", "备注更新").unwrap();
-        store.set_card_label("mac-uuid-0123", "海岛航拍", "").unwrap();
+        store
+            .set_card_label("win-serial-1A2B3C4D", "云南旅拍 A 卡", "客户成片已交付")
+            .unwrap();
+        store
+            .set_card_label("win-serial-1A2B3C4D", "云南旅拍 A 卡", "备注更新")
+            .unwrap();
+        store
+            .set_card_label("mac-uuid-0123", "海岛航拍", "")
+            .unwrap();
         let labels = store.card_labels().unwrap();
         assert_eq!(labels.len(), 2);
         assert_eq!(labels["win-serial-1A2B3C4D"].note, "备注更新");
