@@ -209,7 +209,7 @@ fn cli_recovers_after_invalid_json() {
         .collect();
     assert_eq!(rows[0]["ok"], false);
     assert_eq!(rows[1]["ok"], true);
-    assert_eq!(rows[1]["data"]["databaseVersion"], 3);
+    assert_eq!(rows[1]["data"]["databaseVersion"], 4);
     assert_eq!(rows[1]["data"]["capabilities"]["quarantine"], true);
     assert_eq!(
         rows[1]["data"]["capabilities"]["agentFileActionPreview"],
