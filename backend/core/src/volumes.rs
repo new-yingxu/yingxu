@@ -254,7 +254,7 @@ mod platform {
     }
 
     /// 去掉分区后缀：sda1 -> sda，nvme0n1p3 -> nvme0n1。
-    fn strip_partition(name: &str) -> String {
+    pub(super) fn strip_partition(name: &str) -> String {
         let mut s = name.to_string();
         while s.ends_with(|c: char| c.is_ascii_digit()) {
             s.pop();
@@ -363,7 +363,7 @@ mod platform {
                 label,
                 kind: kind.into(),
                 file_system,
-                total_bytes,
+                total_bytes: total,
                 available_bytes: available,
             });
         }
