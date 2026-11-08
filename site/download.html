@@ -44,6 +44,7 @@
         <tbody>
           <tr><td>macOS（Apple 芯片）</td><td>macOS 11 Big Sur</td><td>.dmg</td><td>ad-hoc 签名，首次需右键打开</td></tr>
           <tr><td>Windows</td><td>Windows 10 1809+</td><td>.exe（NSIS 安装包）</td><td>未签名，SmartScreen 需手动放行</td></tr>
+          <tr><td>Android</td><td>Android 9+（arm64）</td><td>.apk（影序 Pocket）</td><td>未上架，需手动允许安装未知来源</td></tr>
         </tbody>
       </table>
     </div>
@@ -58,7 +59,7 @@
         <p>当前为 ad-hoc 签名（没有 Apple Developer ID），Gatekeeper 会拦截。二选一：</p>
         <ul class="muted">
           <li>在「应用程序」里 <strong>右键 → 打开</strong>，再点「打开」</li>
-          <li>或执行 <span class="mono">xattr -d com.apple.quarantine /Applications/影序桌面开发版.app</span></li>
+          <li>或执行 <span class="mono">xattr -d com.apple.quarantine /Applications/影序.app</span></li>
         </ul>
         <p class="muted">若提示「已损坏」，通常是下载未完整或隔离属性未清除，可重新下载并按上面第二条处理。</p>
       </div>
@@ -71,6 +72,15 @@
         </ul>
         <p class="muted">企业环境若被策略拦截，请联系管理员按哈希加白。</p>
       </div>
+      <div class="card">
+        <h3>Android</h3>
+        <p>安装包未上架应用商店，通过浏览器下载后手动安装。</p>
+        <ul class="muted">
+          <li>系统提示「禁止安装未知应用」时，允许浏览器安装后再点一次安装包</li>
+          <li>移动端为「影序 Pocket」，登录与桌面端共用同一 CloudBase 账号</li>
+        </ul>
+        <p class="muted">仅提供 arm64 版本，老旧 32 位设备不支持。</p>
+      </div>
     </div>
     <div class="notice" style="margin-top:16px">
       未签名 ≠ 已签名发布。我们不会把 ad-hoc 说成正式签名；正式证书到位后会在版本说明里单独写。
@@ -79,12 +89,12 @@
 
   <section>
     <h2>校验下载完整性</h2>
-    <p>每次发布都会附带 <span class="mono">SHA256SUMS</span>。下载后本地比对，避免传输损坏或被替换：</p>
+    <p>每次发布都会附带 <span class="mono">SHA256SUMS.txt</span>。下载后本地比对，避免传输损坏或被替换：</p>
     <div class="card">
       <p class="mono muted">macOS / Linux</p>
-      <p class="mono">shasum -a 256 -c SHA256SUMS</p>
+      <p class="mono">shasum -a 256 -c SHA256SUMS.txt</p>
       <p class="mono muted" style="margin-top:14px">Windows（PowerShell）</p>
-      <p class="mono">Get-FileHash .\影序桌面开发版_xxx_x64-setup.exe -Algorithm SHA256</p>
+      <p class="mono">Get-FileHash .\yingxu_xxx_x64-setup.exe -Algorithm SHA256</p>
     </div>
   </section>
 

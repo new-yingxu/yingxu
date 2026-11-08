@@ -37,8 +37,16 @@
     var lower = name.toLowerCase();
     if (lower.endsWith('.dmg')) return 'macOS';
     if (lower.endsWith('.exe') || lower.endsWith('.msi')) return 'Windows';
+    if (lower.endsWith('.apk')) return 'Android';
     if (lower.endsWith('.appimage')) return 'Linux';
     return null;
+  }
+
+  /* 安装包按平台固定顺序展示，避免 GitHub 资产顺序变化导致页面跳动 */
+  var PLATFORM_ORDER = { Windows: 0, macOS: 1, Android: 2, Linux: 3 };
+  function platformRank(name) {
+    var p = platformOf(name);
+    return p == null ? 99 : PLATFORM_ORDER[p];
   }
 
   function setStatus(kind, text) {
@@ -48,9 +56,11 @@
     box.textContent = text;
   }
 
-  /* SHA256SUMS 是发布流程里的附加资产，存在就解析成 name -> hash 映射 */
+  /* SHA256SUMS（.txt 后缀两种都兼容）是发布流程里的附加资产，存在就解析成 name -> hash 映射 */
   function loadSums(release) {
-    var sums = release.assets.filter(function (a) { return a.name === 'SHA256SUMS'; })[0];
+    var sums = release.assets.filter(function (a) {
+      return /^SHA256SUMS(\.txt)?$/i.test(a.name);
+    })[0];
     if (!sums) return Promise.resolve({});
     return fetch(sums.browser_download_url, { cache: 'no-store' })
       .then(function (r) { return r.ok ? r.text() : ''; })
@@ -69,7 +79,9 @@
     var host = document.getElementById('dl-list');
     if (!host) return;
     host.textContent = '';
-    var installers = release.assets.filter(function (a) { return platformOf(a.name); });
+    var installers = release.assets
+      .filter(function (a) { return platformOf(a.name); })
+      .sort(function (a, b) { return platformRank(a.name) - platformRank(b.name); });
     if (!installers.length) {
       setStatus('warn', '该版本尚未附带安装包（可能仍在构建中）。');
       return;
