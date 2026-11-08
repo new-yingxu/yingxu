@@ -29,9 +29,14 @@
       <p class="release-meta">约 35.5 MiB · 若 SmartScreen 拦截，请选择“更多信息 → 仍要运行” · <a href="https://github.com/new-yingxu/yingxu/releases/tag/v1.1.0-rc.1">查看 GitHub 发行说明</a></p>
     </section>
 
-    <section class="release-card subdued">
-      <div class="release-top"><div><span class="release-label">macOS Apple Silicon</span><h2>影序桌面版 <em>v1.1.0-rc.1</em></h2></div><span class="release-pill muted-pill">构建待补发</span></div>
-      <p>本次发布的 macOS arm64 安装包未能在 CI 完成构建（macOS 构建机资源暂不可用），因此暂不提供下载。构建补发后会同步到同一个 GitHub 发行页，版本说明与校验文件保持一致；不需要重新下载其他平台安装包。<a class="text-link" href="https://github.com/new-yingxu/yingxu/releases/tag/v1.1.0-rc.1">查看发行页状态 ↗</a></p>
+    <section class="release-card">
+      <div class="release-top"><div><span class="release-label">macOS Apple Silicon</span><h2>影序桌面版 <em>v1.1.0-rc.1</em></h2></div><span class="release-pill">测试版 · 未签名</span></div>
+      <p>macOS arm64 磁盘映像（.dmg，需 macOS 11 Big Sur 及以上）。与 Windows 版同源构建，同样包含<strong>存储卡识别与名称备注</strong>。安装包为 ad-hoc 签名，没有 Apple Developer ID 签名与公证，因此 Gatekeeper 会拦截：安装后到「应用程序」里 <strong>右键 → 打开</strong>，或在终端执行 <code>xattr -dr com.apple.quarantine /Applications/影序.app</code>。</p>
+      <div class="release-actions">
+        <a class="button primary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.1.0-rc.1/yingxu_1.1.0-rc.1_aarch64.dmg">下载 macOS arm64 安装包 <span aria-hidden="true">↗</span></a>
+        <a class="button secondary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.1.0-rc.1/SHA256SUMS.txt">下载 SHA-256 校验文件</a>
+      </div>
+      <p class="release-meta">约 59.5 MiB · 仅 Apple Silicon（M 系列），暂不提供 Intel 版本 · 若提示「已损坏」，多为隔离属性未清除，按上面的命令处理后重试 · <a href="https://github.com/new-yingxu/yingxu/releases/tag/v1.1.0-rc.1">查看 GitHub 发行说明</a></p>
     </section>
 
     <section class="release-card subdued">
