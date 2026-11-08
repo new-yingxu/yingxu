@@ -92,36 +92,38 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend/tauri-host -> target
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: ${{ env.PROJECT_PATH }}
-          tagName: ${{ env.TAG }}
-          releaseName: 影序桌面版 ${{ env.TAG }}（未签名测试版）
-          releaseDraft: true
-          prerelease: true
-          args: --target aarch64-apple-darwin --bundles app,dmg
-      - name: 统一产物命名（去掉中文前缀，与 Windows 包对齐）
-        # Tauri 用 productName（影序）命名 dmg，会让下载 URL 变成一长串百分号编码；
-        # 这里改成 yingxu_<version>_aarch64.dmg，与 yingxu_<version>_x64-setup.exe 同一套命名。
+      - name: 安装 Tauri CLI
+        run: npm install -g @tauri-apps/cli@2
+
+      - name: 打包 dmg（ad-hoc 签名）
+        working-directory: ${{ env.PROJECT_PATH }}
+        run: tauri build --target aarch64-apple-darwin --bundles dmg
+
+      - name: 改为 ASCII 文件名
+        # Tauri 用 productName（影序）命名 dmg，而 gh / Releases API 会剥掉非 ASCII 字符，
+        # 上传后名字会残缺成 "_1.1.0-rc.1_aarch64.dmg"。所以先在本地改名再上传，
+        # 与 Windows 的 yingxu_<version>_x64-setup.exe 保持同一套命名。
+        id: artifact
+        run: |
+          set -euo pipefail
+          VERSION=$(python3 -c "import json;print(json.load(open('${PROJECT_PATH}/tauri.conf.json'))['version'])")
+          SRC=$(ls "${PROJECT_PATH}"/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg | head -1)
+          OUT="${RUNNER_TEMP}/yingxu_${VERSION}_aarch64.dmg"
+          cp "$SRC" "$OUT"
+          echo "dmg=$OUT" >> "$GITHUB_OUTPUT"
+          echo "原名: $(basename "$SRC")"
+          echo "上传名: $(basename "$OUT")"
+          shasum -a 256 "$OUT"
+
+      - name: 上传到 Release（不存在则建草稿）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh api "repos/${REPO}/releases/tags/${TAG}" \
-            --jq '.assets[] | select(.name | startswith("影序_")) | "\(.id)\t\(.name)"' \
-            > "$RUNNER_TEMP/rename.tsv" || true
-          if [ ! -s "$RUNNER_TEMP/rename.tsv" ]; then
-            echo "没有需要改名的产物（已统一或尚未上传）"
-            exit 0
-          fi
-          while IFS=$'\t' read -r id name; do
-            [ -z "${id:-}" ] && continue
-            target="yingxu_${name#影序_}"
-            echo "rename: $name -> $target"
-            gh api --method PATCH "repos/${REPO}/releases/assets/${id}" -f name="$target" > /dev/null
-          done < "$RUNNER_TEMP/rename.tsv"
+          gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$REPO" --draft --prerelease \
+                 --title "影序桌面版 $TAG（未签名测试版）" --generate-notes
+          gh release upload "$TAG" "${{ steps.artifact.outputs.dmg }}" --repo "$REPO" --clobber
       - name: 记录签名状态（ad-hoc，不是正式签名）
         run: |
           set -e
@@ -213,7 +215,7 @@ jobs:
             --repo "$REPO" \
             --tag "$TAG" \
             --out release-out
-          cp "docs/发布/首次打开说明.md" release-out/ || true
+          cp "docs/发布/首次打开说明.md" release-out/FIRST-RUN-README.md || true
       - name: 上传到 Release（含校验和与首次打开说明）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
