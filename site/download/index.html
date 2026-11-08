@@ -20,23 +20,18 @@
     <p class="download-lead">只从官方发行页获取安装包，并核对同一版本提供的 SHA-256 校验文件。</p>
 
     <section class="release-card">
-      <div class="release-top"><div><span class="release-label">Windows x64</span><h2>影序桌面版 <em>v1.0.0</em></h2></div><span class="release-pill">正式版 · 未签名</span></div>
-      <p>Windows x64 桌面正式版安装程序（NSIS）。安装包未做代码签名，Windows SmartScreen 可能弹出警告。</p>
+      <div class="release-top"><div><span class="release-label">Windows x64</span><h2>影序桌面版 <em>v1.1.0-rc.1</em></h2></div><span class="release-pill">测试版 · 未签名</span></div>
+      <p>Windows x64 桌面安装程序（NSIS）。本版新增<strong>存储卡识别与名称备注</strong>：自动识别插入的存储卡，可按硬件序列号记住每张卡的名字与备注，换读卡器、换盘符仍能对上同一张卡。安装包未做代码签名，Windows SmartScreen 可能弹出警告。</p>
       <div class="release-actions">
-        <a class="button primary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.0.0/_1.0.0_x64-setup.exe">下载 Windows x64 安装包 <span aria-hidden="true">↗</span></a>
-        <a class="button secondary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.0.0/SHA256SUMS">下载 SHA-256 校验文件</a>
+        <a class="button primary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.1.0-rc.1/yingxu_1.1.0-rc.1_x64-setup.exe">下载 Windows x64 安装包 <span aria-hidden="true">↗</span></a>
+        <a class="button secondary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.1.0-rc.1/SHA256SUMS.txt">下载 SHA-256 校验文件</a>
       </div>
-      <p class="release-meta">约 35.4 MiB · 若 SmartScreen 拦截，请选择“更多信息 → 仍要运行” · <a href="https://github.com/new-yingxu/yingxu/releases/tag/v1.0.0">查看 GitHub 发行说明</a></p>
+      <p class="release-meta">约 35.5 MiB · 若 SmartScreen 拦截，请选择“更多信息 → 仍要运行” · <a href="https://github.com/new-yingxu/yingxu/releases/tag/v1.1.0-rc.1">查看 GitHub 发行说明</a></p>
     </section>
 
-    <section class="release-card">
-      <div class="release-top"><div><span class="release-label">macOS Apple Silicon</span><h2>影序桌面版 <em>v1.0.0</em></h2></div><span class="release-pill">正式版 · 未公证</span></div>
-      <p>包含本机 Agent sidecar 的 arm64 桌面正式版（dmg）。未做 Developer ID 签名与 Apple 公证；首次打开需在「系统设置 → 隐私与安全性」中手动允许。</p>
-      <div class="release-actions">
-        <a class="button primary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.0.0/_1.0.0_aarch64.dmg">下载 macOS arm64 安装包 <span aria-hidden="true">↗</span></a>
-        <a class="button secondary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.0.0/SHA256SUMS">下载 SHA-256 校验文件</a>
-      </div>
-      <p class="release-meta">Apple Silicon · 约 53 MiB · <a href="https://github.com/new-yingxu/yingxu/releases/tag/v1.0.0">查看 GitHub 发行说明</a></p>
+    <section class="release-card subdued">
+      <div class="release-top"><div><span class="release-label">macOS Apple Silicon</span><h2>影序桌面版 <em>v1.1.0-rc.1</em></h2></div><span class="release-pill muted-pill">构建待补发</span></div>
+      <p>本次发布的 macOS arm64 安装包未能在 CI 完成构建（macOS 构建机资源暂不可用），因此暂不提供下载。构建补发后会同步到同一个 GitHub 发行页，版本说明与校验文件保持一致；不需要重新下载其他平台安装包。<a class="text-link" href="https://github.com/new-yingxu/yingxu/releases/tag/v1.1.0-rc.1">查看发行页状态 ↗</a></p>
     </section>
 
     <section class="release-card subdued">
@@ -45,16 +40,16 @@
     </section>
 
     <section class="release-card">
-      <div class="release-top"><div><span class="release-label">Android</span><h2>影序移动端 <em>v1.0.0</em></h2></div><span class="release-pill">正式版 · APK 直装</span></div>
-      <p>Android arm64-v8a 独立安装包，包名 <code>com.yingxuapp.pocket</code>，versionName 1.0.0，已通过模拟器界面检查。真实机型安装与账号同步仍在持续验收。</p>
+      <div class="release-top"><div><span class="release-label">Android</span><h2>影序移动端 <em>v1.1.0-rc.1</em></h2></div><span class="release-pill">测试版 · APK 直装</span></div>
+      <p>Android arm64-v8a 独立安装包，包名 <code>com.yingxuapp.pocket</code>，versionName 1.1.0-rc.1。登录已统一到腾讯云 CloudBase，与桌面端共用同一账号。真实机型安装与账号同步仍在持续验收。</p>
       <div class="release-actions">
-        <a class="button primary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.0.0/YINGXU-1.0.0-android-arm64.apk">下载 Android APK <span aria-hidden="true">↗</span></a>
-        <a class="button secondary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.0.0/SHA256SUMS">下载 SHA-256 校验文件</a>
+        <a class="button primary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.1.0-rc.1/YINGXU-1.1.0-rc.1-android-arm64.apk">下载 Android APK <span aria-hidden="true">↗</span></a>
+        <a class="button secondary" href="https://github.com/new-yingxu/yingxu/releases/download/v1.1.0-rc.1/SHA256SUMS.txt">下载 SHA-256 校验文件</a>
       </div>
-      <p class="release-meta">v1.0.0 · APK 约 90.6 MiB · 安装时如提示未知来源，请在系统设置中允许 · <a href="https://github.com/new-yingxu/yingxu/releases/tag/v1.0.0">查看 GitHub 发行说明</a></p>
+      <p class="release-meta">v1.1.0-rc.1 · APK 约 90.4 MiB · 安装时如提示未知来源，请在系统设置中允许 · <a href="https://github.com/new-yingxu/yingxu/releases/tag/v1.1.0-rc.1">查看 GitHub 发行说明</a></p>
     </section>
 
-    <aside class="help-card"><h2>如何核对下载文件</h2><ol><li>从本页下载对应版本的安装包和 <code>SHA256SUMS</code>。</li><li>在终端或 PowerShell 中按系统说明计算 SHA-256。</li><li>将计算值与同一 GitHub Release 的校验文件逐字比对；不一致时不要安装。</li></ol><p><a href="https://github.com/new-yingxu/yingxu/releases/latest">打开最新发行页 ↗</a> · <a href="https://github.com/yingxu-app/smart-media-backup/blob/main/README.md">安装说明 ↗</a></p></aside>
+    <aside class="help-card"><h2>如何核对下载文件</h2><ol><li>从本页下载对应版本的安装包和 <code>SHA256SUMS.txt</code>。</li><li>在终端或 PowerShell 中按系统说明计算 SHA-256。</li><li>将计算值与同一 GitHub Release 的校验文件逐字比对；不一致时不要安装。</li></ol><p><a href="https://github.com/new-yingxu/yingxu/releases/latest">打开最新发行页 ↗</a> · <a href="https://github.com/yingxu-app/smart-media-backup/blob/main/README.md">安装说明 ↗</a></p></aside>
     <aside class="help-card"><h2>升级和回退</h2><p>偏好设置中的“检查更新”可下载并校验正式安装包，但不会覆盖正在运行的应用。升级前先结束备份，并备份本机历史与设置。</p><p><a href="../update/">查看完整升级与回退步骤 ↗</a></p></aside>
     <a class="back-link" href="../">← 返回影序首页</a>
   </main>
