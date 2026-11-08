@@ -58,7 +58,10 @@ jobs:
     name: macOS arm64 构建
     if: ${{ inputs.platform != 'windows' }}
     needs: gate
-    runs-on: macos-14
+    # 必须用 macos-15：本组织的 free 套餐拿不到 macos-14 的托管机，
+    # 用 macos-14 会在分配阶段直接失败（The configuration 'macos-14-arm64-us-default' is not supported）。
+    # macos-15 是 arm64 镜像，与本工程的 aarch64-apple-darwin 目标一致。
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -99,6 +102,26 @@ jobs:
           releaseDraft: true
           prerelease: true
           args: --target aarch64-apple-darwin --bundles app,dmg
+      - name: 统一产物命名（去掉中文前缀，与 Windows 包对齐）
+        # Tauri 用 productName（影序）命名 dmg，会让下载 URL 变成一长串百分号编码；
+        # 这里改成 yingxu_<version>_aarch64.dmg，与 yingxu_<version>_x64-setup.exe 同一套命名。
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/releases/tags/${TAG}" \
+            --jq '.assets[] | select(.name | startswith("影序_")) | "\(.id)\t\(.name)"' \
+            > "$RUNNER_TEMP/rename.tsv" || true
+          if [ ! -s "$RUNNER_TEMP/rename.tsv" ]; then
+            echo "没有需要改名的产物（已统一或尚未上传）"
+            exit 0
+          fi
+          while IFS=$'\t' read -r id name; do
+            [ -z "${id:-}" ] && continue
+            target="yingxu_${name#影序_}"
+            echo "rename: $name -> $target"
+            gh api --method PATCH "repos/${REPO}/releases/assets/${id}" -f name="$target" > /dev/null
+          done < "$RUNNER_TEMP/rename.tsv"
       - name: 记录签名状态（ad-hoc，不是正式签名）
         run: |
           set -e

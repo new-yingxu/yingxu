@@ -29,6 +29,20 @@ SUFFIX_MAP = [
     (".tar.gz", ["darwin-aarch64", "darwin-x86_64"]),
 ]
 
+# 文件名里带架构后缀时按后缀收敛，避免把 arm64 的 dmg 同时标成 darwin-x86_64
+ARCH_HINTS = [
+    (("aarch64", "arm64"), "darwin-aarch64"),
+    (("x86_64", "x64", "amd64"), "darwin-x86_64"),
+]
+
+
+def narrow_targets(name, targets):
+    lower = name.lower()
+    for needles, target in ARCH_HINTS:
+        if any(n in lower for n in needles) and target in targets:
+            return [target]
+    return targets
+
 
 def sha256(path):
     h = hashlib.sha256()
@@ -52,10 +66,11 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     files = sorted(
         p for p in art.rglob("*")
-        if p.is_file() and p.suffix.lower() in {".dmg", ".exe", ".msi"} | {".gz", ".appimage"}
+        if p.is_file()
+        and p.suffix.lower() in {".dmg", ".exe", ".msi", ".apk"} | {".gz", ".appimage"}
     )
     if not files:
-        sys.exit(f"没有在 {art} 找到可发布的安装包（.dmg/.exe/.msi）")
+        sys.exit(f"没有在 {art} 找到可发布的安装包（.dmg/.exe/.msi/.apk）")
 
     assets, sums = [], []
     for p in files:
@@ -69,7 +84,7 @@ def main():
         lower = a["name"].lower()
         for suffix, targets in SUFFIX_MAP:
             if lower.endswith(suffix.lower()):
-                for t in targets:
+                for t in narrow_targets(a["name"], targets):
                     # 同名同平台只留第一个（dmg 优先于 tar.gz）
                     platforms.setdefault(t, {
                         "url": a["url"],
@@ -90,8 +105,12 @@ def main():
     (out / "latest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    (out / "SHA256SUMS").write_text("\n".join(sums) + "\n", encoding="utf-8")
-    print(f"已生成 {out/'latest.json'} 与 {out/'SHA256SUMS'}")
+    # 同一份内容输出两个文件名：官网下载页与旧版脚本分别认 SHA256SUMS.txt / SHA256SUMS，
+    # 双写可以避免两份清单内容漂移。
+    sums_text = "\n".join(sums) + "\n"
+    for name in ("SHA256SUMS", "SHA256SUMS.txt"):
+        (out / name).write_text(sums_text, encoding="utf-8")
+    print(f"已生成 {out/'latest.json'} 与 SHA256SUMS(.txt)")
     for a in assets:
         print(f"  {a['sha256'][:16]}…  {a['bytes']:>12,}  {a['name']}")
     print("平台:", ", ".join(platforms) or "（无）")
