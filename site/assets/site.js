@@ -152,12 +152,18 @@
       });
   }
 
+  // 老组织 yingxu-app 的 v1.0 线发行版已归档迁入本仓库，名称统一以【历史归档】开头。
+  // 下载区必须跳过它们，否则归档包会被当成「最新版」展示。
+  function isArchived(r) {
+    return (r.name || '').indexOf('【历史归档】') === 0;
+  }
+
   function initDownload() {
     if (!document.getElementById('dl-status')) return;
     setStatus('', '正在读取 GitHub Releases 的最新版本…');
     fetchReleases()
       .then(function (list) {
-        var visible = list.filter(function (r) { return !r.draft; });
+        var visible = list.filter(function (r) { return !r.draft && !isArchived(r); });
         if (!visible.length) {
           setStatus('warn', '暂未发布：还没有可下载的正式版本。你可以在 GitHub Releases 查看构建草稿状态。');
           return;
