@@ -583,7 +583,7 @@ export default function PocketHome() {
     setUpdateMessage("正在检查影序正式版本…");
     setUpdateUrl("");
     try {
-      const response = await fetch("https://api.github.com/repos/yingxu-app/smart-media-backup/releases/latest", {
+      const response = await fetch("https://api.github.com/repos/new-yingxu/yingxu/releases/latest", {
         headers: { Accept: "application/vnd.github+json" },
       });
       if (!response.ok) throw new Error("暂时无法连接更新服务，请检查网络后重试。");
@@ -605,7 +605,7 @@ export default function PocketHome() {
         return;
       }
       const asset = assets.find((item: any) => String(item.name || "").toLowerCase().endsWith(".apk"));
-      const releaseUrl = String(release.html_url || "https://github.com/yingxu-app/smart-media-backup/releases/latest");
+      const releaseUrl = String(release.html_url || "https://github.com/new-yingxu/yingxu/releases/latest");
       if (newer && asset?.browser_download_url) {
         setUpdateUrl(String(asset.browser_download_url));
         setUpdateMessage(`发现 v${latest} Android 更新。点击下方按钮下载；安装时请按 Android 系统提示确认。`);

@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.description    = 'Provides platform file-picker access, media scanning, verified copy and secure storage.'
   s.license        = { :type => 'UNLICENSED' }
   s.author         = 'Yingxu'
-  s.homepage       = 'https://yingxu-app.github.io/smart-media-backup/'
+  s.homepage       = 'https://new-yingxu.github.io/yingxu/'
   s.platforms      = { :ios => '15.1' }
   s.swift_version  = '5.9'
   s.source         = { :path => '.' }
